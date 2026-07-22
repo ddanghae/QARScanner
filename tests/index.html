@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QAR ICT Scanner — 테스트</title>
+  <style>
+    body { font-family: ui-monospace, Menlo, Consolas, monospace; background: #0b1220; color: #e6ecf6; padding: 20px; line-height: 1.6; }
+    h1 { font-size: 18px; }
+    .pass { color: #2ed08a; } .fail { color: #ff5c5c; }
+    #summary { font-size: 16px; font-weight: bold; margin: 16px 0; padding: 10px; border-radius: 8px; background: #131c2e; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>QAR ICT Early Scanner — 계산·리페인트 테스트</h1>
+  <div id="summary">실행 중…</div>
+  <pre id="output"></pre>
+  <script type="module">
+    import { runAll } from "./run.js";
+    const r = runAll();
+    const out = document.getElementById("output");
+    out.innerHTML = r.lines
+      .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)
+      .join("");
+    const s = document.getElementById("summary");
+    s.textContent = r.summary.trim();
+    s.className = r.fail ? "fail" : "pass";
+  </script>
+</body>
+</html>

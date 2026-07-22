@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 아이폰 Safari: viewport-fit=cover + Safe Area -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="description" content="Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너" />
+  <title>QAR ICT Early Scanner</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>QAR · ICT Early Scanner</h1>
+      <span class="tagline">Binance Futures 초기 구조전환 후보</span>
+    </div>
+    <div class="header-actions">
+      <button id="toggle-dark" class="btn btn-ghost" aria-label="다크모드">◐</button>
+      <button id="settings-reset" class="btn btn-ghost">설정 초기화</button>
+    </div>
+  </header>
+
+  <!-- 상단 상태 영역 (§15) -->
+  <section id="status-bar" class="status-bar" aria-live="polite"></section>
+
+  <!-- 진행률 -->
+  <div class="progress-wrap">
+    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div id="scan-progress" class="progress-bar"></div>
+    </div>
+    <span id="progress-text" class="progress-text"></span>
+    <span id="refresh-countdown" class="refresh-countdown" aria-live="polite"></span>
+  </div>
+
+  <!-- 필터 영역 (§15) -->
+  <section class="filter-bar" aria-label="필터">
+    <div class="filter-grid">
+      <label>방향
+        <select id="filter-direction">
+          <option value="long">롱 후보</option>
+          <option value="short">숏 후보</option>
+          <option value="both">양방향</option>
+        </select>
+      </label>
+      <label>최소 점수
+        <select id="filter-minscore">
+          <option value="55">55+</option>
+          <option value="65">65+</option>
+          <option value="75">75+</option>
+          <option value="85">85+</option>
+        </select>
+      </label>
+      <label>최소 거래대금
+        <select id="filter-minvolume">
+          <option value="10000000">10M</option>
+          <option value="20000000">20M</option>
+          <option value="50000000">50M</option>
+          <option value="100000000">100M</option>
+        </select>
+      </label>
+      <label>급락 기준
+        <select id="filter-dropbasis">
+          <option value="6h">6시간</option>
+          <option value="24h">24시간</option>
+        </select>
+      </label>
+      <label>시간봉
+        <select id="filter-timeframe">
+          <option value="15m">15분</option>
+          <option value="5m">5분</option>
+          <option value="1h">1시간</option>
+        </select>
+      </label>
+      <label>단계
+        <select id="filter-stage">
+          <option value="all">전체</option>
+          <option value="1">1 매집</option>
+          <option value="2">2 유동성 회수</option>
+          <option value="3">3 구조전환</option>
+          <option value="4">4 진입 구간</option>
+          <option value="5">5 추격 금지</option>
+        </select>
+      </label>
+      <label>정렬
+        <select id="filter-sort">
+          <option value="score">점수</option>
+          <option value="change">하락률</option>
+          <option value="volume">거래대금</option>
+        </select>
+      </label>
+    </div>
+    <div class="filter-checks">
+      <label><input type="checkbox" id="filter-favorites-only" /> 관심 종목만</label>
+      <label><input type="checkbox" id="filter-exclude-chase" /> 추격 금지 제외</label>
+      <label><input type="checkbox" id="filter-exclude-new" /> 신규 종목 제외</label>
+      <label title="진행 중 캔들 포함(실시간 예상). 끄면 마감 캔들만 — 리페인트 방지">
+        <input type="checkbox" id="filter-realtime-candle" /> 실시간 캔들 포함
+      </label>
+      <label title="일정 주기로 자동 재스캔"><input type="checkbox" id="filter-autorefresh" /> 자동 갱신</label>
+      <button id="filter-apply" class="btn">필터 적용</button>
+      <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
+      <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
+    </div>
+  </section>
+
+  <!-- 결과 -->
+  <main id="results" class="results" aria-live="polite">
+    <div class="empty">스캔을 시작하세요.</div>
+  </main>
+
+  <!-- 상세 패널 -->
+  <div id="detail-panel" class="detail-overlay" aria-hidden="true"></div>
+
+  <!-- 토스트 -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <footer class="app-footer">
+    <p>공개 REST API 기반 · 개인 API 키 없음 · 자동 주문 없음 · 기술적 참고용</p>
+  </footer>
+
+  <!-- 절대경로 금지, 반드시 상대경로 (§4) -->
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

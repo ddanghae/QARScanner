@@ -46,18 +46,20 @@ const PHASE_LABEL = {
 };
 
 function renderStatus() {
-  if (!statusEl) return;
   const sc = state.scan;
   const h = state.apiHealth;
-  const conn = h.connected === true ? "연결됨" : h.connected === false ? "연결 실패" : "미확인";
+  const conn = h.connected === true ? "Binance 연결됨" : h.connected === false ? "연결 실패" : "미확인";
   const connClass = h.connected === true ? "ok" : h.connected === false ? "bad" : "";
+  const pill = document.getElementById("conn-pill");
+  if (pill) { pill.textContent = conn; pill.className = `conn-pill ${connClass}`; }
+
+  if (!statusEl) return;
   statusEl.innerHTML = `
-    <div class="stat"><span class="stat-label">Binance</span><span class="stat-val ${connClass}">${conn}</span></div>
-    <div class="stat"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
-    <div class="stat"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
-    <div class="stat"><span class="stat-label">1차 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
-    <div class="stat"><span class="stat-label">후보</span><span class="stat-val">${state.candidates.length}</span></div>
-    <div class="stat"><span class="stat-label">상태</span><span class="stat-val">${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
+    <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
+    <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
+    <div class="stat-card"><span class="stat-label">1차 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
+    <div class="stat-card"><span class="stat-label">후보</span><span class="stat-val">${state.candidates.length}</span></div>
+    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
   `;
 }
 

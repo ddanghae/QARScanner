@@ -19,6 +19,14 @@ function boot() {
   });
   document.getElementById("stop-btn")?.addEventListener("click", () => abortScan());
 
+  // 사이드바 — 기존 컨트롤을 대신 클릭/토글하는 얇은 위임 (중복 상태 없음)
+  document.querySelectorAll("[data-click]").forEach((btn) => {
+    btn.addEventListener("click", () => document.getElementById(btn.dataset.click)?.click());
+  });
+  document.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => document.getElementById(btn.dataset.toggle)?.click());
+  });
+
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
   on("scan:done", (info) => toast(`스캔 완료 — 후보 ${info.count}개`, "success"));

@@ -13,6 +13,7 @@ import { detectFvgs, activeFvgAt, latestFvg } from "../core/fvg.js";
 import { detectOrderBlocks, activeObAt, latestValidOb } from "../core/order-block.js";
 import { computeLongPlan, computeShortPlan } from "../core/risk-reward.js";
 import { estimateAbsorption, classifyStage, scoreCandidate, topSignals } from "../core/scoring.js";
+import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
 
 // 한 시간봉 분석 묶음
 function analyzeTf(candlesRaw, includeRealtime, tf) {
@@ -323,6 +324,8 @@ export async function deepAnalyze(item, settings) {
   if (!best) return { symbol: item.symbol, error: "방향 없음", skipped: true };
 
   const { side, sig, absorption, stageInfo, scored } = best;
+  // 골든크로스 리테스트 — 스코어링과 별개, 4시간봉 EMA50/200 기준 독립 필터/배지
+  const goldenCrossRetest = detectGoldenCrossRetest(a4.candles, a4.ind.ema[50], a4.ind.ema[200], a4.atrVal, CONFIG);
   return {
     symbol: item.symbol,
     baseAsset: item.baseAsset,
@@ -339,6 +342,7 @@ export async function deepAnalyze(item, settings) {
     breakdown: scored.breakdown,
     penalties: scored.penalties,
     topSignals: topSignals(scored.breakdown, 3),
+    goldenCrossRetest,
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {

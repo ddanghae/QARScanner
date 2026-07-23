@@ -158,11 +158,13 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-yellow { background: #fdf1cf; color: #9a6a00; }
 .badge-purple { background: #ece3ff; color: #6b3fd0; }
 .badge-danger { background: #ffe0e0; color: #c22; }
+.badge-cross { background: #d6f0f6; color: #0c7488; }
 html.dark .badge-blue { background: #2a2864; color: #b3adff; }
 html.dark .badge-green { background: #113d2a; color: #63e0a5; }
 html.dark .badge-yellow { background: #3d3413; color: #ffcf6b; }
 html.dark .badge-purple { background: #2f2350; color: #c4a9ff; }
 html.dark .badge-danger { background: #46201f; color: #ff9a9a; }
+html.dark .badge-cross { background: #113a42; color: #6fe0f2; }
 
 .dir { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
 .dir-long { background: rgba(18,153,91,.15); color: var(--up); }

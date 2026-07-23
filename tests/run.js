@@ -5,6 +5,7 @@ import { run as indicators } from "./indicators.test.js";
 import { run as structure } from "./structure.test.js";
 import { run as liquidity } from "./liquidity.test.js";
 import { run as scoring } from "./scoring.test.js";
+import { run as goldenCross } from "./golden-cross.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 
@@ -14,6 +15,7 @@ export function runAll() {
   structure();
   liquidity();
   scoring();
+  goldenCross();
   repaint();
   refresh();
   return report();

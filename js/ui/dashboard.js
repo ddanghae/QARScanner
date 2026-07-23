@@ -100,6 +100,13 @@ export function renderResults() {
   bindRows(view);
 }
 
+function goldenCrossBadge(r) {
+  const gc = r.goldenCrossRetest;
+  if (!gc?.detected) return "";
+  const label = gc.hasRejection ? "골든크로스 리테스트" : "골든크로스 리테스트(대기)";
+  return `<span class="badge badge-cross">${label}</span>`;
+}
+
 function rowHtml(r) {
   return `<tr data-sym="${r.symbol}">
     <td>${r.rank}</td>
@@ -110,7 +117,7 @@ function rowHtml(r) {
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
     <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span></td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
-    <td class="signals">${r.topSignals.map((s) => `<span>${escapeHtml(s)}</span>`).join("")}</td>
+    <td class="signals">${goldenCrossBadge(r)}${r.topSignals.map((s) => `<span>${escapeHtml(s)}</span>`).join("")}</td>
     <td>${r.plan.rrText}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
     <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
@@ -130,7 +137,7 @@ function cardHtml(r) {
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>
-    <ul class="rcard-signals">${r.topSignals.map((s) => `<li>· ${escapeHtml(s)}</li>`).join("")}</ul>
+    <ul class="rcard-signals">${r.goldenCrossRetest?.detected ? `<li>${goldenCrossBadge(r)}</li>` : ""}${r.topSignals.map((s) => `<li>· ${escapeHtml(s)}</li>`).join("")}</ul>
     <div class="rcard-plan">
       <span>진입 ${fmtPrice(p.entry)}</span>
       <span>손절 ${fmtPrice(p.invalidation)}</span>

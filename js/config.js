@@ -62,6 +62,18 @@ export const CONFIG = {
     minSizePct: 0.15,       // 또는 퍼센트 기준
   },
 
+  // ---- 골든크로스 리테스트 (4시간봉 기준) ----
+  // 200선 아래 횡보 → 임펄스 돌파 → 되돌림으로 50·200선 부근 리테스트 →
+  // 리테스트 구간에서 살짝 찔렀다 훅 꺾이는 거부 캔들, 종가는 200선 안 잃음.
+  goldenCrossRetest: {
+    crossLookback: 60,        // 골든크로스(50이 200 상향 돌파)를 찾을 최근 캔들 범위
+    impulseLookback: 30,      // 크로스 이전 돌파 임펄스를 찾을 범위
+    impulseMarginPct: 5,      // 200선 대비 이 %+ 위로 뚫어야 "돌파 임펄스"로 인정
+    zoneAtrRatio: 1.5,        // 50/200 리테스트 존 허용 오차 (ATR 배수)
+    rejectionWickRatio: 0.3,  // 거부 캔들 위꼬리 최소 비중
+    rejectionClosePos: 0.5,   // 거부 캔들 종가가 몸통 하단 50% 안에서 마감
+  },
+
   // ---- 점수 가중치 (합계 100) ----
   scoreWeights: {
     dropAndOversold: 10,    // 급락 및 과매도 상태

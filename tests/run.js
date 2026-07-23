@@ -6,6 +6,7 @@ import { run as structure } from "./structure.test.js";
 import { run as liquidity } from "./liquidity.test.js";
 import { run as scoring } from "./scoring.test.js";
 import { run as goldenCross } from "./golden-cross.test.js";
+import { run as noise } from "./noise.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 
@@ -16,6 +17,7 @@ export function runAll() {
   liquidity();
   scoring();
   goldenCross();
+  noise();
   repaint();
   refresh();
   return report();

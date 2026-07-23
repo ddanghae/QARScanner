@@ -179,6 +179,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-danger { background: #ffe0e0; color: #c22; }
 .badge-cross { background: #d6f0f6; color: #0c7488; }
 .badge-ema200 { background: #ffe6d0; color: #b5560a; }
+.badge-noise { background: #e6e8ec; color: #6b7280; }
 html.dark .badge-blue { background: #2a2864; color: #b3adff; }
 html.dark .badge-green { background: #113d2a; color: #63e0a5; }
 html.dark .badge-yellow { background: #3d3413; color: #ffcf6b; }
@@ -186,6 +187,7 @@ html.dark .badge-purple { background: #2f2350; color: #c4a9ff; }
 html.dark .badge-danger { background: #46201f; color: #ff9a9a; }
 html.dark .badge-cross { background: #113a42; color: #6fe0f2; }
 html.dark .badge-ema200 { background: #422814; color: #ffb26f; }
+html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
 
 .dir { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
 .dir-long { background: rgba(18,153,91,.15); color: var(--up); }

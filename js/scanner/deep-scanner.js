@@ -14,6 +14,7 @@ import { detectOrderBlocks, activeObAt, latestValidOb } from "../core/order-bloc
 import { computeLongPlan, computeShortPlan } from "../core/risk-reward.js";
 import { estimateAbsorption, classifyStage, scoreCandidate, topSignals } from "../core/scoring.js";
 import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
+import { evaluateNoise } from "../core/noise-filter.js";
 
 // 한 시간봉 분석 묶음
 function analyzeTf(candlesRaw, includeRealtime, tf) {
@@ -332,6 +333,8 @@ export async function deepAnalyze(item, settings) {
   const near1hEma200 = ema200_1h != null && a1.atrVal
     ? Math.abs(a1.price - ema200_1h) <= a1.atrVal * emaRatio
     : false;
+  // 신호 노이즈 — 촙 구간/저거래량 판정 (15m 기준). applyFilters 에서 걸러냄.
+  const noise = evaluateNoise(noiseTf({ a4, a1, a15, a5 }), CONFIG);
   return {
     symbol: item.symbol,
     baseAsset: item.baseAsset,
@@ -350,6 +353,7 @@ export async function deepAnalyze(item, settings) {
     topSignals: topSignals(scored.breakdown, 3),
     goldenCrossRetest,
     near1hEma200,
+    noise,
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {
@@ -359,6 +363,12 @@ export async function deepAnalyze(item, settings) {
       "5m": tfSummary(a5, side),
     },
   };
+}
+
+// 노이즈 판정용 TF 선택 (config.noiseFilter.tf) — 기본 15m
+function noiseTf({ a4, a1, a15, a5 }) {
+  const map = { "4h": a4, "1h": a1, "15m": a15, "5m": a5 };
+  return map[CONFIG.noiseFilter.tf] || a15;
 }
 
 // 한 방향 점수 묶음 — 감점은 사용자 채점 강도(settings.penalties, §13 STRICTNESS_LEVELS) 있으면 그걸로 덮어씀

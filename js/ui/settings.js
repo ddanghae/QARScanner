@@ -12,6 +12,7 @@ const CHECK_BINDINGS = [
   { key: "excludeNewListing", ids: ["filter-exclude-new", "set-exclude-new"] },
   { key: "goldenCrossOnly", ids: ["filter-golden-cross", "set-golden-cross"] },
   { key: "near1hEma200Only", ids: ["filter-near-ema200", "set-near-ema200"] },
+  { key: "filterNoise", ids: ["set-filter-noise"] },
 ];
 const AUTOREFRESH_IDS = ["filter-autorefresh", "set-autorefresh"];
 const REALTIME_IDS = ["set-realtime-candle"];
@@ -35,6 +36,8 @@ export function applyFilters(results) {
   if (s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
   // 1시간봉 200일선 밀착만
   if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
+  // 노이즈(촙 구간·저거래량) 제외
+  if (s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터

@@ -143,7 +143,6 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .result-table tbody tr:hover td { background: var(--surface-2); cursor: pointer; }
 .result-table tbody tr:last-child td { border-bottom: none; }
 .result-table .sym { font-weight: 600; white-space: nowrap; }
-.signals span { display: inline-block; font-size: 11px; color: var(--muted); background: var(--surface-2); padding: 3px 8px; border-radius: 999px; margin: 1px; }
 .up { color: var(--up); } .down { color: var(--down); }
 
 /* 점수/등급 pill */

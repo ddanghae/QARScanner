@@ -91,7 +91,7 @@ export function renderResults() {
     <table class="result-table">
       <thead><tr>
         <th>#</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>핵심 신호</th><th>손익비</th><th></th><th></th>
+        <th>점수</th><th>단계</th><th>방향</th><th>손익비</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
@@ -115,9 +115,8 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span></td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
-    <td class="signals">${goldenCrossBadge(r)}${r.topSignals.map((s) => `<span>${escapeHtml(s)}</span>`).join("")}</td>
     <td>${r.plan.rrText}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
     <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>

@@ -107,6 +107,10 @@ function goldenCrossBadge(r) {
   return `<span class="badge badge-cross">${label}</span>`;
 }
 
+function nearEma200Badge(r) {
+  return r.near1hEma200 ? `<span class="badge badge-ema200">1h 200선 밀착</span>` : "";
+}
+
 function rowHtml(r) {
   return `<tr data-sym="${r.symbol}">
     <td>${r.rank}</td>
@@ -115,7 +119,7 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}</td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${r.plan.rrText}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
@@ -132,7 +136,7 @@ function cardHtml(r) {
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>

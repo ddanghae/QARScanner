@@ -326,6 +326,11 @@ export async function deepAnalyze(item, settings) {
   const { side, sig, absorption, stageInfo, scored } = best;
   // 골든크로스 리테스트 — 스코어링과 별개, 4시간봉 EMA50/200 기준 독립 필터/배지
   const goldenCrossRetest = detectGoldenCrossRetest(a4.candles, a4.ind.ema[50], a4.ind.ema[200], a4.atrVal, CONFIG);
+  // 1시간봉 200일선 밀착 — 스코어링과 별개, 독립 필터/배지
+  const ema200_1h = last(a1.ind.ema[200]);
+  const near1hEma200 = ema200_1h != null && a1.atrVal
+    ? Math.abs(a1.price - ema200_1h) <= a1.atrVal * CONFIG.near1hEma200AtrRatio
+    : false;
   return {
     symbol: item.symbol,
     baseAsset: item.baseAsset,
@@ -343,6 +348,7 @@ export async function deepAnalyze(item, settings) {
     penalties: scored.penalties,
     topSignals: topSignals(scored.breakdown, 3),
     goldenCrossRetest,
+    near1hEma200,
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {

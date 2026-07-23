@@ -74,6 +74,10 @@ export const CONFIG = {
     rejectionClosePos: 0.5,   // 거부 캔들 종가가 몸통 하단 50% 안에서 마감
   },
 
+  // ---- 1시간봉 EMA200 밀착 판정 ----
+  // 1h 종가가 200일선에서 ATR * 이 배수 이내면 "200선 밀착"으로 표시.
+  near1hEma200AtrRatio: 0.5,
+
   // ---- 점수 가중치 (합계 100) ----
   scoreWeights: {
     dropAndOversold: 10,    // 급락 및 과매도 상태

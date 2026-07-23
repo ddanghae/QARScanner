@@ -22,6 +22,8 @@ export function applyFilters(results) {
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
   if (s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
+  // 1시간봉 200일선 밀착만
+  if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
@@ -49,6 +51,7 @@ export function initSettingsUI() {
   bindCheck("filter-exclude-chase", "excludeChaseBan");
   bindCheck("filter-exclude-new", "excludeNewListing");
   bindCheck("filter-golden-cross", "goldenCrossOnly");
+  bindCheck("filter-near-ema200", "near1hEma200Only");
 
   // 실시간 캔들 포함 — 다음 스캔에 반영 (필터 재적용 불필요)
   const rt = document.getElementById("filter-realtime-candle");
@@ -130,6 +133,7 @@ export function syncControls() {
   setChk("filter-exclude-chase", s.excludeChaseBan);
   setChk("filter-exclude-new", s.excludeNewListing);
   setChk("filter-golden-cross", s.goldenCrossOnly);
+  setChk("filter-near-ema200", s.near1hEma200Only);
   setChk("filter-realtime-candle", s.includeRealtimeCandle);
   setChk("filter-autorefresh", s.autoRefresh);
   setVal("filter-minvolume", s.minQuoteVolume);

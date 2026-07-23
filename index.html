@@ -95,6 +95,9 @@
             </label>
             <label>최소 점수
               <select id="filter-minscore">
+                <option value="30">30+</option>
+                <option value="40">40+</option>
+                <option value="45">45+</option>
                 <option value="55">55+</option>
                 <option value="65">65+</option>
                 <option value="75">75+</option>
@@ -152,6 +155,22 @@
             <button id="filter-apply" class="btn">필터 적용</button>
             <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
             <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
+          </div>
+        </section>
+
+        <!-- 채점 강도 (§13 5단계 프리셋 — 감점 세기 + 최소 점수 일괄 조정) -->
+        <section class="card filter-bar" aria-label="채점 강도">
+          <div class="card-head"><h2>채점 강도</h2></div>
+          <div class="filter-grid">
+            <label>강도 (검색률 낮으면 숫자를 내리세요)
+              <select id="filter-strictness">
+                <option value="1">1 · 아주 널널하게 (코인 많이)</option>
+                <option value="2">2 · 널널하게</option>
+                <option value="3">3 · 기본 (권장)</option>
+                <option value="4">4 · 엄격하게</option>
+                <option value="5">5 · 아주 엄격하게 (확실한 것만)</option>
+              </select>
+            </label>
           </div>
         </section>
 

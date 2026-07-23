@@ -12,7 +12,8 @@ const defaultSettings = {
   direction: "long",         // "long" | "short" | "both"
   timeframeFocus: "15m",
   stageFilter: "all",        // 1~5 단계 또는 all
-  weights: { ...CONFIG.scoreWeights },
+  strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
+  penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
   favorites: [],             // 관심 종목 심볼 배열
   excluded: [],              // 제외 종목
   sort: "score",             // "score" | "change" | "volume"

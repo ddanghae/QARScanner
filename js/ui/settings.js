@@ -2,6 +2,7 @@
 // localStorage 저장은 state.js 가 담당. 여기선 UI 바인딩 + 필터 적용 로직.
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
+import { strictnessPreset } from "../config.js";
 import { toast } from "./notifications.js";
 
 // 결과 목록에 현재 설정(필터/정렬) 적용
@@ -78,6 +79,14 @@ export function initSettingsUI() {
     toast("설정을 초기화했습니다.", "success");
   });
 
+  const strictness = document.getElementById("filter-strictness");
+  if (strictness) strictness.addEventListener("change", () => {
+    const preset = strictnessPreset(Number(strictness.value));
+    updateSettings({ strictnessLevel: preset.level, minScore: preset.minScore, penalties: { ...preset.penalties } });
+    syncControls();
+    toast("다음 스캔부터 적용됩니다.", "info");
+  });
+
   const darkBtn = document.getElementById("toggle-dark");
   if (darkBtn) darkBtn.addEventListener("click", () => {
     updateSettings({ darkMode: !state.settings.darkMode });
@@ -120,6 +129,7 @@ export function syncControls() {
   setChk("filter-realtime-candle", s.includeRealtimeCandle);
   setChk("filter-autorefresh", s.autoRefresh);
   setVal("filter-minvolume", s.minQuoteVolume);
+  setVal("filter-strictness", s.strictnessLevel);
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }

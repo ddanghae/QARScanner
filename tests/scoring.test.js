@@ -3,7 +3,7 @@
 import { suite, test, assert, eq } from "./harness.js";
 import { estimateAbsorption, classifyStage, scoreCandidate, gradeFor, topSignals } from "../js/core/scoring.js";
 import { computeLongPlan, computeShortPlan } from "../js/core/risk-reward.js";
-import { CONFIG } from "../js/config.js";
+import { CONFIG, STRICTNESS_LEVELS, strictnessPreset } from "../js/config.js";
 
 // 강한 롱 후보 signals
 function strongSignals() {
@@ -102,6 +102,30 @@ export function run() {
     const sc = scoreCandidate(sig, estimateAbsorption(sig, "short"), classifyStage(sig), CONFIG, "short");
     assert(sc.breakdown.some((b) => b.label.includes("고점 유동성 스윕")), "숏 라벨 적용");
     assert(sc.breakdown.some((b) => b.label.includes("급등 및 과매수")), "숏 급등 라벨");
+  });
+
+  test("채점 강도 5단계 — minScore/감점 단조 증가, 3단계=기본값", () => {
+    eq(STRICTNESS_LEVELS.length, 5, "5단계");
+    for (let i = 1; i < STRICTNESS_LEVELS.length; i++) {
+      const prev = STRICTNESS_LEVELS[i - 1], cur = STRICTNESS_LEVELS[i];
+      assert(cur.minScore > prev.minScore, `minScore 단조 증가 (${prev.level}→${cur.level})`);
+      for (const key of Object.keys(CONFIG.penalties)) {
+        assert(cur.penalties[key] <= prev.penalties[key], `${key} 감점 세기 단조 증가 (${prev.level}→${cur.level})`);
+      }
+    }
+    eq(JSON.stringify(strictnessPreset(3).penalties), JSON.stringify(CONFIG.penalties), "3단계 = CONFIG 기본 감점값");
+  });
+
+  test("scoreCandidate cfg override 반영 (강도별 penalties 교체 경로)", () => {
+    const sig = strongSignals();
+    const customCfg = {
+      ...CONFIG,
+      scoreWeights: { ...CONFIG.scoreWeights, dropAndOversold: 0 },
+      penalties: CONFIG.penalties,
+    };
+    const base = scoreCandidate(sig, estimateAbsorption(sig), classifyStage(sig), CONFIG).score;
+    const custom = scoreCandidate(sig, estimateAbsorption(sig), classifyStage(sig), customCfg).score;
+    assert(custom < base, `가중치 낮추면 점수 하락 (${custom} < ${base})`);
   });
 
   test("손절 clamp — 스윙이 잘못된 쪽이어도 진입 반대편 + RR 유한", () => {

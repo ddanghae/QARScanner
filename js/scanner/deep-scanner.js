@@ -317,8 +317,8 @@ export async function deepAnalyze(item, settings) {
   // 방향별 점수 계산. both 면 양쪽 다 계산 후 높은 점수 채택(한 종목 한 행).
   const dir = item.pre?.dirHint || settings.direction || "long";
   const sides = [];
-  if (dir === "long" || dir === "both") sides.push(scoreSide("long", buildLongSignals(item, a4, a1, a15, a5, pre)));
-  if (dir === "short" || dir === "both") sides.push(scoreSide("short", buildShortSignals(item, a4, a1, a15, a5, pre)));
+  if (dir === "long" || dir === "both") sides.push(scoreSide("long", buildLongSignals(item, a4, a1, a15, a5, pre), settings));
+  if (dir === "short" || dir === "both") sides.push(scoreSide("short", buildShortSignals(item, a4, a1, a15, a5, pre), settings));
   const best = sides.sort((x, y) => y.scored.score - x.scored.score)[0];
   if (!best) return { symbol: item.symbol, error: "방향 없음", skipped: true };
 
@@ -350,11 +350,12 @@ export async function deepAnalyze(item, settings) {
   };
 }
 
-// 한 방향 점수 묶음
-function scoreSide(side, sig) {
+// 한 방향 점수 묶음 — 감점은 사용자 채점 강도(settings.penalties, §13 STRICTNESS_LEVELS) 있으면 그걸로 덮어씀
+function scoreSide(side, sig, settings) {
   const absorption = estimateAbsorption(sig, side);
   const stageInfo = classifyStage(sig);
-  const scored = scoreCandidate(sig, absorption, stageInfo, CONFIG, side);
+  const cfg = settings?.penalties ? { ...CONFIG, penalties: settings.penalties } : CONFIG;
+  const scored = scoreCandidate(sig, absorption, stageInfo, cfg, side);
   return { side, sig, absorption, stageInfo, scored };
 }
 

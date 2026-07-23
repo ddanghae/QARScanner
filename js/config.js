@@ -135,6 +135,24 @@ export const CONFIG = {
   },
 };
 
+// ---- 채점 강도 5단계 (§13 사용자 조정 — 가중치는 그대로 두고 감점 세기 + 최소 점수만 단계별로 스케일) ----
+// 3단계 = CONFIG.penalties/minListScore 원본값. 1단계로 갈수록 덜 걸러냄(코인 더 많이 나옴).
+export const STRICTNESS_LEVELS = [
+  { level: 1, label: "1 · 아주 널널하게 (코인 많이)", minScore: 30,
+    penalties: { overExtended15m: -5, farFromLowAtr: -4, strongResistanceAbove: -3, shortTargetDistance: -3, tooLowVolume: -4, strongDowntrend4h: -3, newListingThin: -2, poorRiskReward: -4 } },
+  { level: 2, label: "2 · 널널하게", minScore: 40,
+    penalties: { overExtended15m: -7, farFromLowAtr: -6, strongResistanceAbove: -5, shortTargetDistance: -5, tooLowVolume: -6, strongDowntrend4h: -5, newListingThin: -4, poorRiskReward: -6 } },
+  { level: 3, label: "3 · 기본 (권장)", minScore: 55,
+    penalties: { overExtended15m: -12, farFromLowAtr: -10, strongResistanceAbove: -8, shortTargetDistance: -8, tooLowVolume: -10, strongDowntrend4h: -8, newListingThin: -6, poorRiskReward: -10 } },
+  { level: 4, label: "4 · 엄격하게", minScore: 65,
+    penalties: { overExtended15m: -16, farFromLowAtr: -13, strongResistanceAbove: -10, shortTargetDistance: -10, tooLowVolume: -13, strongDowntrend4h: -10, newListingThin: -8, poorRiskReward: -13 } },
+  { level: 5, label: "5 · 아주 엄격하게 (확실한 것만)", minScore: 75,
+    penalties: { overExtended15m: -19, farFromLowAtr: -16, strongResistanceAbove: -13, shortTargetDistance: -13, tooLowVolume: -16, strongDowntrend4h: -13, newListingThin: -10, poorRiskReward: -16 } },
+];
+export function strictnessPreset(level) {
+  return STRICTNESS_LEVELS.find((s) => s.level === level) || STRICTNESS_LEVELS[2];
+}
+
 // 스테이블/레버리지 판별용 패턴
 export const STABLE_BASES = new Set([
   "USDT","USDC","BUSD","TUSD","DAI","FDUSD","USDP","UST","USTC","EUR","GBP","AEUR",

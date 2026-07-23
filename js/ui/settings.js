@@ -2,8 +2,19 @@
 // localStorage 저장은 state.js 가 담당. 여기선 UI 바인딩 + 필터 적용 로직.
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
-import { strictnessPreset } from "../config.js";
+import { CONFIG, strictnessPreset } from "../config.js";
 import { toast } from "./notifications.js";
+
+// 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
+const CHECK_BINDINGS = [
+  { key: "showFavoritesOnly", ids: ["filter-favorites-only"] },
+  { key: "excludeChaseBan", ids: ["filter-exclude-chase", "set-exclude-chase"] },
+  { key: "excludeNewListing", ids: ["filter-exclude-new", "set-exclude-new"] },
+  { key: "goldenCrossOnly", ids: ["filter-golden-cross", "set-golden-cross"] },
+  { key: "near1hEma200Only", ids: ["filter-near-ema200", "set-near-ema200"] },
+];
+const AUTOREFRESH_IDS = ["filter-autorefresh", "set-autorefresh"];
+const REALTIME_IDS = ["set-realtime-candle"];
 
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
@@ -39,7 +50,7 @@ export function applyFilters(results) {
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
-// 필터 바 초기화
+// 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
@@ -47,43 +58,23 @@ export function initSettingsUI() {
   bindSelect("filter-timeframe", "timeframeFocus");
   bindSelect("filter-stage", "stageFilter");
   bindSelect("filter-sort", "sort");
-  bindCheck("filter-favorites-only", "showFavoritesOnly");
-  bindCheck("filter-exclude-chase", "excludeChaseBan");
-  bindCheck("filter-exclude-new", "excludeNewListing");
-  bindCheck("filter-golden-cross", "goldenCrossOnly");
-  bindCheck("filter-near-ema200", "near1hEma200Only");
 
-  // 실시간 캔들 포함 — 다음 스캔에 반영 (필터 재적용 불필요)
-  const rt = document.getElementById("filter-realtime-candle");
-  if (rt) rt.addEventListener("change", () => updateSettings({ includeRealtimeCandle: rt.checked }));
+  // 체크박스 — twin id 지원 (한 설정이 여러 위치에 있을 수 있음)
+  for (const { key, ids } of CHECK_BINDINGS) bindCheckGroup(ids, key, true);
 
-  // 자동 갱신 — 시작/중지 신호
-  const ar = document.getElementById("filter-autorefresh");
-  if (ar) ar.addEventListener("change", () => {
-    updateSettings({ autoRefresh: ar.checked });
-    emit("autorefresh:toggle", ar.checked);
-  });
+  // 자동 갱신 — 시작/중지 신호 (필터 재적용 아님)
+  bindCheckGroup(AUTOREFRESH_IDS, "autoRefresh", false, (checked) => emit("autorefresh:toggle", checked));
+  // 실시간 캔들 — 다음 스캔에 반영
+  bindCheckGroup(REALTIME_IDS, "includeRealtimeCandle", false);
 
   const minVol = document.getElementById("filter-minvolume");
-  if (minVol) {
-    minVol.value = String(state.settings.minQuoteVolume);
-    minVol.addEventListener("change", () => {
-      updateSettings({ minQuoteVolume: Number(minVol.value) });
-      emit("filters:apply");
-    });
-  }
+  if (minVol) minVol.addEventListener("change", () => {
+    updateSettings({ minQuoteVolume: Number(minVol.value) });
+    emit("filters:apply");
+  });
 
   const applyBtn = document.getElementById("filter-apply");
   if (applyBtn) applyBtn.addEventListener("click", () => emit("filters:apply"));
-
-  const resetBtn = document.getElementById("settings-reset");
-  if (resetBtn) resetBtn.addEventListener("click", () => {
-    resetSettings();
-    syncControls();
-    applyDarkMode();
-    emit("filters:apply");
-    toast("설정을 초기화했습니다.", "success");
-  });
 
   const strictness = document.getElementById("filter-strictness");
   if (strictness) strictness.addEventListener("change", () => {
@@ -92,6 +83,34 @@ export function initSettingsUI() {
     syncControls();
     toast("다음 스캔부터 적용됩니다.", "info");
   });
+
+  // 설정 탭 숫자 조정
+  const emaRatio = document.getElementById("set-ema200-ratio");
+  if (emaRatio) emaRatio.addEventListener("change", () => {
+    const v = Math.min(3, Math.max(0.1, Number(emaRatio.value) || CONFIG.near1hEma200AtrRatio));
+    updateSettings({ near1hEma200AtrRatio: v });
+    syncControls();
+    toast("다음 스캔부터 적용됩니다.", "info");
+  });
+  const refreshSec = document.getElementById("set-refresh-sec");
+  if (refreshSec) refreshSec.addEventListener("change", () => {
+    const ms = Math.max(CONFIG.refresh.minIntervalMs, (Number(refreshSec.value) || 90) * 1000);
+    updateSettings({ refreshIntervalMs: ms });
+    syncControls();
+    toast("자동 갱신 주기를 바꿨습니다.", "info");
+  });
+
+  // 초기화 버튼 — 사이드바 + 설정 탭 양쪽
+  for (const id of ["settings-reset", "settings-reset-2"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener("click", () => {
+      resetSettings();
+      syncControls();
+      applyDarkMode();
+      emit("filters:apply");
+      toast("설정을 초기화했습니다.", "success");
+    });
+  }
 
   const darkBtn = document.getElementById("toggle-dark");
   if (darkBtn) darkBtn.addEventListener("click", () => {
@@ -111,13 +130,19 @@ function bindSelect(id, key, cast) {
     emit("filters:apply");
   });
 }
-function bindCheck(id, key) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener("change", () => {
-    updateSettings({ [key]: el.checked });
-    emit("filters:apply");
-  });
+
+// 같은 설정을 가리키는 여러 체크박스를 묶어 바인딩. 하나 바뀌면 상태 갱신 + 나머지 동기화.
+function bindCheckGroup(ids, key, applyFilter, after) {
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener("change", () => {
+      updateSettings({ [key]: el.checked });
+      for (const other of ids) setChk(other, el.checked);
+      if (applyFilter) emit("filters:apply");
+      if (after) after(el.checked);
+    });
+  }
 }
 
 // 설정값 → 컨트롤 반영
@@ -129,15 +154,13 @@ export function syncControls() {
   setVal("filter-timeframe", s.timeframeFocus);
   setVal("filter-stage", s.stageFilter);
   setVal("filter-sort", s.sort);
-  setChk("filter-favorites-only", s.showFavoritesOnly);
-  setChk("filter-exclude-chase", s.excludeChaseBan);
-  setChk("filter-exclude-new", s.excludeNewListing);
-  setChk("filter-golden-cross", s.goldenCrossOnly);
-  setChk("filter-near-ema200", s.near1hEma200Only);
-  setChk("filter-realtime-candle", s.includeRealtimeCandle);
-  setChk("filter-autorefresh", s.autoRefresh);
+  for (const { key, ids } of CHECK_BINDINGS) for (const id of ids) setChk(id, s[key]);
+  for (const id of AUTOREFRESH_IDS) setChk(id, s.autoRefresh);
+  for (const id of REALTIME_IDS) setChk(id, s.includeRealtimeCandle);
   setVal("filter-minvolume", s.minQuoteVolume);
   setVal("filter-strictness", s.strictnessLevel);
+  setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
+  setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }

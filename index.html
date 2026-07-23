@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
           <span>개요</span>
         </button>
+        <button class="side-link" data-nav="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>설정</span>
+        </button>
         <button class="side-link" data-click="scan-btn">
           <svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
           <span>스캔 시작</span>
@@ -68,6 +72,7 @@
       </header>
 
       <div class="content">
+       <div id="view-overview">
         <!-- 상단 상태 영역 (§15) -->
         <section id="status-bar" class="status-bar" aria-live="polite"></section>
 
@@ -150,11 +155,8 @@
             <label title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
               <input type="checkbox" id="filter-golden-cross" /> 골든크로스 리테스트만
             </label>
-            <label title="1시간봉 종가가 200일선(EMA200)에 ATR 0.5배 이내로 붙어있는 종목만">
+            <label title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
               <input type="checkbox" id="filter-near-ema200" /> 1h 200선 밀착만
-            </label>
-            <label title="진행 중 캔들 포함(실시간 예상). 끄면 마감 캔들만 — 리페인트 방지">
-              <input type="checkbox" id="filter-realtime-candle" /> 실시간 캔들 포함
             </label>
             <label title="일정 주기로 자동 재스캔"><input type="checkbox" id="filter-autorefresh" /> 자동 갱신</label>
             <div class="filter-checks-spacer"></div>
@@ -162,22 +164,7 @@
             <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
             <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
           </div>
-        </section>
-
-        <!-- 채점 강도 (§13 5단계 프리셋 — 감점 세기 + 최소 점수 일괄 조정) -->
-        <section class="card filter-bar" aria-label="채점 강도">
-          <div class="card-head"><h2>채점 강도</h2></div>
-          <div class="filter-grid">
-            <label>강도 (검색률 낮으면 숫자를 내리세요)
-              <select id="filter-strictness">
-                <option value="1">1 · 아주 널널하게 (코인 많이)</option>
-                <option value="2">2 · 널널하게</option>
-                <option value="3">3 · 기본 (권장)</option>
-                <option value="4">4 · 엄격하게</option>
-                <option value="5">5 · 아주 엄격하게 (확실한 것만)</option>
-              </select>
-            </label>
-          </div>
+          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다.</p>
         </section>
 
         <!-- 결과 -->
@@ -193,6 +180,103 @@
         <footer class="app-footer">
           <p>공개 REST API 기반 · 개인 API 키 없음 · 자동 주문 없음 · 기술적 참고용</p>
         </footer>
+       </div>
+
+       <!-- ================= 설정 탭 ================= -->
+       <div id="view-settings" hidden>
+        <section class="card settings-group">
+          <div class="card-head"><h2>채점 강도</h2></div>
+          <div class="set-row">
+            <div class="set-control">
+              <label for="filter-strictness">강도 (1~5)</label>
+              <select id="filter-strictness">
+                <option value="1">1 · 아주 널널하게 (코인 많이)</option>
+                <option value="2">2 · 널널하게</option>
+                <option value="3">3 · 기본 (권장)</option>
+                <option value="4">4 · 엄격하게</option>
+                <option value="5">5 · 아주 엄격하게 (확실한 것만)</option>
+              </select>
+            </div>
+            <p class="set-help">채점을 얼마나 깐깐하게 할지 정합니다. <b>숫자가 낮을수록</b> 조건을 느슨하게 봐서 <b>더 많은 코인</b>이 목록에 나오고, <b>높을수록</b> 확실한 것만 남겨 <b>적게</b> 나옵니다. 스캔 결과가 너무 적으면 숫자를 내리세요.</p>
+          </div>
+        </section>
+
+        <section class="card settings-group">
+          <div class="card-head"><h2>특별 조건 켜기 / 끄기</h2></div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-golden-cross" /> 골든크로스 리테스트만 보기</label>
+            </div>
+            <p class="set-help">4시간봉에서 <b>50일선이 200일선을 위로 뚫은 뒤</b>, 되돌림에서 그 선을 다시 밟고 <b>위로 찔렀다 꺾이는 거부 캔들</b>이 나온 자리만 보여줍니다. 상승 추세 초입을 노릴 때 켜세요. (조건이 까다로워 매우 적게 나옵니다.)</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-near-ema200" /> 1시간봉 200일선 밀착만 보기</label>
+            </div>
+            <p class="set-help">1시간봉 가격이 <b>200일선에 딱 붙어있는</b> 코인만 보여줍니다. 200일선에서 튕기는 지지·저항 반응을 노릴 때 켜세요.</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label for="set-ema200-ratio">200선 밀착 민감도</label>
+              <input type="number" id="set-ema200-ratio" min="0.1" max="3" step="0.1" />
+            </div>
+            <p class="set-help">위 "200선 밀착"을 얼마나 넓게 볼지입니다(ATR 배수). <b>숫자가 크면</b> 조금 멀어도 밀착으로 봐서 <b>코인이 많아지고</b>, <b>작으면</b> 아주 딱 붙은 것만 봅니다. 기본 0.5.</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-exclude-chase" /> 추격 금지(늦은 자리) 제외</label>
+            </div>
+            <p class="set-help">이미 많이 올라 진입하기 <b>늦은 5단계</b> 코인을 목록에서 뺍니다. 뒤늦게 따라 사는 것을 막고 싶을 때 켜세요.</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-exclude-new" /> 신규 상장 종목 제외</label>
+            </div>
+            <p class="set-help">상장한 지 얼마 안 돼 <b>과거 데이터가 부족한</b> 코인을 뺍니다. 계산이 불안정한 신규 코인을 피할 때 켜세요.</p>
+          </div>
+        </section>
+
+        <section class="card settings-group">
+          <div class="card-head"><h2>계산 방식 · 갱신</h2></div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-realtime-candle" /> 실시간(진행 중) 캔들 포함</label>
+            </div>
+            <p class="set-help">켜면 <b>아직 마감 안 된 캔들</b>도 계산에 넣어 신호가 더 빠릅니다. 대신 캔들이 마감되며 <b>신호가 바뀔 수 있습니다(리페인트)</b>. 안정적으로 보려면 꺼두세요(기본 꺼짐).</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label class="switch-label"><input type="checkbox" id="set-autorefresh" /> 자동 갱신</label>
+            </div>
+            <p class="set-help">일정 시간마다 <b>자동으로 다시 스캔</b>합니다. 켜두면 계속 최신 후보를 받아볼 수 있습니다.</p>
+          </div>
+
+          <div class="set-row">
+            <div class="set-control">
+              <label for="set-refresh-sec">자동 갱신 주기 (초)</label>
+              <input type="number" id="set-refresh-sec" min="30" max="600" step="10" />
+            </div>
+            <p class="set-help">몇 초마다 자동으로 다시 스캔할지입니다. <b>짧을수록 자주</b> 갱신되지만 그만큼 <b>API 요청이 많아집니다</b>. 너무 짧으면 30초로 자동 제한됩니다.</p>
+          </div>
+        </section>
+
+        <section class="card settings-group">
+          <div class="card-head"><h2>초기화</h2></div>
+          <div class="set-row">
+            <div class="set-control">
+              <button id="settings-reset-2" class="btn">모든 설정 기본값으로</button>
+            </div>
+            <p class="set-help">방향·강도·필터 등 모든 설정을 처음 상태로 되돌립니다.</p>
+          </div>
+        </section>
+       </div>
       </div>
     </div>
   </div>

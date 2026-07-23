@@ -25,6 +25,7 @@ const defaultSettings = {
   excludeNewListing: false,
   goldenCrossOnly: false,       // 골든크로스 리테스트(거부 캔들 확인)만 보기
   near1hEma200Only: false,      // 1시간봉 200일선 밀착만 보기
+  near1hEma200AtrRatio: CONFIG.near1hEma200AtrRatio, // 200선 밀착 민감도 (ATR 배수)
   autoRefresh: false,           // 자동 재스캔
   refreshIntervalMs: CONFIG.refresh.intervalMs,
 };

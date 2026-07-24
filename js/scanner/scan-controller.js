@@ -4,9 +4,10 @@
 
 import { CONFIG } from "../config.js";
 import { state, emit } from "../state.js";
-import { getExchangeInfo, getTicker24h, getKlines } from "../api/binance.js";
-import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates } from "./prefilter.js";
+import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll } from "../api/binance.js";
+import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
+import { buildEarlyResult } from "../core/early-detect.js";
 
 let abortToken = { aborted: false };
 
@@ -47,6 +48,54 @@ async function mapWithProgress(items, fn, onEach) {
   return results.filter(Boolean);
 }
 
+// ---- 조기 포착 모드 파이프라인 ----
+// 반환: 기존과 동일 shape 결과 배열 (rank 는 호출부에서 부여)
+async function runEarlyPipeline(universe, now) {
+  const e = CONFIG.earlyDetect;
+
+  // 2단계: early 유니버스 기준으로 유동성 필터
+  setPhase("prefilter");
+  const tickers = await getTicker24h();
+  state.tickers = tickers;
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter,
+    minQuoteVolume: e.minQuoteVolume,
+    topByVolume: e.topByVolume,
+  });
+  const midCaps = excludeMajors(prefiltered, e.excludeMajors);
+  state.prefiltered = midCaps;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: midCaps.length, newListings });
+  if (abortToken.aborted) return null;
+
+  // 펀딩비는 스캔당 1회 (전 종목)
+  const fundingMap = await getPremiumIndexAll();
+
+  // 3단계: 4시간봉으로 1차 선별
+  setPhase("candidate");
+  const evaluated = await mapWithProgress(midCaps, async (item) => {
+    const k4h = await getKlines(item.symbol, "4h");
+    const closed = k4h.slice(0, state.settings.includeRealtimeCandle ? k4h.length : -1);
+    return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
+  });
+  let candidates = evaluated
+    .filter((x) => x.res.pass)
+    .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
+    .slice(0, e.keepMax);
+  state.candidates = candidates.map((x) => x.item);
+  emit("scan:candidates", { count: candidates.length });
+  if (abortToken.aborted) return null;
+
+  // 4단계: 후보만 OI 조회 후 정밀 판정
+  setPhase("deep");
+  const analyzed = await mapWithProgress(candidates, async ({ item, k4h }) => {
+    const oiSeries = await getOpenInterestHist(item.symbol, e.oiPeriod, e.oiLimit);
+    const funding = fundingMap.get(item.symbol) ?? null;
+    return buildEarlyResult(item, k4h, oiSeries, funding, CONFIG);
+  });
+  return analyzed.filter(Boolean);
+}
+
 export async function runScan() {
   if (state.scan.running) return;
   abortToken = { aborted: false };
@@ -64,6 +113,23 @@ export async function runScan() {
     const universe = stage1Universe(symbols);
     state.universe = universe;
     if (abortToken.aborted) return finishAborted();
+
+    // --- 조기 포착 모드면 별도 파이프라인 ---
+    if (state.settings.scanMode === "early") {
+      const earlyResults = await runEarlyPipeline(universe, now);
+      if (earlyResults === null) return finishAborted();
+      setPhase("score");
+      const results = earlyResults
+        .filter((r) => r.score >= state.settings.minScore)
+        .sort((a, b) => b.score - a.score)
+        .map((r, i) => ({ ...r, rank: i + 1 }));
+      state.results = results;
+      setPhase("done");
+      state.scan.running = false;
+      state.scan.lastUpdated = Date.now();
+      emit("scan:done", { count: results.length, analyzed: earlyResults.length });
+      return results;
+    }
 
     // --- 2단계: 24h 유동성 필터 ---
     setPhase("prefilter");

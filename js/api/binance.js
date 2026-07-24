@@ -135,6 +135,36 @@ export async function getMarkPrice(symbol) {
   return request(`/fapi/v1/premiumIndex?symbol=${symbol}`);
 }
 
+// 미결제약정 추이 (공개). period: 5m/15m/30m/1h/2h/4h/6h/12h/1d, 최근 30일치만 제공.
+// 반환: [{ time, oi }] 과거→현재. 데이터 없으면 빈 배열.
+export async function getOpenInterestHist(symbol, period, limit) {
+  const p = period || CONFIG.earlyDetect.oiPeriod;
+  const lim = limit || CONFIG.earlyDetect.oiLimit;
+  const path = `/futures/data/openInterestHist?symbol=${symbol}&period=${p}&limit=${lim}`;
+  try {
+    const raw = await request(path, { ttl: CONFIG.cacheTtlMs["1h"], cacheKey: `oi:${symbol}:${p}:${lim}` });
+    if (!Array.isArray(raw)) return [];
+    return raw.map((r) => ({ time: r.timestamp, oi: +r.sumOpenInterest }));
+  } catch {
+    // 신규 상장 등으로 데이터가 없으면 빈 배열 (후보를 죽이지 않는다)
+    return [];
+  }
+}
+
+// 전 종목 펀딩비 1회 호출 (심볼 미지정 → 배열). 반환: Map<symbol, lastFundingRate>
+export async function getPremiumIndexAll() {
+  try {
+    const raw = await request("/fapi/v1/premiumIndex", {
+      ttl: CONFIG.cacheTtlMs.ticker24h,
+      cacheKey: "premiumIndexAll",
+    });
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return new Map(arr.map((r) => [r.symbol, +r.lastFundingRate]));
+  } catch {
+    return new Map();
+  }
+}
+
 // ---- 캔들 파싱 ----
 // Binance kline 배열 인덱스:
 // 0 openTime,1 open,2 high,3 low,4 close,5 volume,6 closeTime,
@@ -168,5 +198,6 @@ export function closedOnly(candles, includeRealtime) {
 
 export default {
   getExchangeInfo, getTicker24h, getKlines, getMarkPrice,
+  getOpenInterestHist, getPremiumIndexAll,
   parseKlines, closedOnly, clearCache,
 };

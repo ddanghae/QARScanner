@@ -63,6 +63,57 @@ export const CONFIG = {
     minRelVol: 0.6,         // 상대 거래량 이 값 미만 = 거래 죽은 코인 → 제외
   },
 
+  // ---- 조기 포착 모드 (early) ----
+  // 큰 상승 이전 흔적: 변동성 압축 + 거래량 고갈 + 미결제약정 증가.
+  // 기준 시간봉 4h. 임계값은 실사용하며 조정하는 것을 전제로 한다.
+  earlyDetect: {
+    // 계산 파라미터
+    boxLookback: 60,        // 박스 판정 봉 수 (4h × 60 ≈ 10일)
+    squeezeLookback: 100,   // 압축 백분위 계산 구간
+    volRecentN: 20,         // 최근 거래량 평균 구간
+    volPriorN: 60,          // 비교 대상 이전 구간
+    oiPeriod: "1h",         // openInterestHist period
+    oiLimit: 72,            // 72시간
+    // 유니버스 (중형 중심)
+    minQuoteVolume: 5_000_000,
+    topByVolume: 200,
+    excludeMajors: ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE"],
+    keepMax: 50,
+    // 1단계 매집
+    boxWidthMaxPct: 25,     // 박스 폭 이 % 이하
+    squeezePctMax: 30,      // 압축 백분위 이하
+    volDryMax: 0.8,         // 거래량 고갈 비율 이하
+    oiChangeMinPct: 5,      // 72시간 OI 증가율 이상
+    // 2단계 임박
+    squeezePctTight: 15,    // 압축 극단
+    rangePosMin: 0.95,      // 박스 상단 근접
+    relVolMin: 1.0,         // 거래량 회복
+    // 3단계 돌파
+    breakoutRelVol: 2.0,    // 돌파 시 상대거래량
+    breakoutMaxRunPct: 15,  // 돌파 후 상승폭 이 % 이하만 (초입)
+    // 제외
+    pumpedMaxPct: 40,       // 24h 이 % 초과 상승 = 이미 감
+    oiDumpPct: -10,         // 72h OI 이 % 이하 = 포지션 이탈
+    fundingMaxAbs: 0.001,   // |펀딩비| 이 값 초과 = 한쪽 과열
+  },
+
+  // ---- 조기 포착 채점 (합계 100) ----
+  earlyScoreWeights: {
+    squeeze: 25,          // 변동성 압축 정도
+    oiBuildUp: 25,        // 미결제약정 증가
+    volumeProfile: 20,    // 거래량 고갈
+    rangePosition: 15,    // 박스 상단 근접
+    trendReclaim: 15,     // 장기선 회복
+  },
+
+  // ---- 조기 포착 감점 ----
+  earlyPenalties: {
+    alreadyPumped: -20,      // 24h +25~40% (이미 어느 정도 감)
+    oiDump: -15,             // OI 감소
+    fundingOverheated: -10,  // 펀딩 한쪽 쏠림
+    thinLiquidity: -10,      // 거래대금 10M 미만
+  },
+
   // ---- 시장구조 엔진 ----
   structure: {
     internalPivot: 2,   // 좌우 2~3 봉

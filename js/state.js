@@ -10,6 +10,7 @@ const defaultSettings = {
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
   dropBasis: "6h",          // "6h" | "24h"
   direction: "long",         // "long" | "short" | "both"
+  scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착)
   timeframeFocus: "15m",
   stageFilter: "all",        // 1~5 단계 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS

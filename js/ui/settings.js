@@ -20,10 +20,11 @@ const REALTIME_IDS = ["set-realtime-candle"];
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
+  const early = s.scanMode === "early";
   let list = results.slice();
 
-  // 방향
-  if (s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
+  // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
+  if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
   // 최소 점수
   list = list.filter((r) => r.score >= s.minScore);
   // 관심 종목만
@@ -37,7 +38,8 @@ export function applyFilters(results) {
   // 1시간봉 200일선 밀착만
   if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
   // 노이즈(촙 구간·저거래량) 제외
-  if (s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
+  // early 모드의 매집 구간은 정의상 횡보(=촙)라 이 필터를 적용하면 후보가 전멸한다.
+  if (!early && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
@@ -55,6 +57,10 @@ export function applyFilters(results) {
 
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
+  bindSelect("filter-scanmode", "scanMode");
+  // bindSelect 는 filters:apply 만 쏘고 컨트롤은 안 건드리므로, 단계 라벨은 따로 즉시 갱신한다.
+  const scanModeEl = document.getElementById("filter-scanmode");
+  if (scanModeEl) scanModeEl.addEventListener("change", () => syncStageLabels(scanModeEl.value));
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-dropbasis", "dropBasis");
@@ -151,6 +157,8 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 // 설정값 → 컨트롤 반영
 export function syncControls() {
   const s = state.settings;
+  setVal("filter-scanmode", s.scanMode);
+  syncStageLabels(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
   setVal("filter-dropbasis", s.dropBasis);
@@ -167,6 +175,20 @@ export function syncControls() {
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
+
+// 단계 필터의 선택지 문구를 모드에 맞게 바꾼다(값은 그대로 1~5).
+const STAGE_LABELS = {
+  reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
+  early: ["전체", "1 매집", "2 임박", "3 돌파", "—", "—"],
+};
+function syncStageLabels(mode) {
+  const el = document.getElementById("filter-stage");
+  if (!el) return;
+  const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
+  for (let i = 0; i < el.options.length && i < labels.length; i++) {
+    el.options[i].textContent = labels[i];
+  }
+}
 
 export function applyDarkMode() {
   document.documentElement.classList.toggle("dark", !!state.settings.darkMode);

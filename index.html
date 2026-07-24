@@ -91,6 +91,12 @@
             <h2>필터</h2>
           </div>
           <div class="filter-grid">
+            <label>스캔 모드
+              <select id="filter-scanmode">
+                <option value="reversal">급락 반등 (기본)</option>
+                <option value="early">조기 포착 (오르기 전)</option>
+              </select>
+            </label>
             <label>방향
               <select id="filter-direction">
                 <option value="long">롱 후보</option>
@@ -184,6 +190,16 @@
 
        <!-- ================= 설정 탭 ================= -->
        <div id="view-settings" hidden>
+        <section class="card settings-group">
+          <div class="card-head"><h2>스캔 모드</h2></div>
+          <div class="set-row">
+            <div class="set-control">
+              <label for="filter-scanmode-info">현재 모드</label>
+              <span id="filter-scanmode-info" class="tagline">위 필터 바의 "스캔 모드"에서 변경</span>
+            </div>
+            <p class="set-help"><b>급락 반등</b>은 크게 떨어진 코인이 되돌아오는 자리를 찾습니다. <b>조기 포착</b>은 반대로, 아직 조용히 바닥에서 <b>변동성이 눌려 있고 거래량이 마른</b> 상태에서 미결제약정이 늘고 있는 코인을 찾아 <b>매집 → 임박 → 돌파</b> 3단계로 보여줍니다. 크게 오르기 전을 노릴 때 조기 포착을 쓰세요. 단, 언제 오를지는 알 수 없고 오르지 않을 수도 있습니다.</p>
+          </div>
+        </section>
         <section class="card settings-group">
           <div class="card-head"><h2>채점 강도</h2></div>
           <div class="set-row">

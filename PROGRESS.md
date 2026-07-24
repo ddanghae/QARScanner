@@ -40,12 +40,30 @@
    참고해 사이드바+톱바 레이아웃으로 전면 리스킨. 로직은 전혀 안 건드림(순수 CSS+마크업).
    화이트 사이드바 + 다크 액티브 필, 다크 히어로 스탯 카드, 카드형 섹션, pill 뱃지.
 
+5. **조기 포착 모드 추가** — 기존 깔때기는 "급락+과매도"라 조용한 매집 구간을
+   못 잡는 문제를 발견. 스캔 모드 전환 방식으로 후보 깔때기와 채점만 교체하는
+   `scanMode: reversal | early` 를 추가했다. early 는 4시간봉에서 변동성 압축
+   (기존 볼린저 width 재사용) + 거래량 고갈 + 미결제약정(OI) 증가를 보고
+   매집 → 임박 → 돌파 3단계로 분류한다. OI·펀딩비는 공개 엔드포인트
+   (`openInterestHist`, `premiumIndex`)를 쓰며 펀딩비는 스캔당 1회만 호출한다.
+   결과는 기존과 동일한 shape 을 반환해 결과표·상세 패널을 건드리지 않았다.
+   중형 중심 유니버스(거래대금 5M↑, 상위 200, 대형코인 제외).
+   - 주의: early 모드에서는 방향 필터와 노이즈 필터를 우회한다.
+     (매집 구간은 정의상 횡보라 노이즈 필터에 전멸하고, early 는 롱 전용이다)
+   - 신규 core 모듈은 `js/core/early-detect.js` 1개뿐(압축은 기존 bollinger().width 재사용).
+   - 설계/계획: `docs/superpowers/specs/2026-07-24-early-pump-detection-design.md`,
+     `docs/superpowers/plans/2026-07-24-early-pump-detection.md`
+   - subagent-driven 방식으로 10개 태스크 TDD 구현, 태스크마다 spec+quality 리뷰 통과.
+
 ## 검증 상태
 
-- **테스트 38/38 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
-  repaint, refresh 6개 스위트)
+- **테스트 86/86 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
+  goldenCross, noise, early, repaint, refresh 9개 스위트)
 - **라이브 Binance API로 실제 스캔 여러 번 검증** — 롱/숏/양방향 전부 확인,
   콘솔 에러 0, RR 폭발 버그도 라이브에서 재현 후 수정 확인(수정 전 1:73M → 수정 후 1:16)
+- **조기 포착 모드 라이브 검증** — early 스캔 526종목→150 1차→14 후보, 결과 전부
+  "1 매집" 단계로 정상 표시(early 라벨·early 신호·박스 기반 진입/손절/목표),
+  reversal 모드로 되돌려 회귀 없음 확인, 콘솔 에러 0.
 
 ## 재개 방법
 
@@ -69,11 +87,13 @@ js/
   api/binance.js
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
          fvg.js order-block.js risk-reward.js scoring.js
+         golden-cross-retest.js noise-filter.js early-detect.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
 tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
+  golden-cross.test.js noise.test.js early-detect.test.js
   repaint.test.js refresh.test.js
 ```
 
@@ -84,6 +104,10 @@ tests/
 
 ## 앞으로 할 수 있는 것 (우선순위 순, 아무것도 확정 아님)
 
+0. **early 모드 임계값 튜닝** — `config.js`의 `earlyDetect`(박스폭·압축백분위·OI증가율 등)는
+   감으로 잡은 초기값이다. 실사용하며 후보 수를 보고 `boxWidthMaxPct`, `squeezePctMax`,
+   `oiChangeMinPct` 를 조정할 것. `earlyScoreWeights`/`earlyPenalties` 도 마찬가지.
+   TradingView 지표는 아직 reversal 로직 기준이라 early 모드 포팅도 후보.
 1. **점수 가중치 튜닝** — 실사용하면서 `config.js`의 `scoreWeights`/`penalties`가
    실제 좋은 셋업을 잘 걸러내는지 관찰 필요. 현재는 최초 설계값 그대로.
 2. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.

@@ -140,7 +140,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .set-row { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: start; padding: 14px 0; border-top: 1px solid var(--border); }
 .set-row:first-of-type { border-top: none; }
 .set-control { display: flex; flex-direction: column; gap: 6px; }
-.set-control > label { font-size: 13px; font-weight: 600; color: var(--text); }
+.set-control > label, .set-control > .set-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .set-control select, .set-control input[type="number"] {
   min-height: 44px; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font-size: 14px; width: 100%;

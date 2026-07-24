@@ -58,9 +58,6 @@ export function applyFilters(results) {
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
   bindSelect("filter-scanmode", "scanMode");
-  // bindSelect 는 filters:apply 만 쏘고 컨트롤은 안 건드리므로, 단계 라벨은 따로 즉시 갱신한다.
-  const scanModeEl = document.getElementById("filter-scanmode");
-  if (scanModeEl) scanModeEl.addEventListener("change", () => syncStageLabels(scanModeEl.value));
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-dropbasis", "dropBasis");

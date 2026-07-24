@@ -4,7 +4,7 @@
 import { state, on, isFavorite, toggleFavorite } from "../state.js";
 import { CONFIG } from "../config.js";
 import { fmtPrice, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml } from "./format.js";
-import { applyFilters } from "./settings.js";
+import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 
@@ -24,7 +24,8 @@ export function initDashboard() {
   on("scan:done", () => { setBusy(false); renderStatus(); renderResults(); });
   on("scan:error", () => { setBusy(false); renderStatus(); });
   on("scan:aborted", () => { setBusy(false); renderStatus(); });
-  on("filters:apply", renderResults);
+  // 설정 변경 시 컨트롤(단계 라벨 등 부수효과 포함) 재동기화 후 결과 재렌더
+  on("filters:apply", () => { syncControls(); renderResults(); });
   on("apihealth:changed", renderStatus);
   on("refresh:tick", renderCountdown);
 

@@ -2,7 +2,7 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { CONFIG } from "../js/config.js";
-import { boxRange, squeezePercentile, volDryRatio } from "../js/core/early-detect.js";
+import { boxRange, squeezePercentile, volDryRatio, analyzeOi } from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
 
 export function run() {
@@ -61,5 +61,34 @@ export function run() {
     const c = candlesFromCloses([1, 1, 1, 1, 1, 1], { spread: 0, vol: (i) => (i < 4 ? 100 : 50) });
     const r = volDryRatio(c, 2, 4);
     assert(Math.abs(r - 0.5) < 1e-9, `고갈 비율 0.5 (실제 ${r})`);
+  });
+
+  test("OI 변화율 — 증가", () => {
+    // 73개: 0번 100, 이후 선형 증가해서 마지막 200 → 72h 변화 +100%
+    const series = Array.from({ length: 73 }, (_, i) => ({ time: i, oi: 100 + (100 * i) / 72 }));
+    const r = analyzeOi(series);
+    assert(Math.abs(r.change72h - 100) < 1e-6, `72h +100% (실제 ${r.change72h})`);
+    assert(r.change12h > 0, "12h 증가");
+  });
+
+  test("OI 변화율 — 가속 판정", () => {
+    // 앞 구간은 완만, 최근 12h 가 급증
+    const series = [];
+    for (let i = 0; i <= 60; i++) series.push({ time: i, oi: 100 });
+    for (let i = 61; i <= 72; i++) series.push({ time: i, oi: 100 + (i - 60) * 5 });
+    const r = analyzeOi(series);
+    assert(r.change12h > r.prev12h, `최근 12h 가 이전 12h 보다 큼 (${r.change12h} > ${r.prev12h})`);
+  });
+
+  test("OI 데이터 부족 → null", () => {
+    const r = analyzeOi([{ time: 1, oi: 100 }]);
+    eq(r.change72h, null, "72h 계산 불가");
+    eq(r.change12h, null, "12h 계산 불가");
+  });
+
+  test("OI 빈 배열 → 전부 null", () => {
+    const r = analyzeOi([]);
+    eq(r.change72h, null);
+    eq(r.prev12h, null);
   });
 }

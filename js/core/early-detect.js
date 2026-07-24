@@ -47,4 +47,19 @@ export function volDryRatio(candles, recentN, priorN) {
   return avg(recent) / prev;
 }
 
-export default { boxRange, squeezePercentile, volDryRatio };
+// OI 시계열(1시간 간격, 과거→현재)에서 변화율 3종.
+// change72h: 72시간 변화, change12h: 최근 12시간, prev12h: 그 이전 12시간(가속 비교용).
+export function analyzeOi(series) {
+  const pct = (from, to) => (from > 0 ? ((to - from) / from) * 100 : null);
+  const n = Array.isArray(series) ? series.length : 0;
+  const at = (backHours) => (n > backHours ? series[n - 1 - backHours].oi : null);
+  const now = n > 0 ? series[n - 1].oi : null;
+  const h72 = at(72), h12 = at(12), h24 = at(24);
+  return {
+    change72h: now != null && h72 != null ? pct(h72, now) : null,
+    change12h: now != null && h12 != null ? pct(h12, now) : null,
+    prev12h: h12 != null && h24 != null ? pct(h24, h12) : null,
+  };
+}
+
+export default { boxRange, squeezePercentile, volDryRatio, analyzeOi };

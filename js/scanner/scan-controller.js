@@ -79,7 +79,7 @@ async function runEarlyPipeline(universe, now) {
     return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
   });
   let candidates = evaluated
-    .filter((x) => x.res.pass)
+    .filter((x) => x.res?.pass)
     .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
     .slice(0, e.keepMax);
   state.candidates = candidates.map((x) => x.item);
@@ -120,7 +120,7 @@ export async function runScan() {
       if (earlyResults === null) return finishAborted();
       setPhase("score");
       const results = earlyResults
-        .filter((r) => r.score >= state.settings.minScore)
+        .filter((r) => !r.skipped && !r.error && r.score >= state.settings.minScore)
         .sort((a, b) => b.score - a.score)
         .map((r, i) => ({ ...r, rank: i + 1 }));
       state.results = results;
@@ -151,7 +151,7 @@ export async function runScan() {
       return { item, res };
     });
     let candidates = evaluated
-      .filter((e) => e.res.pass)
+      .filter((e) => e.res?.pass)
       .sort((a, b) => Math.abs(b.res.change6h) - Math.abs(a.res.change6h)) // 더 크게 움직인 순(롱=급락/숏=급등)
       .map((e) => ({ ...e.item, pre: e.res }));
     candidates = capCandidates(candidates);

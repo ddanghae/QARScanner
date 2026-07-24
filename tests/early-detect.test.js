@@ -5,6 +5,7 @@ import { CONFIG } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
   classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
+  buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
 
@@ -208,5 +209,48 @@ export function run() {
     const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110);
     assert(p.stop < p.entry, `손절 clamp (stop ${p.stop} < entry ${p.entry})`);
     assert(isFinite(p.riskReward), "손익비 유한");
+  });
+
+  test("지표 조립 — 캔들 부족하면 null", () => {
+    const c = candlesFromCloses([1, 2, 3], { spread: 0 });
+    eq(buildEarlyMetrics(c, [], null, { change24h: 0, quoteVolume: 1e7 }, CONFIG), null);
+  });
+
+  test("지표 조립 — 좁은 횡보에서 압축·고갈 지표가 나온다", () => {
+    // 200봉 좁은 횡보 + 최근 거래량 감소
+    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
+    const m = buildEarlyMetrics(c, [], null, { change24h: 2, quoteVolume: 5e7 }, CONFIG);
+    assert(m !== null, "지표 생성됨");
+    assert(m.boxWidthPct < 25, `박스 좁음 (${m.boxWidthPct})`);
+    assert(m.volDry != null && m.volDry < 1, `거래량 고갈 (${m.volDry})`);
+    assert(m.squeezePct != null, "압축 백분위 계산됨");
+  });
+
+  test("결과 조립 — 기존 결과 shape 을 채운다", () => {
+    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
+    const item = { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2, newListing: false };
+    const r = buildEarlyResult(item, c, [], null, CONFIG);
+    if (r) {
+      for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
+        assert(r[k] !== undefined, `결과에 ${k} 필요`);
+      }
+      eq(r.direction, "long", "early 는 롱 전용");
+      assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+    }
+  });
+
+  test("리페인트 — 박스는 과거 값이 미래 캔들로 바뀌지 않음", () => {
+    const closes = Array.from({ length: 120 }, (_, i) => 100 + Math.sin(i / 7) * 2);
+    const full = candlesFromCloses(closes, { spread: 0.3 });
+    for (const cut of [70, 90, 110]) {
+      const prefix = full.slice(0, cut);
+      const a = boxRange(prefix, 60);
+      const b = boxRange(full.slice(0, cut), 60);
+      eq(JSON.stringify(a), JSON.stringify(b), `prefix==full at ${cut}`);
+    }
   });
 }

@@ -2,6 +2,10 @@
 // 큰 상승 이전 흔적(변동성 압축 + 거래량 고갈 + 미결제약정 증가)을 4시간봉에서 판정한다.
 // 모든 함수는 순수 함수이며 마감 캔들만 사용한다(미래 참조 없음).
 
+import { bollinger, atr, ema, last } from "./indicators.js";
+import { relativeVolume } from "./volume-analysis.js";
+import { gradeFor, topSignals } from "./scoring.js";
+
 // 최근 lookback 봉의 박스(고/저)와 그 안에서의 현재 위치.
 export function boxRange(candles, lookback) {
   const n = candles.length;
@@ -182,4 +186,98 @@ export function earlyPlan(m, atrVal, price) {
   };
 }
 
-export default { boxRange, squeezePercentile, volDryRatio, analyzeOi, classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan };
+// ---- 지표 조립 ----
+// c4: 4시간봉 마감 캔들. oiSeries: [{time,oi}] (없으면 빈 배열). funding: number|null.
+// ticker: { change24h, quoteVolume }
+export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
+  const e = cfg.earlyDetect;
+  const box = boxRange(c4, e.boxLookback);
+  if (!box) return null;
+
+  const closes = c4.map((c) => c.close);
+  const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
+  const squeezePct = squeezePercentile(widths, e.squeezeLookback);
+  const volDry = volDryRatio(c4, e.volRecentN, e.volPriorN);
+  const oi = analyzeOi(oiSeries || []);
+
+  const relVolArr = relativeVolume(c4, 20);
+  const recentRel = relVolArr.slice(-3).filter((x) => x != null);
+  const relVol3 = recentRel.length ? recentRel.reduce((a, b) => a + b, 0) / recentRel.length : 0;
+
+  const ema200 = ema(closes, 200);
+  const price = closes[closes.length - 1];
+  const ema200Now = last(ema200);
+  const ema200Idx = ema200.length - 1;
+  const ema200Prev = ema200Idx - 20 >= 0 ? ema200[ema200Idx - 20] : null;
+  const closeAboveEma200 = ema200Now != null && price > ema200Now;
+  const ema200SlopeOk = ema200Now != null && ema200Prev != null && ema200Now >= ema200Prev;
+
+  // 돌파 판정: 직전 봉까지의 박스 상단을 현재 종가가 넘었는가
+  const prevBox = boxRange(c4.slice(0, -1), e.boxLookback);
+  const breakoutLevel = prevBox ? prevBox.boxHigh : box.boxHigh;
+  const breakoutClose = price > breakoutLevel;
+  const runFromBreakoutPct = breakoutLevel > 0 ? ((price - breakoutLevel) / breakoutLevel) * 100 : 0;
+
+  const atrArr = atr(c4, cfg.indicators.atrPeriod);
+  const atrNow = last(atrArr);
+  const atrIdx = atrArr.length - 1;
+  const atrPrev = atrIdx - 5 >= 0 ? atrArr[atrIdx - 5] : null;
+  const atrRising = atrNow != null && atrPrev != null && atrNow > atrPrev;
+
+  return {
+    boxHigh: box.boxHigh, boxLow: box.boxLow,
+    boxWidthPct: box.boxWidthPct, rangePos: box.rangePos,
+    squeezePct, volDry, relVol3, oi,
+    funding: funding == null ? null : funding,
+    change24h: ticker?.change24h ?? null,
+    quoteVolume: ticker?.quoteVolume ?? null,
+    closeAboveEma200, ema200SlopeOk,
+    breakoutClose, atrRising, runFromBreakoutPct,
+    price, atrVal: atrNow,
+  };
+}
+
+// ---- 결과 조립 ----
+// 기존 deepAnalyze 와 동일한 shape 을 반환한다(스펙 "결과 객체 호환").
+// 단계에 안 걸리거나 제외 사유가 있으면 null.
+export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
+  const m = buildEarlyMetrics(c4, oiSeries, funding, item, cfg);
+  if (!m) return null;
+  if (earlyExclusion(m, cfg)) return null;
+  const stageInfo = classifyEarlyStage(m, cfg);
+  if (!stageInfo) return null;
+
+  const scored = scoreEarly(m, cfg);
+  const plan = earlyPlan(m, m.atrVal, m.price);
+
+  return {
+    symbol: item.symbol,
+    baseAsset: item.baseAsset,
+    price: m.price,
+    change6h: 0,
+    change24h: m.change24h ?? 0,
+    quoteVolume: item.quoteVolume,
+    newListing: item.newListing,
+    direction: "long",
+    score: scored.score,
+    grade: gradeFor(scored.score, cfg),
+    stage: stageInfo,
+    absorption: { level: "insufficient", label: "조기 포착 모드 — 미적용", score: 0 },
+    breakdown: scored.breakdown,
+    penalties: scored.penalties,
+    topSignals: topSignals(scored.breakdown, 3),
+    goldenCrossRetest: { detected: false, reason: "조기 포착 모드" },
+    near1hEma200: false,
+    noise: { noisy: false, ci: null, relVol: m.relVol3, reasons: [] },
+    early: { squeezePct: m.squeezePct, volDry: m.volDry, oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow },
+    plan,
+    rsi1h: null,
+    timeframes: {},
+  };
+}
+
+export default {
+  boxRange, squeezePercentile, volDryRatio, analyzeOi,
+  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
+  buildEarlyMetrics, buildEarlyResult,
+};

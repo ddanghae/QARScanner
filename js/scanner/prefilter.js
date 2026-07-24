@@ -2,8 +2,9 @@
 // Stage 1 종목 수집 → Stage 2 24h 유동성 필터 → Stage 3 급락·초기 후보 필터.
 
 import { CONFIG, STABLE_BASES, LEVERAGED_RE } from "../config.js";
-import { rsi } from "../core/indicators.js";
+import { rsi, bollinger } from "../core/indicators.js";
 import { relativeVolume } from "../core/volume-analysis.js";
+import { boxRange, squeezePercentile, volDryRatio } from "../core/early-detect.js";
 
 // ---- Stage 1: 거래 가능한 USDT 무기한 선물만 ----
 export function stage1Universe(symbols) {
@@ -36,9 +37,9 @@ export function isNewListing(onboardDate, nowMs) {
 
 // ---- Stage 2: 24h 티커 기반 유동성 필터 ----
 // universe + tickers(배열) 병합 후 거래대금/거래횟수/가격 필터, 상위 N.
-export function stage2Liquidity(universe, tickers, nowMs) {
+export function stage2Liquidity(universe, tickers, nowMs, pfOverride) {
   const tickMap = new Map(tickers.map((t) => [t.symbol, t]));
-  const pf = CONFIG.prefilter;
+  const pf = pfOverride || CONFIG.prefilter;
   const merged = [];
   const newListings = [];
 
@@ -126,4 +127,42 @@ export function capCandidates(list) {
   return list.slice(0, CONFIG.candidateFilter.keepMax);
 }
 
-export default { stage1Universe, isNewListing, stage2Liquidity, stage3Evaluate, capCandidates };
+// 대형코인 제외 (조기 포착 모드 — 큰 상승이 드묾)
+export function excludeMajors(list, majors) {
+  if (!majors || !majors.length) return list;
+  const set = new Set(majors);
+  return list.filter((x) => !set.has(x.baseAsset));
+}
+
+// ---- early 1차 선별 ----
+// 4시간봉으로 "좁은 박스 + 압축 + 거래량 고갈" 을 빠르게 확인해 정밀 분석 후보를 줄인다.
+// OI 호출 전에 걸러내는 것이 목적이므로 여기서는 OI 를 보지 않는다.
+export function stage3EvaluateEarly(item, k4h, cfg) {
+  const e = cfg.earlyDetect;
+  const box = boxRange(k4h, e.boxLookback);
+  if (!box) return { pass: false, reason: "데이터 부족" };
+
+  const closes = k4h.map((c) => c.close);
+  const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
+  const squeezePct = squeezePercentile(widths, e.squeezeLookback);
+  const volDry = volDryRatio(k4h, e.volRecentN, e.volPriorN);
+
+  const boxOk = box.boxWidthPct <= e.boxWidthMaxPct;
+  // 압축·고갈은 계산 불가(데이터 부족)면 통과시키고 정밀 단계에서 다시 본다.
+  const squeezeOk = squeezePct == null || squeezePct <= e.squeezePctMax;
+  const volOk = volDry == null || volDry <= e.volDryMax;
+  const pass = boxOk && squeezeOk && volOk;
+
+  return {
+    pass,
+    reason: pass ? "후보" : !boxOk ? "박스 넓음" : !squeezeOk ? "압축 부족" : "거래량 고갈 아님",
+    boxWidthPct: box.boxWidthPct,
+    squeezePct,
+    volDry,
+  };
+}
+
+export default {
+  stage1Universe, isNewListing, stage2Liquidity, stage3Evaluate, capCandidates,
+  excludeMajors, stage3EvaluateEarly,
+};

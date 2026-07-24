@@ -8,6 +8,7 @@ import {
   buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
+import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
 
 // 1단계(매집) 조건을 모두 만족하는 기본 지표. 개별 테스트에서 필요한 값만 덮어쓴다.
 function baseMetrics(over = {}) {
@@ -262,5 +263,54 @@ export function run() {
     );
     const tamperedBox = boxRange(tampered, lookback);
     eq(JSON.stringify(tamperedBox), JSON.stringify(box), "창 밖 데이터를 극단값으로 바꿔도 결과 불변");
+  });
+
+  test("stage2 — pfOverride 로 유니버스 기준 교체", () => {
+    const universe = [
+      { symbol: "AUSDT", baseAsset: "A", onboardDate: 0 },
+      { symbol: "BUSDT", baseAsset: "B", onboardDate: 0 },
+    ];
+    const mkTick = (symbol, qv) => ({
+      symbol, quoteVolume: String(qv), count: "999999", lastPrice: "1",
+      priceChangePercent: "1", highPrice: "1", lowPrice: "1", weightedAvgPrice: "1",
+    });
+    const tickers = [mkTick("AUSDT", 8_000_000), mkTick("BUSDT", 30_000_000)];
+    // 기본(20M)이면 B 만 통과
+    const def = stage2Liquidity(universe, tickers, Date.now());
+    eq(def.prefiltered.length, 1, "기본 기준으로는 1개");
+    // early(5M)면 둘 다 통과
+    const early = stage2Liquidity(universe, tickers, Date.now(), {
+      ...CONFIG.prefilter,
+      minQuoteVolume: CONFIG.earlyDetect.minQuoteVolume,
+      topByVolume: CONFIG.earlyDetect.topByVolume,
+    });
+    eq(early.prefiltered.length, 2, "early 기준으로는 2개");
+  });
+
+  test("대형코인 제외", () => {
+    const list = [{ baseAsset: "BTC" }, { baseAsset: "PEPE" }, { baseAsset: "ETH" }];
+    const out = excludeMajors(list, ["BTC", "ETH"]);
+    eq(out.length, 1, "1개만 남음");
+    eq(out[0].baseAsset, "PEPE");
+  });
+
+  test("early 1차 선별 — 좁은 횡보는 통과", () => {
+    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
+    const r = stage3EvaluateEarly({ symbol: "XUSDT" }, c, CONFIG);
+    eq(r.pass, true, `통과해야 함 (사유: ${r.reason})`);
+  });
+
+  test("early 1차 선별 — 넓게 출렁이면 탈락", () => {
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * 40);
+    const c = candlesFromCloses(closes, { spread: 1 });
+    const r = stage3EvaluateEarly({ symbol: "YUSDT" }, c, CONFIG);
+    eq(r.pass, false, "박스가 넓으면 탈락");
+  });
+
+  test("early 1차 선별 — 캔들 부족하면 탈락", () => {
+    const c = candlesFromCloses([1, 2, 3], { spread: 0 });
+    eq(stage3EvaluateEarly({ symbol: "ZUSDT" }, c, CONFIG).pass, false);
   });
 }

@@ -110,4 +110,76 @@ function stage(n, key, label, badge) {
   return { stage: n, key, label, badge };
 }
 
-export default { boxRange, squeezePercentile, volDryRatio, analyzeOi, classifyEarlyStage, earlyExclusion };
+// ---- 채점 ----
+// 기존 scoring.js 의 breakdown/penalties 형식을 그대로 따른다(topSignals 재사용 가능).
+export function scoreEarly(m, cfg) {
+  const w = cfg.earlyScoreWeights;
+  const p = cfg.earlyPenalties;
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+  // 압축: 백분위 0 → 만점, 50 이상 → 0점
+  const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
+  // OI: +30% 이상이면 만점. 데이터 없으면 0점.
+  const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), 30) / 30);
+  // 거래량 고갈: 낮을수록 높은 점수
+  const volGot = m.volDry == null ? 0 : w.volumeProfile * (1 - Math.min(m.volDry, 1));
+  // 박스 상단 근접
+  const rangeGot = w.rangePosition * clamp01(m.rangePos);
+  // 장기선 회복
+  const trendGot = m.closeAboveEma200 ? w.trendReclaim : m.ema200SlopeOk ? w.trendReclaim * 0.5 : 0;
+
+  const breakdown = [
+    mkItem("squeeze", "변동성 압축", w.squeeze, squeezeGot),
+    mkItem("oiBuildUp", "미결제약정 증가", w.oiBuildUp, oiGot),
+    mkItem("volumeProfile", "거래량 고갈", w.volumeProfile, volGot),
+    mkItem("rangePosition", "박스 상단 근접", w.rangePosition, rangeGot),
+    mkItem("trendReclaim", "장기선 회복", w.trendReclaim, trendGot),
+  ];
+
+  let score = breakdown.reduce((s, b) => s + b.got, 0);
+
+  const penalties = [];
+  const pen = (cond, val, key, label) => {
+    if (cond) { score += val; penalties.push({ key, label, val }); }
+  };
+  const e = cfg.earlyDetect;
+  pen(m.change24h != null && m.change24h >= 25 && m.change24h <= e.pumpedMaxPct,
+    p.alreadyPumped, "alreadyPumped", "이미 상당폭 상승");
+  pen(m.oi.change72h != null && m.oi.change72h < 0, p.oiDump, "oiDump", "미결제약정 감소");
+  pen(m.funding != null && Math.abs(m.funding) > e.fundingMaxAbs / 2,
+    p.fundingOverheated, "fundingOverheated", "펀딩 쏠림");
+  pen(m.quoteVolume != null && m.quoteVolume < 10_000_000, p.thinLiquidity, "thinLiquidity", "거래대금 부족");
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return { score, breakdown, penalties };
+}
+
+function mkItem(key, label, weight, got) {
+  const g = Math.round(got * 100) / 100;
+  return { key, label, weight, got: g, hit: g > 0 };
+}
+
+// ---- 진입 계획 ----
+// 박스 기반. 기존 plan 필드명을 그대로 채워 UI/상세패널이 수정 없이 동작하게 한다.
+// 손절은 반드시 진입 아래로 clamp (risk-reward.js 의 RR 폭발 버그와 동일한 방어).
+export function earlyPlan(m, atrVal, price) {
+  const entry = price;
+  const span = Math.max(m.boxHigh - m.boxLow, 1e-9);
+  const buffer = (atrVal || 0) * 0.5;
+  const stop = Math.min(m.boxLow, entry) - buffer;
+  const tp1 = m.boxHigh + span * 1.0;
+  const tp2 = m.boxHigh + span * 1.5;
+  const tp3 = m.boxHigh + span * 2.0;
+  const risk = Math.max(entry - stop, 1e-9);
+  const reward = Math.max(tp2 - entry, 0);
+  const rr = reward / risk;
+  return {
+    entry, stop, tp1, tp2, tp3,
+    invalidation: stop,
+    riskReward: rr,
+    rrText: `1:${rr.toFixed(2)}`,
+    valid: rr > 0 && entry > stop,
+  };
+}
+
+export default { boxRange, squeezePercentile, volDryRatio, analyzeOi, classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan };

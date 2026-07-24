@@ -4,7 +4,7 @@ import { suite, test, assert, eq } from "./harness.js";
 import { CONFIG } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
-  classifyEarlyStage, earlyExclusion,
+  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
 } from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
 
@@ -167,5 +167,46 @@ export function run() {
     eq(earlyExclusion(baseMetrics({
       oi: { change72h: null, change12h: null, prev12h: null }, funding: null,
     }), CONFIG), null, "null 이면 제외하지 않음");
+  });
+
+  test("채점 — 조건 좋을수록 점수 높음(단조성)", () => {
+    const weak = scoreEarly(baseMetrics({ squeezePct: 45, oi: { change72h: 1, change12h: 0, prev12h: 0 }, volDry: 0.95, rangePos: 0.1 }), CONFIG).score;
+    const strong = scoreEarly(baseMetrics({ squeezePct: 2, oi: { change72h: 30, change12h: 10, prev12h: 3 }, volDry: 0.2, rangePos: 0.98 }), CONFIG).score;
+    assert(strong > weak, `강한 조건이 더 높아야 (${strong} > ${weak})`);
+  });
+
+  test("채점 — 최고 조건은 만점 근처", () => {
+    const r = scoreEarly(baseMetrics({
+      squeezePct: 0, oi: { change72h: 30, change12h: 10, prev12h: 3 },
+      volDry: 0, rangePos: 1, closeAboveEma200: true,
+    }), CONFIG);
+    eq(r.score, 100, "모든 항목 만점");
+  });
+
+  test("채점 — OI 없으면 해당 항목 0점, 나머지는 살아있음", () => {
+    const r = scoreEarly(baseMetrics({ oi: { change72h: null, change12h: null, prev12h: null } }), CONFIG);
+    const oiItem = r.breakdown.find((b) => b.key === "oiBuildUp");
+    eq(oiItem.got, 0, "OI 항목 0점");
+    assert(r.score > 0, "다른 항목 점수는 남음");
+  });
+
+  test("채점 — 감점 반영", () => {
+    const base = scoreEarly(baseMetrics(), CONFIG).score;
+    const penalized = scoreEarly(baseMetrics({ change24h: 30, quoteVolume: 1_000_000 }), CONFIG).score;
+    assert(penalized < base, `감점 후 하락 (${penalized} < ${base})`);
+  });
+
+  test("plan — 손절은 진입 아래, 손익비 유한", () => {
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110);
+    assert(p.stop < p.entry, "손절 < 진입");
+    assert(isFinite(p.riskReward) && p.riskReward > 0, `손익비 유한 (${p.riskReward})`);
+    assert(p.tp2 > p.tp1, "TP2 > TP1");
+  });
+
+  test("plan — 박스 하단이 진입 위여도 손절은 진입 아래로 clamp", () => {
+    // 비정상 입력(박스 하단 > 현재가)에서도 손절이 진입 위로 가지 않아야 한다
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110);
+    assert(p.stop < p.entry, `손절 clamp (stop ${p.stop} < entry ${p.entry})`);
+    assert(isFinite(p.riskReward), "손익비 유한");
   });
 }

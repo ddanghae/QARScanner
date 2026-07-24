@@ -243,14 +243,24 @@ export function run() {
     }
   });
 
-  test("리페인트 — 박스는 과거 값이 미래 캔들로 바뀌지 않음", () => {
+  test("리페인트 — 박스는 최근 60봉만 사용(창 밖 데이터 영향 없음)", () => {
     const closes = Array.from({ length: 120 }, (_, i) => 100 + Math.sin(i / 7) * 2);
     const full = candlesFromCloses(closes, { spread: 0.3 });
-    for (const cut of [70, 90, 110]) {
-      const prefix = full.slice(0, cut);
-      const a = boxRange(prefix, 60);
-      const b = boxRange(full.slice(0, cut), 60);
-      eq(JSON.stringify(a), JSON.stringify(b), `prefix==full at ${cut}`);
-    }
+    const lookback = 60;
+
+    // 1) 창 안 정확성: boxHigh/boxLow 가 마지막 60봉의 실제 최대/최소와 일치해야 한다
+    const box = boxRange(full, lookback);
+    const win = full.slice(full.length - lookback);
+    const expectHigh = Math.max(...win.map((c) => c.high));
+    const expectLow = Math.min(...win.map((c) => c.low));
+    eq(box.boxHigh, expectHigh, "boxHigh == 최근 60봉 중 최대 high");
+    eq(box.boxLow, expectLow, "boxLow == 최근 60봉 중 최소 low");
+
+    // 2) 창 밖 무영향: 창 이전 캔들을 극단값으로 바꿔도 결과가 그대로여야 한다
+    const tampered = full.map((c, i) =>
+      i < full.length - lookback ? { ...c, high: 99999, low: -99999 } : c
+    );
+    const tamperedBox = boxRange(tampered, lookback);
+    eq(JSON.stringify(tamperedBox), JSON.stringify(box), "창 밖 데이터를 극단값으로 바꿔도 결과 불변");
   });
 }

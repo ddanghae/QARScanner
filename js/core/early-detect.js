@@ -62,4 +62,52 @@ export function analyzeOi(series) {
   };
 }
 
-export default { boxRange, squeezePercentile, volDryRatio, analyzeOi };
+// 제외 사유. 없으면 null. OI·펀딩이 null 이면 해당 조건은 건너뛴다.
+export function earlyExclusion(m, cfg) {
+  const e = cfg.earlyDetect;
+  if (m.change24h != null && m.change24h > e.pumpedMaxPct) return "이미 급등";
+  if (m.oi.change72h != null && m.oi.change72h <= e.oiDumpPct) return "미결제약정 급감";
+  if (m.funding != null && Math.abs(m.funding) > e.fundingMaxAbs) return "펀딩 과열";
+  return null;
+}
+
+// 3단계 분류. 위 단계부터 판정하고, 어디에도 안 걸리면 null(결과에서 제외).
+export function classifyEarlyStage(m, cfg) {
+  const e = cfg.earlyDetect;
+
+  // 3단계 돌파 — 박스 상단을 종가로 뚫고, 거래량 급증 + 변동성 확장. 단 아직 초입일 때만.
+  if (m.breakoutClose && m.relVol3 >= e.breakoutRelVol && m.atrRising) {
+    return m.runFromBreakoutPct <= e.breakoutMaxRunPct
+      ? stage(3, "breakout", "3 돌파", "purple")
+      : null; // 이미 많이 감 → 추격 방지
+  }
+
+  // 1단계 조건(매집)을 먼저 확인. OI 데이터가 없으면 OI 조건은 통과로 간주한다.
+  const oiOk = m.oi.change72h == null || m.oi.change72h >= e.oiChangeMinPct;
+  const trendOk = m.closeAboveEma200 || m.ema200SlopeOk;
+  const accumulation =
+    m.boxWidthPct <= e.boxWidthMaxPct &&
+    m.squeezePct != null && m.squeezePct <= e.squeezePctMax &&
+    m.volDry != null && m.volDry <= e.volDryMax &&
+    oiOk && trendOk;
+  if (!accumulation) return null;
+
+  // 2단계 임박 — 압축 극단 + 박스 상단 근접 + 거래량 회복 + OI 가속
+  const oiAccel = m.oi.change12h != null && m.oi.prev12h != null && m.oi.change12h > m.oi.prev12h;
+  if (
+    m.squeezePct <= e.squeezePctTight &&
+    m.rangePos >= e.rangePosMin &&
+    m.relVol3 >= e.relVolMin &&
+    oiAccel
+  ) {
+    return stage(2, "imminent", "2 임박", "yellow");
+  }
+
+  return stage(1, "accumulation", "1 매집", "blue");
+}
+
+function stage(n, key, label, badge) {
+  return { stage: n, key, label, badge };
+}
+
+export default { boxRange, squeezePercentile, volDryRatio, analyzeOi, classifyEarlyStage, earlyExclusion };

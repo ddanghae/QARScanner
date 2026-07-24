@@ -2,8 +2,24 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { CONFIG } from "../js/config.js";
-import { boxRange, squeezePercentile, volDryRatio, analyzeOi } from "../js/core/early-detect.js";
+import {
+  boxRange, squeezePercentile, volDryRatio, analyzeOi,
+  classifyEarlyStage, earlyExclusion,
+} from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
+
+// 1단계(매집) 조건을 모두 만족하는 기본 지표. 개별 테스트에서 필요한 값만 덮어쓴다.
+function baseMetrics(over = {}) {
+  return {
+    boxWidthPct: 20, rangePos: 0.5, boxHigh: 120, boxLow: 100,
+    squeezePct: 20, volDry: 0.7, relVol3: 0.9,
+    oi: { change72h: 10, change12h: 3, prev12h: 2 },
+    funding: 0.0001, change24h: 5, quoteVolume: 50_000_000,
+    closeAboveEma200: true, ema200SlopeOk: true,
+    breakoutClose: false, atrRising: false, runFromBreakoutPct: 0,
+    ...over,
+  };
+}
 
 export function run() {
   suite("early");
@@ -90,5 +106,66 @@ export function run() {
     const r = analyzeOi([]);
     eq(r.change72h, null);
     eq(r.prev12h, null);
+  });
+
+  test("1단계 매집 판정", () => {
+    const s = classifyEarlyStage(baseMetrics(), CONFIG);
+    eq(s.stage, 1, "매집 단계");
+    eq(s.key, "accumulation");
+  });
+
+  test("2단계 임박 — 압축 극단 + 상단 근접 + 거래량 회복 + OI 가속", () => {
+    const s = classifyEarlyStage(baseMetrics({
+      squeezePct: 10, rangePos: 0.97, relVol3: 1.2,
+      oi: { change72h: 10, change12h: 6, prev12h: 2 },
+    }), CONFIG);
+    eq(s.stage, 2, "임박 단계");
+    eq(s.key, "imminent");
+  });
+
+  test("3단계 돌파 — 상단 종가돌파 + 거래량 급증 + ATR 상승 + 초입", () => {
+    const s = classifyEarlyStage(baseMetrics({
+      breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 5,
+    }), CONFIG);
+    eq(s.stage, 3, "돌파 단계");
+    eq(s.key, "breakout");
+  });
+
+  test("돌파했지만 이미 많이 오름 → 단계 없음", () => {
+    const s = classifyEarlyStage(baseMetrics({
+      breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 30,
+    }), CONFIG);
+    eq(s, null, "초입 아니면 제외");
+  });
+
+  test("박스 넓으면 단계 없음", () => {
+    eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 90 }), CONFIG), null);
+  });
+
+  test("OI 없어도(null) 1단계 통과 — 후보 유지", () => {
+    const s = classifyEarlyStage(baseMetrics({
+      oi: { change72h: null, change12h: null, prev12h: null },
+    }), CONFIG);
+    eq(s.stage, 1, "OI null 이면 OI 조건은 통과로 간주");
+  });
+
+  test("제외 — 이미 급등", () => {
+    assert(earlyExclusion(baseMetrics({ change24h: 60 }), CONFIG) !== null, "24h +60% 제외");
+  });
+
+  test("제외 — OI 급감", () => {
+    assert(earlyExclusion(baseMetrics({
+      oi: { change72h: -20, change12h: -5, prev12h: -3 },
+    }), CONFIG) !== null, "OI -20% 제외");
+  });
+
+  test("제외 — 펀딩 과열", () => {
+    assert(earlyExclusion(baseMetrics({ funding: 0.005 }), CONFIG) !== null, "펀딩 0.5% 제외");
+  });
+
+  test("제외 — OI·펀딩 null 이면 해당 조건 건너뜀", () => {
+    eq(earlyExclusion(baseMetrics({
+      oi: { change72h: null, change12h: null, prev12h: null }, funding: null,
+    }), CONFIG), null, "null 이면 제외하지 않음");
   });
 }

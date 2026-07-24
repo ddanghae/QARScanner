@@ -145,8 +145,9 @@ export async function getOpenInterestHist(symbol, period, limit) {
     const raw = await request(path, { ttl: CONFIG.cacheTtlMs["1h"], cacheKey: `oi:${symbol}:${p}:${lim}` });
     if (!Array.isArray(raw)) return [];
     return raw.map((r) => ({ time: r.timestamp, oi: +r.sumOpenInterest }));
-  } catch {
+  } catch (e) {
     // 신규 상장 등으로 데이터가 없으면 빈 배열 (후보를 죽이지 않는다)
+    console.warn(`미결제약정 조회 실패 (${symbol})`, e);
     return [];
   }
 }

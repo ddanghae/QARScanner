@@ -183,10 +183,8 @@ function finishScan(analyzed) {
   setPhase("done");
   state.scan.running = false;
   state.scan.lastUpdated = Date.now();
-  emit("scan:done", {
-    count: results.filter((r) => r.score >= state.settings.minScore).length,
-    analyzed: analyzed.length,
-  });
+  // payload 없음 — 표시용 개수는 목록과 같은 필터를 거쳐야 맞으므로 main.js 가 직접 센다.
+  emit("scan:done");
   return results;
 }
 

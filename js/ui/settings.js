@@ -46,15 +46,19 @@ export function applyFilters(results) {
   // 단계 필터
   if (s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
 
-  // 정렬
   const sortFns = {
     score: (a, b) => b.score - a.score,
     change: (a, b) => a.change6h - b.change6h,
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
-  list.sort(sortFns[s.sort] || sortFns.score);
-  // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다(점수순 정렬일 때만 의미 있음).
+  // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다 — 반드시 점수 기준으로,
+  // 사용자 정렬보다 먼저. 정렬 뒤에 자르면 "거래대금" 정렬이 순서가 아니라 보이는
+  // 집합 자체를 바꿔(점수 최하위 5개만 남음) 정렬이 필터로 변한다.
+  list.sort(sortFns.score);
   list = list.slice(0, early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop);
+
+  // 정렬
+  list.sort(sortFns[s.sort] || sortFns.score);
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 

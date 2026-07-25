@@ -4,7 +4,7 @@
 import { state, on, emit } from "./state.js";
 import { runScan, abortScan, startAutoRefresh, stopAutoRefresh } from "./scanner/scan-controller.js";
 import { initDashboard } from "./ui/dashboard.js";
-import { initSettingsUI } from "./ui/settings.js";
+import { initSettingsUI, applyFilters } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
 import { toast, notifyError } from "./ui/notifications.js";
 
@@ -31,7 +31,8 @@ function boot() {
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
-  on("scan:done", (info) => toast(`스캔 완료 — 후보 ${info.count}개`, "success"));
+  // 목록과 같은 필터를 통과한 수. 스캔 단계 숫자를 쓰면 화면엔 5줄인데 12개라 뜬다.
+  on("scan:done", () => toast(`스캔 완료 — 후보 ${applyFilters(state.results).length}개`, "success"));
   on("scan:aborted", () => toast("스캔을 중단했습니다.", "info"));
   document.addEventListener("tv:popup-blocked", () => notifyError("tvPopup"));
 

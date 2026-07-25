@@ -276,14 +276,13 @@ export const CONFIG = {
   // ---- UI ----
   ui: {
     resultMin: 5,
-    resultMax: 20,
     minTouchPx: 44,
     tradingViewSuffix: ".P", // BINANCE:${symbol}.P
   },
 };
 
 // ---- 채점 강도 5단계 (§13 사용자 조정 — 가중치는 그대로 두고 감점 세기 + 최소 점수만 단계별로 스케일) ----
-// 3단계 = CONFIG.penalties/minListScore 원본값. 1단계로 갈수록 덜 걸러냄(코인 더 많이 나옴).
+// 3단계 = CONFIG.penalties 원본값. 1단계로 갈수록 덜 걸러냄(코인 더 많이 나옴).
 // minScore 는 위 grades 밴드에 맞춰 잡는다. 예전 30/40/55/65/75 는 실전 최고점(60)보다
 // 높은 값이 섞여 있어 4·5단계는 항상 0건이었다. 이제 각 단계가 등급 경계와 1:1로 대응한다.
 export const STRICTNESS_LEVELS = [

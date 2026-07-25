@@ -251,7 +251,11 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
 
   const scored = scoreEarly(m, cfg);
   // 핵심 3항목이 약하면 총점이 높아도 후보가 아니다(장기선·박스위치로 끌어올린 경우 배제).
-  const corePct = coreStrengthPct(scored.breakdown, cfg.earlyCoreKeys);
+  // OI 조회가 실패하면 oiBuildUp 은 늘 0점이라 분모에 남겨두면 천장이 64% 로 내려가
+  // 실측 구간(압축 10·고갈 0.86 → 33%)이 통째로 탈락한다 = 모드가 조용히 0건이 된다.
+  // earlyExclusion 이 OI null 을 건너뛰는 것과 같은 원칙 — 없는 데이터로 감점하지 않는다.
+  const coreKeys = cfg.earlyCoreKeys.filter((k) => k !== "oiBuildUp" || m.oi.change72h != null);
+  const corePct = coreStrengthPct(scored.breakdown, coreKeys);
   if (corePct < cfg.earlyCoreMinPct) return null;
   const plan = earlyPlan(m, m.atrVal, m.price);
 

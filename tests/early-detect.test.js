@@ -298,19 +298,41 @@ export function run() {
     assert(m.squeezePct != null, "압축 백분위 계산됨");
   });
 
+  // 진폭이 줄어드는 완만한 상승 → 압축 19, 거래량 고갈 0.8, 종가가 EMA200 위(1단계 통과).
+  // 예전 픽스처는 EMA200 조건에 걸려 항상 null 이었고 아래 테스트가 if(r) 로 감싸 아무것도
+  // 검증하지 않았다. 결과가 실제로 나오는 픽스처여야 게이트 회귀를 잡는다.
+  function earlyFixture() {
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + i * 0.06 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    return {
+      candles: candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 180 ? 100 : 80) }),
+      item: { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2, newListing: false },
+    };
+  }
+
   test("결과 조립 — 기존 결과 shape 을 채운다", () => {
-    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
-    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
-    const item = { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2, newListing: false };
-    const r = buildEarlyResult(item, c, [], null, CONFIG);
-    if (r) {
-      for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
-        assert(r[k] !== undefined, `결과에 ${k} 필요`);
-      }
-      eq(r.direction, "long", "early 는 롱 전용");
-      assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+    const { candles, item } = earlyFixture();
+    const r = buildEarlyResult(item, candles, [], null, CONFIG);
+    assert(r != null, "1단계 조건을 만족하는 픽스처인데 null");
+    for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
+      assert(r[k] !== undefined, `결과에 ${k} 필요`);
     }
+    eq(r.direction, "long", "early 는 롱 전용");
+    assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+  });
+
+  test("OI 조회 실패 — 핵심 소계 분모에서 oiBuildUp 을 뺀다", () => {
+    // OI 없으면 oiBuildUp 은 늘 0점이다. 분모에 남기면 천장이 64% 로 내려가 이 픽스처가
+    // 27.9% 로 탈락하고, early 모드가 OI 엔드포인트 하나 때문에 조용히 0건이 된다.
+    const { candles, item } = earlyFixture();
+    const r = buildEarlyResult(item, candles, [], null, CONFIG);
+    assert(r != null, "OI 없다는 이유로 탈락시키면 안 됨");
+    eq(r.early.oi.change72h, null, "픽스처 전제 — OI 는 없는 상태");
+    assert(r.early.corePct >= CONFIG.earlyCoreMinPct,
+      `분모에서 빠졌는지 확인 (실제 ${r.early.corePct.toFixed(1)}%)`);
+    // OI 가 있으면 분모에 다시 들어가고 증가분이 점수에 반영된다(같은 캔들, OI 만 추가).
+    const oiSeries = Array.from({ length: 73 }, (_, i) => ({ oi: 1000 + i * 2 }));
+    assert(buildEarlyResult(item, candles, oiSeries, null, CONFIG).score > r.score,
+      "OI 증가분이 점수에 반영돼야 함");
   });
 
   test("리페인트 — 박스는 최근 60봉만 사용(창 밖 데이터 영향 없음)", () => {

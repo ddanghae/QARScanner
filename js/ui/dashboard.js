@@ -82,7 +82,7 @@ function setBusy(busy) {
 
 export function renderResults() {
   if (!resultsEl) return;
-  const view = applyFilters(state.results).slice(0, CONFIG.ui.resultMax);
+  const view = applyFilters(state.results);
   if (!view.length) {
     resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
@@ -105,8 +105,9 @@ export function renderResults() {
 // early 는 확실한 소수만 고르므로 0건이 정상 결과일 수 있다.
 function emptyMessage() {
   if (state.scan.phase !== "done") return "스캔을 시작하세요.";
-  const funnel = `전체 ${state.universe.length} → 유동성 ${state.prefiltered.length}`
-    + ` → 압축·박스 ${state.candidates.length} → 조건 충족 ${state.results.length}`;
+  // 단계 이름은 모드마다 달라 라벨을 붙이면 한쪽이 거짓이 된다(reversal 은 압축·박스가 아니라 급락·RSI).
+  const funnel = `깔때기 ${state.universe.length} → ${state.prefiltered.length}`
+    + ` → ${state.candidates.length} → ${state.results.length}`;
   const why = state.settings.scanMode === "early"
     ? `조기 포착은 압축·미결제약정 증가·거래량 고갈을 모두 갖춘 종목만 고릅니다(핵심 ${CONFIG.earlyCoreMinPct}% 이상).`
     : "필터를 완화하거나 채점 강도를 낮춰보세요.";

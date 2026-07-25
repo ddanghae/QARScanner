@@ -84,7 +84,7 @@ export function renderResults() {
   if (!resultsEl) return;
   const view = applyFilters(state.results).slice(0, CONFIG.ui.resultMax);
   if (!view.length) {
-    resultsEl.innerHTML = `<div class="empty">${state.scan.phase === "done" ? "조건을 만족하는 후보가 없습니다." : "스캔을 시작하세요."}</div>`;
+    resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
   }
   // 데스크톱 테이블 + 모바일 카드 — CSS 로 전환. 둘 다 생성.
@@ -99,6 +99,18 @@ export function renderResults() {
     <div class="result-cards">${view.map(cardHtml).join("")}</div>
   `;
   bindRows(view);
+}
+
+// 후보가 없을 때 — 스캐너가 고장난 건지 시장에 없는 건지 구분되게 깔때기를 보여준다.
+// early 는 확실한 소수만 고르므로 0건이 정상 결과일 수 있다.
+function emptyMessage() {
+  if (state.scan.phase !== "done") return "스캔을 시작하세요.";
+  const funnel = `전체 ${state.universe.length} → 유동성 ${state.prefiltered.length}`
+    + ` → 압축·박스 ${state.candidates.length} → 조건 충족 ${state.results.length}`;
+  const why = state.settings.scanMode === "early"
+    ? `조기 포착은 압축·미결제약정 증가·거래량 고갈을 모두 갖춘 종목만 고릅니다(핵심 ${CONFIG.earlyCoreMinPct}% 이상).`
+    : "필터를 완화하거나 채점 강도를 낮춰보세요.";
+  return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
 }
 
 function goldenCrossBadge(r) {

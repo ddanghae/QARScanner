@@ -39,7 +39,7 @@ export const ERRORS = {
   klineShort: "일부 종목의 캔들 데이터가 부족합니다.",
   newListing: "신규 상장 종목으로 분석이 제한됩니다.",
   partialTf: "일부 시간봉만 수신되었습니다.",
-  tvPopup: "TradingView 팝업이 차단되었습니다 — 링크를 복사했습니다.",
+  tvPopup: "TradingView 팝업이 차단되었습니다 — 상세 보기의 '링크 복사'를 쓰세요.",
   cacheData: "캐시된 데이터를 사용 중입니다.",
   wsReconnect: "WebSocket 재연결 중…",
 };

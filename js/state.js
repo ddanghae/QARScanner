@@ -6,19 +6,16 @@ const SETTINGS_KEY = "qar-ict-settings";
 
 const defaultSettings = {
   version: CONFIG.version,
-  minScore: 55,
+  minScore: 30,              // 채점 강도 3(기본)과 같은 값 — grades 의 "관찰 후보" 경계
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
-  dropBasis: "6h",          // "6h" | "24h"
   direction: "long",         // "long" | "short" | "both"
   scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착)
-  timeframeFocus: "15m",
   stageFilter: "all",        // 1~5 단계 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
   favorites: [],             // 관심 종목 심볼 배열
   excluded: [],              // 제외 종목
   sort: "score",             // "score" | "change" | "volume"
-  lastTab: "long",
   darkMode: false,
   includeRealtimeCandle: false, // 리페인트 방지: 기본은 마감 캔들만
   showFavoritesOnly: false,

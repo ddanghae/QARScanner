@@ -80,13 +80,7 @@ function renderDetail(r) {
       </table>
     </section>
 
-    <section class="detail-section">
-      <h3>시간봉별 상태</h3>
-      <table class="tf-table">
-        <thead><tr><th>TF</th><th>구조</th><th>RSI</th><th>EMA20</th><th>상대량</th><th>CVD</th><th>FVG/OB</th></tr></thead>
-        <tbody>${["4h","1h","15m","5m"].map((tf) => tfRow(tf, r.timeframes[tf])).join("")}</tbody>
-      </table>
-    </section>
+    ${tfSection(r)}
 
     <section class="detail-section">
       <h3>점수 근거</h3>
@@ -102,6 +96,21 @@ function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
+}
+
+// 조기 포착 모드 결과는 멀티타임프레임 분석을 하지 않아 timeframes 가 비어 있다.
+// 전부 "-" 인 표를 띄우면 고장난 것처럼 보이므로 섹션 자체를 뺀다.
+function tfSection(r) {
+  const tfs = ["4h", "1h", "15m", "5m"];
+  if (!tfs.some((tf) => r.timeframes?.[tf])) return "";
+  return `
+    <section class="detail-section">
+      <h3>시간봉별 상태</h3>
+      <table class="tf-table">
+        <thead><tr><th>TF</th><th>구조</th><th>RSI</th><th>EMA20</th><th>상대량</th><th>CVD</th><th>FVG/OB</th></tr></thead>
+        <tbody>${tfs.map((tf) => tfRow(tf, r.timeframes[tf])).join("")}</tbody>
+      </table>
+    </section>`;
 }
 
 function tfRow(tf, s) {

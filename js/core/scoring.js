@@ -28,12 +28,14 @@ export function estimateAbsorption(sig, dir = "long") {
 // 1 매집 → 2 유동성 회수 → 3 구조전환 초기 → 4 진입 구간 → 5 추격 금지
 export function classifyStage(sig) {
   // 5단계 추격 금지 먼저 (과열/급등)
+  // poorRiskReward 는 여기서 뺐다. "늦었다" 는 시장 국면 판정인데 손익비는 계획 품질이라
+  // 개념이 다르고, RR<1.5 만으로 50건 중 31건이 5단계로 몰려 단계 분류가 무의미했다.
+  // 손익비는 penalties.poorRiskReward 로 이미 점수에 반영된다.
   if (
     sig.change15mOverExtended ||
     sig.farFromLowAtr ||
     sig.shortTargetDistance ||
-    sig.rsiOverheated ||
-    sig.poorRiskReward
+    sig.rsiOverheated
   ) {
     return stage(5, "chase_ban", "늦음·추격 금지", "danger");
   }
@@ -113,9 +115,10 @@ export function scoreCandidate(sig, absorption, stageInfo, cfg, dir = "long") {
   add(sig.riskRewardOk, w.riskReward, "riskReward", "예상 손익비 1:2 이상");
 
   // ---- 감점 ----
-  const penalties = [];
+  // 일단 다 모은 뒤 그룹 중복을 걷어내고 적용한다(같은 사실에 여러 번 차감 방지).
+  const raw = [];
   const pen = (cond, val, key, label) => {
-    if (cond) { score += val; penalties.push({ key, label, val }); }
+    if (cond) raw.push({ key, label, val });
   };
   pen(sig.change15mOverExtended, p.overExtended15m, "overExtended15m", L.overExtended15m);
   pen(sig.farFromLowAtr, p.farFromLowAtr, "farFromLowAtr", L.farFromLowAtr);
@@ -126,9 +129,41 @@ export function scoreCandidate(sig, absorption, stageInfo, cfg, dir = "long") {
   pen(sig.newListingThin, p.newListingThin, "newListingThin", "신규 상장 데이터 부족");
   pen(sig.poorRiskReward, p.poorRiskReward, "poorRiskReward", "손익비 1:1.5 미만");
 
+  const penalties = dedupePenaltyGroups(raw, cfg.penaltyGroups);
+  for (const x of penalties) score += x.val;
+
   score = Math.max(0, Math.min(100, Math.round(score)));
   const grade = gradeFor(score, cfg);
   return { score, grade, breakdown, penalties };
+}
+
+// 같은 사실을 재는 감점끼리 겹쳐 차감되는 것을 막는다.
+// 한 그룹에서는 가장 센(가장 음수인) 감점 하나만 남기고, 그룹 밖 감점은 그대로 둔다.
+// 입력 순서는 유지한다(상세 패널이 이 순서로 표시).
+export function dedupePenaltyGroups(list, groups) {
+  if (!groups) return list;
+  const groupOf = new Map();
+  for (const [name, keys] of Object.entries(groups)) for (const k of keys) groupOf.set(k, name);
+  const worst = new Map(); // group -> 가장 센 감점
+  for (const item of list) {
+    const g = groupOf.get(item.key);
+    if (!g) continue;
+    const cur = worst.get(g);
+    if (!cur || item.val < cur.val) worst.set(g, item);
+  }
+  const kept = new Set(worst.values());
+  return list.filter((item) => !groupOf.has(item.key) || kept.has(item));
+}
+
+// 지정한 핵심 항목들의 소계가 만점 대비 몇 %인가. 두 모드 공용.
+// 채점이 가중합이라 쉬운 보조 항목만으로도 총점이 오르는 구멍이 있다.
+// 그 모드를 정의하는 신호가 실제로 잡혔는지를 별도로 요구하는 데 쓴다.
+export function coreStrengthPct(breakdown, coreKeys) {
+  const keys = new Set(coreKeys);
+  const core = breakdown.filter((b) => keys.has(b.key));
+  const max = core.reduce((s, b) => s + b.weight, 0);
+  if (!(max > 0)) return 0;
+  return (core.reduce((s, b) => s + b.got, 0) / max) * 100;
 }
 
 export function gradeFor(score, cfg) {
@@ -142,4 +177,7 @@ export function topSignals(breakdown, n = 3) {
     .slice(0, n).map((b) => b.label);
 }
 
-export default { estimateAbsorption, classifyStage, scoreCandidate, gradeFor, topSignals };
+export default {
+  estimateAbsorption, classifyStage, scoreCandidate, gradeFor,
+  coreStrengthPct, dedupePenaltyGroups, topSignals,
+};

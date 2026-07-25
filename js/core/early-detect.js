@@ -4,7 +4,7 @@
 
 import { bollinger, atr, ema, last } from "./indicators.js";
 import { relativeVolume } from "./volume-analysis.js";
-import { gradeFor, topSignals } from "./scoring.js";
+import { gradeFor, topSignals, coreStrengthPct } from "./scoring.js";
 
 // 최근 lookback 봉의 박스(고/저)와 그 안에서의 현재 위치.
 export function boxRange(candles, lookback) {
@@ -125,8 +125,10 @@ export function scoreEarly(m, cfg) {
   const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
   // OI: +30% 이상이면 만점. 데이터 없으면 0점.
   const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), 30) / 30);
-  // 거래량 고갈: 낮을수록 높은 점수
-  const volGot = m.volDry == null ? 0 : w.volumeProfile * (1 - Math.min(m.volDry, 1));
+  // 거래량 고갈: 낮을수록 높은 점수. 기준은 1.0 이 아니라 게이트값(volDryMax).
+  // 1.0 기준이면 volDry<=0.8 을 통과한 종목이 20점 중 4점밖에 못 받아 16점이 사수(死数)였다.
+  const volGot = m.volDry == null ? 0
+    : w.volumeProfile * clamp01(1 - m.volDry / cfg.earlyDetect.volDryMax);
   // 박스 상단 근접
   const rangeGot = w.rangePosition * clamp01(m.rangePos);
   // 장기선 회복
@@ -248,6 +250,9 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
   if (!stageInfo) return null;
 
   const scored = scoreEarly(m, cfg);
+  // 핵심 3항목이 약하면 총점이 높아도 후보가 아니다(장기선·박스위치로 끌어올린 경우 배제).
+  const corePct = coreStrengthPct(scored.breakdown, cfg.earlyCoreKeys);
+  if (corePct < cfg.earlyCoreMinPct) return null;
   const plan = earlyPlan(m, m.atrVal, m.price);
 
   return {
@@ -260,7 +265,8 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
     newListing: item.newListing,
     direction: "long",
     score: scored.score,
-    grade: gradeFor(scored.score, cfg),
+    // 등급만 early 전용 밴드로 (gradeFor 는 cfg.grades 만 읽는다).
+    grade: gradeFor(scored.score, { grades: cfg.earlyGrades }),
     stage: stageInfo,
     absorption: { level: "insufficient", label: "조기 포착 모드 — 미적용", score: 0 },
     breakdown: scored.breakdown,
@@ -269,7 +275,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
     goldenCrossRetest: { detected: false, reason: "조기 포착 모드" },
     near1hEma200: false,
     noise: { noisy: false, ci: null, relVol: m.relVol3, reasons: [] },
-    early: { squeezePct: m.squeezePct, volDry: m.volDry, oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow },
+    early: { squeezePct: m.squeezePct, volDry: m.volDry, oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow, corePct },
     plan,
     rsi1h: null,
     timeframes: {},

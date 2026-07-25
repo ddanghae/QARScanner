@@ -12,7 +12,7 @@ import { analyzeLiquidity } from "../core/liquidity.js";
 import { detectFvgs, activeFvgAt, latestFvg } from "../core/fvg.js";
 import { detectOrderBlocks, activeObAt, latestValidOb } from "../core/order-block.js";
 import { computeLongPlan, computeShortPlan } from "../core/risk-reward.js";
-import { estimateAbsorption, classifyStage, scoreCandidate, topSignals } from "../core/scoring.js";
+import { estimateAbsorption, classifyStage, scoreCandidate, topSignals, coreStrengthPct } from "../core/scoring.js";
 import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
 import { evaluateNoise } from "../core/noise-filter.js";
 
@@ -36,7 +36,7 @@ function analyzeTf(candlesRaw, includeRealtime, tf) {
     relVolNow: last(relVol) ?? 1,
     cvdArr: cvd(candles),
     cvdSlope: cvdSlope(candles, 10),
-    deltaLast: last(volumeDelta(candles).map((v, i, a) => v)) ?? 0,
+    deltaLast: last(volumeDelta(candles)) ?? 0,
     volTrend: volumeTrend(candles, 5, 20),
   };
 }
@@ -325,6 +325,13 @@ export async function deepAnalyze(item, settings) {
   if (!best) return { symbol: item.symbol, error: "방향 없음", skipped: true };
 
   const { side, sig, absorption, stageInfo, scored } = best;
+  // 이 전략을 정의하는 신호(유동성 스윕·스윕 회수·1h 구조전환·FVG/OB 중첩)가
+  // 실제로 잡혔는지 별도로 요구한다. 없으면 총점이 높아도 후보가 아니다
+  // — 점수는 "급락 및 과매도"·"거래대금" 같은 쉬운 항목만으로도 올라가기 때문.
+  const corePct = coreStrengthPct(scored.breakdown, CONFIG.reversalCoreKeys);
+  if (corePct < CONFIG.reversalCoreMinPct) {
+    return { symbol: item.symbol, error: "핵심 신호 부족", skipped: true };
+  }
   // 골든크로스 리테스트 — 스코어링과 별개, 4시간봉 EMA50/200 기준 독립 필터/배지
   const goldenCrossRetest = detectGoldenCrossRetest(a4.candles, a4.ind.ema[50], a4.ind.ema[200], a4.atrVal, CONFIG);
   // 1시간봉 200일선 밀착 — 스코어링과 별개, 독립 필터/배지. 민감도는 설정값 우선.
@@ -354,6 +361,7 @@ export async function deepAnalyze(item, settings) {
     goldenCrossRetest,
     near1hEma200,
     noise,
+    corePct,
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {

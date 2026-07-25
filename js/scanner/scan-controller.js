@@ -39,7 +39,8 @@ async function mapWithProgress(items, fn, onEach) {
     if (abortToken.aborted) return null;
     let r = null;
     try { r = await fn(it); }
-    catch (e) { r = { symbol: it.symbol, error: e.message, skipped: true }; }
+    // early 파이프라인은 { item, k4h, res } 래퍼를 넘기므로 심볼을 양쪽에서 찾는다.
+    catch (e) { r = { symbol: it.symbol ?? it.item?.symbol, error: e.message, skipped: true }; }
     done++;
     setProgress(done, total);
     if (onEach && r) onEach(r);
@@ -118,24 +119,19 @@ export async function runScan() {
     if (state.settings.scanMode === "early") {
       const earlyResults = await runEarlyPipeline(universe, now);
       if (earlyResults === null) return finishAborted();
-      setPhase("score");
-      const results = earlyResults
-        .filter((r) => !r.skipped && !r.error && r.score >= state.settings.minScore)
-        .sort((a, b) => b.score - a.score)
-        .map((r, i) => ({ ...r, rank: i + 1 }));
-      state.results = results;
-      setPhase("done");
-      state.scan.running = false;
-      state.scan.lastUpdated = Date.now();
-      emit("scan:done", { count: results.length, analyzed: earlyResults.length });
-      return results;
+      return finishScan(earlyResults);
     }
 
     // --- 2단계: 24h 유동성 필터 ---
     setPhase("prefilter");
     const tickers = await getTicker24h();
     state.tickers = tickers;
-    const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now);
+    // 최소 거래대금은 사용자 설정 우선 (필터 바의 "최소 거래대금").
+    // early 모드는 중형 중심 유니버스라 자체 기준(earlyDetect.minQuoteVolume)을 그대로 쓴다.
+    const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+      ...CONFIG.prefilter,
+      minQuoteVolume: state.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+    });
     state.prefiltered = prefiltered;
     state.newListings = newListings;
     emit("scan:prefiltered", { count: prefiltered.length, newListings });
@@ -162,20 +158,7 @@ export async function runScan() {
     // --- 4·5단계: 정밀 분석 + 점수 ---
     setPhase("deep");
     const analyzed = await mapWithProgress(candidates, (item) => deepAnalyze(item, state.settings));
-
-    // --- 점수 필터 + 정렬 ---
-    setPhase("score");
-    const results = analyzed
-      .filter((r) => !r.skipped && !r.error && r.score >= state.settings.minScore)
-      .sort((a, b) => b.score - a.score)
-      .map((r, i) => ({ ...r, rank: i + 1 }));
-    state.results = results;
-
-    setPhase("done");
-    state.scan.running = false;
-    state.scan.lastUpdated = Date.now();
-    emit("scan:done", { count: results.length, analyzed: analyzed.length });
-    return results;
+    return finishScan(analyzed);
   } catch (e) {
     console.error("스캔 실패", e);
     state.scan.error = e.message;
@@ -184,6 +167,27 @@ export async function runScan() {
     emit("scan:error", e.message);
     return [];
   }
+}
+
+// 스캔 마무리 — 정렬 후 state 에 저장하고 done 이벤트 발행. 두 모드 공용.
+// 점수 하한(minScore)은 여기서 자르지 않는다. 잘라 버리면 UI 에서 "최소 점수"를
+// 낮춰도 되살릴 데이터가 없어 재스캔해야만 반영됐다. 최종 필터는 ui/settings.applyFilters.
+function finishScan(analyzed) {
+  setPhase("score");
+  const results = analyzed
+    .filter((r) => !r.skipped && !r.error)
+    .sort((a, b) => b.score - a.score)
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+  state.results = results;
+
+  setPhase("done");
+  state.scan.running = false;
+  state.scan.lastUpdated = Date.now();
+  emit("scan:done", {
+    count: results.filter((r) => r.score >= state.settings.minScore).length,
+    analyzed: analyzed.length,
+  });
+  return results;
 }
 
 function finishAborted() {

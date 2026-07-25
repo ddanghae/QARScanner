@@ -7,6 +7,8 @@ import {
   classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
   buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
+import { ema } from "../js/core/indicators.js";
+import { gradeFor, coreStrengthPct } from "../js/core/scoring.js";
 import { candlesFromCloses } from "./fixtures.js";
 import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
 
@@ -44,6 +46,73 @@ export function run() {
       "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "oiDumpPct", "fundingMaxAbs"]) {
       assert(e[k] !== undefined, `earlyDetect.${k} 필요`);
     }
+  });
+
+  // config 경계값 회귀 방지 — 아래 둘은 계산식이 아니라 "표본이 1개 모자라" 죽었던 버그다.
+  test("oiLimit 표본으로 change72h 가 실제로 나온다", () => {
+    const series = Array.from({ length: CONFIG.earlyDetect.oiLimit }, (_, i) => ({ time: i, oi: 100 + i }));
+    const r = analyzeOi(series);
+    assert(r.change72h != null, `oiLimit=${CONFIG.earlyDetect.oiLimit} 로는 72시간 변화율이 안 나옴`);
+  });
+
+  test("klinesLimit 4h 로 EMA200 기울기(20봉 전 비교)가 계산된다", () => {
+    const n = CONFIG.klinesLimit["4h"] - 1; // 마감 캔들만
+    const e200 = ema(Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 7)), 200);
+    const idx = e200.length - 1;
+    assert(e200[idx] != null && e200[idx - 20] != null,
+      `4h ${CONFIG.klinesLimit["4h"]}봉으로는 EMA200 기울기가 항상 null`);
+  });
+
+  test("거래량 고갈 점수는 게이트값 기준으로 만점까지 쓴다", () => {
+    const w = CONFIG.earlyScoreWeights.volumeProfile;
+    const got = (volDry) => scoreEarly(baseMetrics({ volDry }), CONFIG)
+      .breakdown.find((b) => b.key === "volumeProfile").got;
+    eq(got(0), w, "완전 고갈이면 만점");
+    eq(got(CONFIG.earlyDetect.volDryMax), 0, "게이트 경계면 0점");
+    assert(got(CONFIG.earlyDetect.volDryMax / 2) > w * 0.4, "중간값이면 절반 근처");
+  });
+
+  test("early 등급은 전용 밴드를 쓴다 (reversal 밴드면 정상 후보가 '제외')", () => {
+    const eg = CONFIG.earlyGrades;
+    eq(eg.length, CONFIG.grades.length, "밴드 개수 동일");
+    eq(eg.map((g) => g.key).join(), CONFIG.grades.map((g) => g.key).join(), "key 는 CSS 와 물려 있어 동일해야 함");
+    assert(eg[0].min < CONFIG.grades[0].min, "early 최상위 경계는 reversal 보다 낮아야 함");
+    // 2026-07-25 라이브 실측: 게이트 통과 종목이 26·35점이었다. 둘 다 하위 2개 등급이면 안 된다.
+    for (const score of [26, 35]) {
+      const g = gradeFor(score, { grades: eg });
+      assert(g.key !== "excluded" && g.key !== "weak", `${score}점이 "${g.label}" 로 표시됨`);
+    }
+    // 표시 하한은 밴드 경계와 일치해야 한다(경계 중간에 걸치면 등급이 잘려 보인다).
+    // "확실한 소수" 방향이라 관찰 후보(observe) 이상만 노출한다.
+    const observeMin = eg.find((g) => g.key === "observe").min;
+    assert(eg.some((g) => g.min === CONFIG.earlyMinScore), "표시 하한이 밴드 경계와 안 맞음");
+    assert(CONFIG.earlyMinScore >= observeMin, `표시 하한(${CONFIG.earlyMinScore})은 관찰 후보(${observeMin}) 이상이어야 함`);
+  });
+
+  test("핵심 소계 — 보조 항목만으로 끌어올린 후보는 제외된다", () => {
+    // 실측 ZEC 형태: 장기선(15/15) 만점 + 박스위치로 총점은 나오지만
+    // 핵심 3항목(압축·OI·고갈)이 약한 케이스. 총점이 높아도 후보가 아니어야 한다.
+    const weakCore = baseMetrics({
+      squeezePct: 28, oi: { change72h: 0.5, change12h: 1, prev12h: 0.5 },
+      volDry: 0.98, rangePos: 1, closeAboveEma200: true,
+    });
+    const sc = scoreEarly(weakCore, CONFIG);
+    const pct = coreStrengthPct(sc.breakdown, CONFIG.earlyCoreKeys);
+    assert(pct < CONFIG.earlyCoreMinPct, `핵심 소계 ${pct.toFixed(0)}% 는 하한 미만이어야 함`);
+    // 보조 항목이 만점이라 총점 자체는 낮지 않다 — 그래서 소계 게이트가 필요하다.
+    assert(sc.score > CONFIG.earlyMinScore, `총점(${sc.score})만 보면 통과했을 것`);
+
+    const strongCore = baseMetrics({
+      squeezePct: 2, oi: { change72h: 12, change12h: 5, prev12h: 2 },
+      volDry: 0.3, rangePos: 0, closeAboveEma200: false, ema200SlopeOk: false,
+    });
+    const pct2 = coreStrengthPct(scoreEarly(strongCore, CONFIG).breakdown, CONFIG.earlyCoreKeys);
+    assert(pct2 >= CONFIG.earlyCoreMinPct, `핵심이 강하면 보조가 0이어도 통과 (실제 ${pct2.toFixed(0)}%)`);
+  });
+
+  test("핵심 항목 키는 채점 항목에 실제로 존재한다", () => {
+    const keys = scoreEarly(baseMetrics(), CONFIG).breakdown.map((b) => b.key);
+    for (const k of CONFIG.earlyCoreKeys) assert(keys.includes(k), `earlyCoreKeys 의 ${k} 가 breakdown 에 없음`);
   });
 
   test("박스 범위·폭·위치 계산", () => {

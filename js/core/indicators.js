@@ -164,8 +164,20 @@ export function stochRsi(closes, rsiP = 14, stochP = 14, kP = 3, dP = 3) {
     if (lo == null || hi === lo) { kRaw[i] = 0; continue; }
     kRaw[i] = ((r[i] - lo) / (hi - lo)) * 100;
   }
-  const k = sma(kRaw.map((x) => (x == null ? 0 : x)), kP);
-  const d = sma(k.map((x) => (x == null ? 0 : x)), dP);
+  // null 을 0 으로 바꿔 SMA 에 넣으면 계산 불가 구간이 0 으로 섞여 초기값이 오염된다.
+  // 유효 구간만 잘라 계산하고 원래 인덱스로 되돌린다.
+  const firstIdx = kRaw.findIndex((x) => x != null);
+  const k = new Array(closes.length).fill(null);
+  const d = new Array(closes.length).fill(null);
+  if (firstIdx >= 0) {
+    const kv = sma(kRaw.slice(firstIdx), kP);
+    for (let i = 0; i < kv.length; i++) k[firstIdx + i] = kv[i];
+    const kFirst = k.findIndex((x) => x != null);
+    if (kFirst >= 0) {
+      const dv = sma(k.slice(kFirst), dP);
+      for (let i = 0; i < dv.length; i++) d[kFirst + i] = dv[i];
+    }
+  }
   return { k, d };
 }
 
@@ -179,7 +191,10 @@ export function lastIndexValid(arr) {
   return -1;
 }
 
-// 전체 지표를 한 번에 계산해 캔들 세트에 붙인다.
+// 스캐너가 실제로 읽는 지표만 한 번에 계산한다.
+// sma20·macd·bb·obv·stochRsi 는 여기서 계산해도 신호 조립에서 아무도 안 읽어
+// 후보 50종목 × 4시간봉마다 순수 낭비였다(함수 자체는 export 유지 — 직접 호출 가능).
+// bollinger 는 early 경로가 cfg 를 직접 넘겨 호출한다(core/early-detect.js, scanner/prefilter.js).
 export function computeIndicators(candles, cfg) {
   const closes = candles.map((c) => c.close);
   const emas = {};
@@ -187,14 +202,9 @@ export function computeIndicators(candles, cfg) {
   return {
     closes,
     ema: emas,
-    sma20: sma(closes, cfg.smaPeriod),
     rsi: rsi(closes, cfg.rsiPeriod),
-    macd: macd(closes, cfg.macd.fast, cfg.macd.slow, cfg.macd.signal),
-    bb: bollinger(closes, cfg.bb.period, cfg.bb.mult),
     atr: atr(candles, cfg.atrPeriod),
     vwap: dailyVwap(candles),
-    obv: cfg.obvEnabled ? obv(candles) : null,
-    stochRsi: stochRsi(closes, cfg.stochRsi.rsi, cfg.stochRsi.stoch, cfg.stochRsi.k, cfg.stochRsi.d),
   };
 }
 

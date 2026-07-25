@@ -100,15 +100,19 @@ export function stage3Evaluate(item, klines1h, direction = "long") {
   const wantLong = direction === "long" || direction === "both";
   const wantShort = direction === "short" || direction === "both";
 
-  // 롱 후보: (급락 OR 저점 근접) AND RSI 과매도권. 단 이미 급등이면 제외.
+  // 롱 후보 = 하락 증거 AND 아직 반등 초기 AND RSI 과매도권. 단 이미 급등이면 제외.
+  // "아직 초기" 가드가 핵심 — 이게 없으면 6시간에 +18.9% 튄 코인도 24h 가 음수라는
+  // 이유로 급락 반등 후보가 된다(실측). 하락 증거만 OR 로 묶는다.
+  const droppedLong = change6h <= cf.drop6hMax || change24h <= cf.drop24hMax || nearLowPct <= cf.nearLowPct;
+  const earlyLong = change6h <= cf.maxCounterMove6h;
   const longCand = wantLong && change24h <= cf.surge24hExclude &&
-    ((change6h <= cf.drop6hMax || change24h <= cf.drop24hMax || nearLowPct <= cf.nearLowPct)
-      && rsiNow != null && rsiNow <= cf.rsiLongMax);
+    droppedLong && earlyLong && rsiNow != null && rsiNow <= cf.rsiLongMax;
 
-  // 숏 후보: (급등 OR 고점 근접) AND RSI 과매수권. 단 이미 폭락이면 제외.
+  // 숏 후보: 대칭 — 급등 증거 AND 아직 하락 초기 AND RSI 과매수권. 이미 폭락이면 제외.
+  const surgedShort = change6h >= cf.surge6hMin || nearHighPct <= cf.nearHighPct;
+  const earlyShort = change6h >= -cf.maxCounterMove6h;
   const shortCand = wantShort && change24h >= cf.crash24hExclude &&
-    ((change6h >= cf.surge6hMin || nearHighPct <= cf.nearHighPct)
-      && rsiNow != null && rsiNow >= cf.rsiShortMin);
+    surgedShort && earlyShort && rsiNow != null && rsiNow >= cf.rsiShortMin;
 
   const pass = longCand || shortCand;
   // both 일 때 더 강하게 걸린 쪽을 힌트로 (deep 은 both 면 양쪽 다 계산)

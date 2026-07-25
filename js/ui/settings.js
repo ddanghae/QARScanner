@@ -25,8 +25,9 @@ export function applyFilters(results) {
 
   // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
   if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  // 최소 점수
-  list = list.filter((r) => r.score >= s.minScore);
+  // 최소 점수 — early 는 점수대 자체가 달라(실측 0~61) reversal 기준의
+  // minScore·채점 강도가 안 맞는다. config 의 early 전용 하한을 쓴다.
+  list = list.filter((r) => r.score >= (early ? CONFIG.earlyMinScore : s.minScore));
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
@@ -52,6 +53,8 @@ export function applyFilters(results) {
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
   list.sort(sortFns[s.sort] || sortFns.score);
+  // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다(점수순 정렬일 때만 의미 있음).
+  list = list.slice(0, early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop);
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
@@ -60,8 +63,6 @@ export function initSettingsUI() {
   bindSelect("filter-scanmode", "scanMode");
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
-  bindSelect("filter-dropbasis", "dropBasis");
-  bindSelect("filter-timeframe", "timeframeFocus");
   bindSelect("filter-stage", "stageFilter");
   bindSelect("filter-sort", "sort");
 
@@ -73,10 +74,11 @@ export function initSettingsUI() {
   // 실시간 캔들 — 다음 스캔에 반영
   bindCheckGroup(REALTIME_IDS, "includeRealtimeCandle", false);
 
+  // 최소 거래대금은 후처리 필터가 아니라 1차 유동성 필터라 재스캔해야 반영된다.
   const minVol = document.getElementById("filter-minvolume");
   if (minVol) minVol.addEventListener("change", () => {
     updateSettings({ minQuoteVolume: Number(minVol.value) });
-    emit("filters:apply");
+    toast("다음 스캔부터 적용됩니다.", "info");
   });
 
   const applyBtn = document.getElementById("filter-apply");
@@ -155,11 +157,9 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
-  syncStageLabels(s.scanMode);
+  syncModeControls(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
-  setVal("filter-dropbasis", s.dropBasis);
-  setVal("filter-timeframe", s.timeframeFocus);
   setVal("filter-stage", s.stageFilter);
   setVal("filter-sort", s.sort);
   for (const { key, ids } of CHECK_BINDINGS) for (const id of ids) setChk(id, s[key]);
@@ -173,17 +173,48 @@ export function syncControls() {
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
 
-// 단계 필터의 선택지 문구를 모드에 맞게 바꾼다(값은 그대로 1~5).
+// 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계 라벨/사용가능 단계, 정렬, 최소 점수.
+// early 는 3단계까지만 있으므로 4·5 는 비활성화한다(고르면 조용히 빈 결과가 됐다).
 const STAGE_LABELS = {
   reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
-  early: ["전체", "1 매집", "2 임박", "3 돌파", "—", "—"],
+  early: ["전체", "1 매집", "2 임박", "3 돌파", "— (early 없음)", "— (early 없음)"],
 };
-function syncStageLabels(mode) {
+function syncModeControls(mode) {
+  const early = mode === "early";
   const el = document.getElementById("filter-stage");
-  if (!el) return;
-  const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
-  for (let i = 0; i < el.options.length && i < labels.length; i++) {
-    el.options[i].textContent = labels[i];
+  if (el) {
+    const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
+    for (let i = 0; i < el.options.length && i < labels.length; i++) {
+      el.options[i].textContent = labels[i];
+      el.options[i].disabled = early && i >= 4;
+    }
+    if (early && (el.value === "4" || el.value === "5")) {
+      el.value = "all";
+      updateSettings({ stageFilter: "all" });
+    }
+  }
+  // early 결과는 change6h 를 계산하지 않아(0 고정) "하락률" 정렬이 무동작이었다.
+  const sortEl = document.getElementById("filter-sort");
+  const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
+  if (changeOpt) {
+    changeOpt.disabled = early;
+    if (early && sortEl.value === "change") {
+      sortEl.value = "score";
+      updateSettings({ sort: "score" });
+    }
+  }
+  // 최소 점수는 reversal 점수대(0~100 중 55 가 기본) 기준이라 early 에 그대로 못 쓴다.
+  // early 는 config.earlyMinScore 를 하한으로 쓰므로 컨트롤을 잠그고 이유를 보여준다.
+  const msEl = document.getElementById("filter-minscore");
+  if (msEl) {
+    msEl.disabled = early;
+    msEl.title = early
+      ? `조기 포착 모드는 점수대가 달라 전용 하한(${CONFIG.earlyMinScore}점)을 씁니다.`
+      : "";
+  }
+  const msLabel = msEl?.closest("label");
+  if (msLabel) {
+    msLabel.childNodes[0].nodeValue = early ? `최소 점수 (early ${CONFIG.earlyMinScore} 고정)` : "최소 점수";
   }
 }
 

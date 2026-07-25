@@ -38,7 +38,6 @@ function mkFvg(dir, idx, gapLow, gapHigh, candles, atrVal, minAtr, cfg) {
     const k = candles[j];
     if (dir === "bullish") {
       // 아래로 되돌림 → gap 채움
-      const penetrate = Math.min(gapHigh, Math.max(gapLow, gapHigh - (gapHigh - k.low)));
       if (k.low <= gapLow) { fillLevel = 1; if (k.close < gapLow) inverted = true; break; }
       if (k.low < gapHigh) fillLevel = Math.max(fillLevel, (gapHigh - k.low) / (size || 1e-9));
     } else {

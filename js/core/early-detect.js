@@ -4,7 +4,7 @@
 
 import { bollinger, atr, ema, last } from "./indicators.js";
 import { relativeVolume } from "./volume-analysis.js";
-import { gradeFor, topSignals, coreStrengthPct } from "./scoring.js";
+import { gradeFor, topSignals } from "./scoring.js";
 
 // 최근 lookback 봉의 박스(고/저)와 그 안에서의 현재 위치.
 export function boxRange(candles, lookback) {
@@ -66,16 +66,21 @@ export function analyzeOi(series) {
   };
 }
 
-// 제외 사유. 없으면 null. OI·펀딩이 null 이면 해당 조건은 건너뛴다.
+// 제외 사유. 없으면 null.
+// 펀딩 쏠림은 더 이상 제외 사유가 아니다 — 2026-07-26 실측에서 |펀딩| 이 가장 안정적인
+// 선행 신호로 나왔다(3개 구간 전부 리프트 2.1~3.2x, 반대로 펀딩 중립은 0.67~0.77x).
+// 과열로 걸러내던 조건이 사실은 1순위 신호였다. 이제 crowding 점수로 반영한다.
+// OI 급감 제외도 뺐다 — 표본 n=5~6 으로 방향조차 확인되지 않는다(근거 없는 게이트).
 export function earlyExclusion(m, cfg) {
   const e = cfg.earlyDetect;
   if (m.change24h != null && m.change24h > e.pumpedMaxPct) return "이미 급등";
-  if (m.oi.change72h != null && m.oi.change72h <= e.oiDumpPct) return "미결제약정 급감";
-  if (m.funding != null && Math.abs(m.funding) > e.fundingMaxAbs) return "펀딩 과열";
   return null;
 }
 
 // 3단계 분류. 위 단계부터 판정하고, 어디에도 안 걸리면 null(결과에서 제외).
+// 매집(압축+거래량 고갈) 게이트는 제거했다. 표본 외 검증에서 리프트가 0.64~1.72x 로
+// 흩어졌다(기준선 미만인 구간 존재) — 신호로 볼 근거가 없는데 하드 게이트로 쓰고 있었다.
+// 대신 채점의 움직임 요인 2개(14일 추세·24시간 변동)의 히트 수로 단계를 나눈다.
 export function classifyEarlyStage(m, cfg) {
   const e = cfg.earlyDetect;
 
@@ -86,28 +91,19 @@ export function classifyEarlyStage(m, cfg) {
       : null; // 이미 많이 감 → 추격 방지
   }
 
-  // 1단계 조건(매집)을 먼저 확인. OI 데이터가 없으면 OI 조건은 통과로 간주한다.
-  const oiOk = m.oi.change72h == null || m.oi.change72h >= e.oiChangeMinPct;
-  const trendOk = m.closeAboveEma200 || m.ema200SlopeOk;
-  const accumulation =
-    m.boxWidthPct <= e.boxWidthMaxPct &&
-    m.squeezePct != null && m.squeezePct <= e.squeezePctMax &&
-    m.volDry != null && m.volDry <= e.volDryMax &&
-    oiOk && trendOk;
-  if (!accumulation) return null;
+  const hits = coreHits(m, e);
+  if (hits === 0) return null;
+  // 2단계 임박 — 둘 다 성립. 14일 추세와 24시간 변동이 동시에 크면 재적합 점수도 최상위권.
+  if (hits >= 2) return stage(2, "imminent", "2 임박", "yellow");
+  return stage(1, "accumulation", "1 관찰", "blue");
+}
 
-  // 2단계 임박 — 압축 극단 + 박스 상단 근접 + 거래량 회복 + OI 가속
-  const oiAccel = m.oi.change12h != null && m.oi.prev12h != null && m.oi.change12h > m.oi.prev12h;
-  if (
-    m.squeezePct <= e.squeezePctTight &&
-    m.rangePos >= e.rangePosMin &&
-    m.relVol3 >= e.relVolMin &&
-    oiAccel
-  ) {
-    return stage(2, "imminent", "2 임박", "yellow");
-  }
-
-  return stage(1, "accumulation", "1 매집", "blue");
+// 움직임 요인 2개 중 몇 개가 램프 하단을 넘었나(= 채점에서 0점이 아닌 항목 수).
+function coreHits(m, e) {
+  let n = 0;
+  if (m.mom14Abs != null && m.mom14Abs >= e.deadZonePct) n++;
+  if (m.change24h != null && Math.abs(m.change24h) >= e.chg24MinPct) n++;
+  return n;
 }
 
 function stage(n, key, label, badge) {
@@ -116,30 +112,34 @@ function stage(n, key, label, badge) {
 
 // ---- 채점 ----
 // 기존 scoring.js 의 breakdown/penalties 형식을 그대로 따른다(topSignals 재사용 가능).
+// 2026-07-26 재적합(변형 D). 57,720행 시간순 70/30 분할, 학습셋에서만 변형 선택.
+//   momentum   |14일 수익률|  45점  ramp(15% → 60%)
+//   change24h  |24시간 변동|  32점  ramp(5% → 20%)
+//   freshness  상장 경과일    23점  200일 이하 만점 → 800일 0점
+//   thinLiquidity            -10점  24시간 거래대금 minQuoteVolume 미만
+// 뺀 것: crowding(|펀딩|)·volExpansion·oiBuildUp. 단변량 리프트는 있었지만 다변량에서
+// 계수가 각각 -0.135 / +0.030 으로 죽었다 = 모멘텀 대리변수. 검증셋 상위3 리프트
+// 6.04x → 10.71x. 되살릴 근거가 생기면 research/variants.mjs 에 변형을 추가해 재확인할 것.
 export function scoreEarly(m, cfg) {
   const w = cfg.earlyScoreWeights;
   const p = cfg.earlyPenalties;
+  const e = cfg.earlyDetect;
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  // lo 이하 0점, hi 이상 만점인 선형 램프.
+  const ramp = (v, lo, hi) => (v == null ? 0 : clamp01((v - lo) / (hi - lo)));
 
-  // 압축: 백분위 0 → 만점, 50 이상 → 0점
-  const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
-  // OI: +30% 이상이면 만점. 데이터 없으면 0점.
-  const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), 30) / 30);
-  // 거래량 고갈: 낮을수록 높은 점수. 기준은 1.0 이 아니라 게이트값(volDryMax).
-  // 1.0 기준이면 volDry<=0.8 을 통과한 종목이 20점 중 4점밖에 못 받아 16점이 사수(死数)였다.
-  const volGot = m.volDry == null ? 0
-    : w.volumeProfile * clamp01(1 - m.volDry / cfg.earlyDetect.volDryMax);
-  // 박스 상단 근접
-  const rangeGot = w.rangePosition * clamp01(m.rangePos);
-  // 장기선 회복
-  const trendGot = m.closeAboveEma200 ? w.trendReclaim : m.ema200SlopeOk ? w.trendReclaim * 0.5 : 0;
+  const momGot = w.momentum * ramp(m.mom14Abs, e.deadZonePct, e.momentumFullPct);
+  const chgGot = w.change24h * ramp(
+    m.change24h == null ? null : Math.abs(m.change24h), e.chg24MinPct, e.chg24FullPct);
+  // 오래된 종목일수록 0 으로. freshFullDays 이하 만점, freshZeroDays 이상 0점.
+  // 상장일 미상은 400일로 본다(재적합에서 쓴 결측 대체값 — 중립보다 약간 위).
+  const freshGot = w.freshness *
+    (1 - clamp01(((m.ageDays ?? 400) - e.freshFullDays) / (e.freshZeroDays - e.freshFullDays)));
 
   const breakdown = [
-    mkItem("squeeze", "변동성 압축", w.squeeze, squeezeGot),
-    mkItem("oiBuildUp", "미결제약정 증가", w.oiBuildUp, oiGot),
-    mkItem("volumeProfile", "거래량 고갈", w.volumeProfile, volGot),
-    mkItem("rangePosition", "박스 상단 근접", w.rangePosition, rangeGot),
-    mkItem("trendReclaim", "장기선 회복", w.trendReclaim, trendGot),
+    mkItem("momentum", "14일 추세 강도", w.momentum, momGot),
+    mkItem("change24h", "24시간 변동", w.change24h, chgGot),
+    mkItem("freshness", "신규 상장", w.freshness, freshGot),
   ];
 
   let score = breakdown.reduce((s, b) => s + b.got, 0);
@@ -148,13 +148,7 @@ export function scoreEarly(m, cfg) {
   const pen = (cond, val, key, label) => {
     if (cond) { score += val; penalties.push({ key, label, val }); }
   };
-  const e = cfg.earlyDetect;
-  pen(m.change24h != null && m.change24h >= 25 && m.change24h <= e.pumpedMaxPct,
-    p.alreadyPumped, "alreadyPumped", "이미 상당폭 상승");
-  pen(m.oi.change72h != null && m.oi.change72h < 0, p.oiDump, "oiDump", "미결제약정 감소");
-  pen(m.funding != null && Math.abs(m.funding) > e.fundingMaxAbs / 2,
-    p.fundingOverheated, "fundingOverheated", "펀딩 쏠림");
-  pen(m.quoteVolume != null && m.quoteVolume < 10_000_000, p.thinLiquidity, "thinLiquidity", "거래대금 부족");
+  pen((m.quoteVolume ?? 0) < e.minQuoteVolume, p.thinLiquidity, "thinLiquidity", "거래대금 부족");
 
   score = Math.max(0, Math.min(100, Math.round(score)));
   return { score, breakdown, penalties };
@@ -166,19 +160,32 @@ function mkItem(key, label, weight, got) {
 }
 
 // ---- 진입 계획 ----
-// 박스 기반. 기존 plan 필드명을 그대로 채워 UI/상세패널이 수정 없이 동작하게 한다.
+// R 배수 기반. 기존 plan 필드명을 그대로 채워 UI/상세패널이 수정 없이 동작하게 한다.
 // 손절은 반드시 진입 아래로 clamp (risk-reward.js 의 RR 폭발 버그와 동일한 방어).
-export function earlyPlan(m, atrVal, price) {
+//
+// 예전에는 박스 하단 = 손절, 박스 상단 + 박스폭 배수 = 목표였다. 후보군이 "좁은 횡보"
+// 뿐일 때는 성립했지만, 지금은 폭락 후 반등(예: 14일 -88%)이 정식 후보라 박스 폭이
+// 수백 % 가 된다. 실측에서 그대로 손익비 1:24 가 찍혔다 — 도달 불가능한 목표를 기준으로
+// 계산한 숫자라 필터로도 표시로도 쓸 수 없다.
+// 손절은 ATR 배수로 상한을 걸고, 목표는 그 리스크의 배수로 잡는다.
+// ponytail: 목표가 R 배수 고정이라 riskReward 는 항상 tp2 기준 1:2 다. 종목별 저항선을
+// 반영하려면 여기서 박스 상단·직전 스윙고점을 tp 후보로 섞어야 한다.
+export function earlyPlan(m, atrVal, price, cfg) {
   const entry = price;
-  const span = Math.max(m.boxHigh - m.boxLow, 1e-9);
-  const buffer = (atrVal || 0) * 0.5;
-  const stop = Math.min(m.boxLow, entry) - buffer;
-  const tp1 = m.boxHigh + span * 1.0;
-  const tp2 = m.boxHigh + span * 1.5;
-  const tp3 = m.boxHigh + span * 2.0;
-  const risk = Math.max(entry - stop, 1e-9);
-  const reward = Math.max(tp2 - entry, 0);
-  const rr = reward / risk;
+  const atr = atrVal > 0 ? atrVal : 0;
+  const maxAtr = cfg?.earlyDetect?.stopMaxAtr ?? 3;
+
+  let stop = Math.min(m.boxLow, entry) - atr * 0.5;
+  // 박스 하단이 너무 멀면 ATR 배수로 자른다.
+  if (atr > 0) stop = Math.max(stop, entry - atr * maxAtr);
+  // 그래도 진입 위/같음이면(비정상 입력) 최소 리스크를 준다.
+  if (!(stop < entry)) stop = entry * (1 - 1e-3);
+
+  const risk = entry - stop;
+  const tp1 = entry + risk * 1;
+  const tp2 = entry + risk * 2;
+  const tp3 = entry + risk * 3;
+  const rr = (tp2 - entry) / risk;
   return {
     entry, stop, tp1, tp2, tp3,
     invalidation: stop,
@@ -199,8 +206,18 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   const closes = c4.map((c) => c.close);
   const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
   const squeezePct = squeezePercentile(widths, e.squeezeLookback);
-  const volDry = volDryRatio(c4, e.volRecentN, e.volPriorN);
+  // 같은 비율을 "고갈" 이 아니라 "확장" 으로 읽는다. 1 초과 = 최근 거래량이 늘고 있음.
+  const volExpand = volDryRatio(c4, e.volRecentN, e.volPriorN);
   const oi = analyzeOi(oiSeries || []);
+
+  // 14일 추세 강도. 부호가 아니라 크기가 신호라 절대값을 쓴다(상승·하락 양쪽 다 선행).
+  const momIdx = closes.length - 1 - e.momentumBars;
+  const mom14 = momIdx >= 0 && closes[momIdx] > 0
+    ? ((closes[closes.length - 1] - closes[momIdx]) / closes[momIdx]) * 100 : null;
+  // 펀딩도 방향 무관 — 롱 쏠림이든 숏 쏠림이든 둘 다 급등에 선행했다.
+  const crowdAbs = funding == null ? null : Math.abs(funding);
+  const ageDays = ticker?.onboardDate
+    ? (Date.now() - ticker.onboardDate) / 86_400_000 : null;
 
   const relVolArr = relativeVolume(c4, 20);
   const recentRel = relVolArr.slice(-3).filter((x) => x != null);
@@ -229,7 +246,8 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   return {
     boxHigh: box.boxHigh, boxLow: box.boxLow,
     boxWidthPct: box.boxWidthPct, rangePos: box.rangePos,
-    squeezePct, volDry, relVol3, oi,
+    squeezePct, volExpand, relVol3, oi,
+    mom14, mom14Abs: mom14 == null ? null : Math.abs(mom14), crowdAbs, ageDays,
     funding: funding == null ? null : funding,
     change24h: ticker?.change24h ?? null,
     quoteVolume: ticker?.quoteVolume ?? null,
@@ -250,14 +268,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
   if (!stageInfo) return null;
 
   const scored = scoreEarly(m, cfg);
-  // 핵심 3항목이 약하면 총점이 높아도 후보가 아니다(장기선·박스위치로 끌어올린 경우 배제).
-  // OI 조회가 실패하면 oiBuildUp 은 늘 0점이라 분모에 남겨두면 천장이 64% 로 내려가
-  // 실측 구간(압축 10·고갈 0.86 → 33%)이 통째로 탈락한다 = 모드가 조용히 0건이 된다.
-  // earlyExclusion 이 OI null 을 건너뛰는 것과 같은 원칙 — 없는 데이터로 감점하지 않는다.
-  const coreKeys = cfg.earlyCoreKeys.filter((k) => k !== "oiBuildUp" || m.oi.change72h != null);
-  const corePct = coreStrengthPct(scored.breakdown, coreKeys);
-  if (corePct < cfg.earlyCoreMinPct) return null;
-  const plan = earlyPlan(m, m.atrVal, m.price);
+  const plan = earlyPlan(m, m.atrVal, m.price, cfg);
 
   return {
     symbol: item.symbol,
@@ -279,7 +290,8 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
     goldenCrossRetest: { detected: false, reason: "조기 포착 모드" },
     near1hEma200: false,
     noise: { noisy: false, ci: null, relVol: m.relVol3, reasons: [] },
-    early: { squeezePct: m.squeezePct, volDry: m.volDry, oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow, corePct },
+    early: { squeezePct: m.squeezePct, volExpand: m.volExpand, mom14: m.mom14, ageDays: m.ageDays,
+      oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow },
     plan,
     rsi1h: null,
     timeframes: {},

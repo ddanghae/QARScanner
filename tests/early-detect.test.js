@@ -8,17 +8,19 @@ import {
   buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
 import { ema } from "../js/core/indicators.js";
-import { gradeFor, coreStrengthPct } from "../js/core/scoring.js";
+import { gradeFor } from "../js/core/scoring.js";
 import { candlesFromCloses } from "./fixtures.js";
 import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
 
-// 1단계(매집) 조건을 모두 만족하는 기본 지표. 개별 테스트에서 필요한 값만 덮어쓴다.
+// 움직임 요인 1개(momentum)만 걸린 기본 지표 = 1단계. 개별 테스트에서 필요한 값만 덮어쓴다.
+// change24h 는 문턱(5%) 미만으로 둬서 단계 상승을 테스트가 명시적으로 켜도록 한다.
 function baseMetrics(over = {}) {
   return {
     boxWidthPct: 20, rangePos: 0.5, boxHigh: 120, boxLow: 100,
-    squeezePct: 20, volDry: 0.7, relVol3: 0.9,
+    squeezePct: 20, volExpand: 0.7, relVol3: 0.9,
     oi: { change72h: 10, change12h: 3, prev12h: 2 },
-    funding: 0.0001, change24h: 5, quoteVolume: 50_000_000,
+    funding: 0.0001, crowdAbs: 0.0001, mom14: 25, mom14Abs: 25, ageDays: 400,
+    change24h: 2, quoteVolume: 50_000_000,
     closeAboveEma200: true, ema200SlopeOk: true,
     breakoutClose: false, atrRising: false, runFromBreakoutPct: 0,
     ...over,
@@ -41,11 +43,16 @@ export function run() {
 
   test("early 임계값 존재", () => {
     const e = CONFIG.earlyDetect;
-    for (const k of ["boxLookback", "squeezeLookback", "boxWidthMaxPct", "squeezePctMax",
-      "volDryMax", "oiChangeMinPct", "squeezePctTight", "rangePosMin", "relVolMin",
-      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "oiDumpPct", "fundingMaxAbs"]) {
+    for (const k of ["boxLookback", "squeezeLookback", "momentumBars", "deadZonePct",
+      "momentumFullPct", "chg24MinPct", "chg24FullPct",
+      "freshFullDays", "freshZeroDays", "minQuoteVolume",
+      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "prefilterDeadZonePct"]) {
       assert(e[k] !== undefined, `earlyDetect.${k} 필요`);
     }
+    // 램프 문턱은 반드시 lo < hi 여야 한다(뒤집히면 clamp 가 조용히 전부 0/만점을 준다).
+    assert(e.deadZonePct < e.momentumFullPct, "deadZonePct < momentumFullPct");
+    assert(e.chg24MinPct < e.chg24FullPct, "chg24MinPct < chg24FullPct");
+    assert(e.freshFullDays < e.freshZeroDays, "freshFullDays < freshZeroDays");
   });
 
   // config 경계값 회귀 방지 — 아래 둘은 계산식이 아니라 "표본이 1개 모자라" 죽었던 버그다.
@@ -63,22 +70,43 @@ export function run() {
       `4h ${CONFIG.klinesLimit["4h"]}봉으로는 EMA200 기울기가 항상 null`);
   });
 
-  test("거래량 고갈 점수는 게이트값 기준으로 만점까지 쓴다", () => {
-    const w = CONFIG.earlyScoreWeights.volumeProfile;
-    const got = (volDry) => scoreEarly(baseMetrics({ volDry }), CONFIG)
-      .breakdown.find((b) => b.key === "volumeProfile").got;
-    eq(got(0), w, "완전 고갈이면 만점");
-    eq(got(CONFIG.earlyDetect.volDryMax), 0, "게이트 경계면 0점");
-    assert(got(CONFIG.earlyDetect.volDryMax / 2) > w * 0.4, "중간값이면 절반 근처");
+  // 채점에서 뺀 항목이 되살아나면 여기서 잡힌다(재적합에서 다변량 기여가 0 이었다).
+  test("거래량 확장·펀딩·OI 는 더 이상 채점 항목이 아니다", () => {
+    const keys = scoreEarly(baseMetrics(), CONFIG).breakdown.map((b) => b.key);
+    eq(keys.join(), "momentum,change24h,freshness", "채점은 3항목뿐");
+    const a = scoreEarly(baseMetrics({ volExpand: 0.3, crowdAbs: 0, funding: 0, oi: { change72h: null, change12h: null, prev12h: null } }), CONFIG).score;
+    const b = scoreEarly(baseMetrics({ volExpand: 5, crowdAbs: 0.01, funding: 0.01, oi: { change72h: 100, change12h: 20, prev12h: 1 } }), CONFIG).score;
+    eq(a, b, "셋을 바꿔도 점수는 같아야 함");
+  });
+
+  test("24시간 변동 점수는 방향 무관 — 급등과 급락이 같은 점수", () => {
+    const e = CONFIG.earlyDetect;
+    const w = CONFIG.earlyScoreWeights.change24h;
+    const got = (change24h) => scoreEarly(baseMetrics({ change24h }), CONFIG)
+      .breakdown.find((b) => b.key === "change24h").got;
+    eq(got(e.chg24FullPct), got(-e.chg24FullPct), "부호가 반대여도 동일");
+    eq(got(e.chg24FullPct), w, "큰 변동 만점");
+    eq(got(e.chg24MinPct), 0, "문턱 경계면 0점");
+    eq(got(0), 0, "안 움직이면 0점");
+  });
+
+  test("신규 상장 점수는 오래될수록 내려간다", () => {
+    const e = CONFIG.earlyDetect;
+    const w = CONFIG.earlyScoreWeights.freshness;
+    const got = (ageDays) => scoreEarly(baseMetrics({ ageDays }), CONFIG)
+      .breakdown.find((b) => b.key === "freshness").got;
+    eq(got(e.freshFullDays), w, "신규면 만점");
+    eq(got(e.freshZeroDays), 0, "오래됐으면 0점");
+    eq(got(e.freshZeroDays * 2), 0, "더 오래돼도 음수로 안 감");
+    assert(got(0) === w, "상장 직후도 만점 (램프 위로 clamp)");
   });
 
   test("early 등급은 전용 밴드를 쓴다 (reversal 밴드면 정상 후보가 '제외')", () => {
     const eg = CONFIG.earlyGrades;
     eq(eg.length, CONFIG.grades.length, "밴드 개수 동일");
     eq(eg.map((g) => g.key).join(), CONFIG.grades.map((g) => g.key).join(), "key 는 CSS 와 물려 있어 동일해야 함");
-    assert(eg[0].min < CONFIG.grades[0].min, "early 최상위 경계는 reversal 보다 낮아야 함");
-    // 2026-07-25 라이브 실측: 게이트 통과 종목이 26·35점이었다. 둘 다 하위 2개 등급이면 안 된다.
-    for (const score of [26, 35]) {
+    // 2026-07-26 라이브 실측(재적합 후): 노출 후보가 96·78·57점대였다.
+    for (const score of [96, 78, 57]) {
       const g = gradeFor(score, { grades: eg });
       assert(g.key !== "excluded" && g.key !== "weak", `${score}점이 "${g.label}" 로 표시됨`);
     }
@@ -89,30 +117,14 @@ export function run() {
     assert(CONFIG.earlyMinScore >= observeMin, `표시 하한(${CONFIG.earlyMinScore})은 관찰 후보(${observeMin}) 이상이어야 함`);
   });
 
-  test("핵심 소계 — 보조 항목만으로 끌어올린 후보는 제외된다", () => {
-    // 실측 ZEC 형태: 장기선(15/15) 만점 + 박스위치로 총점은 나오지만
-    // 핵심 3항목(압축·OI·고갈)이 약한 케이스. 총점이 높아도 후보가 아니어야 한다.
-    const weakCore = baseMetrics({
-      squeezePct: 28, oi: { change72h: 0.5, change12h: 1, prev12h: 0.5 },
-      volDry: 0.98, rangePos: 1, closeAboveEma200: true,
-    });
-    const sc = scoreEarly(weakCore, CONFIG);
-    const pct = coreStrengthPct(sc.breakdown, CONFIG.earlyCoreKeys);
-    assert(pct < CONFIG.earlyCoreMinPct, `핵심 소계 ${pct.toFixed(0)}% 는 하한 미만이어야 함`);
-    // 보조 항목이 만점이라 총점 자체는 낮지 않다 — 그래서 소계 게이트가 필요하다.
-    assert(sc.score > CONFIG.earlyMinScore, `총점(${sc.score})만 보면 통과했을 것`);
-
-    const strongCore = baseMetrics({
-      squeezePct: 2, oi: { change72h: 12, change12h: 5, prev12h: 2 },
-      volDry: 0.3, rangePos: 0, closeAboveEma200: false, ema200SlopeOk: false,
-    });
-    const pct2 = coreStrengthPct(scoreEarly(strongCore, CONFIG).breakdown, CONFIG.earlyCoreKeys);
-    assert(pct2 >= CONFIG.earlyCoreMinPct, `핵심이 강하면 보조가 0이어도 통과 (실제 ${pct2.toFixed(0)}%)`);
-  });
-
-  test("핵심 항목 키는 채점 항목에 실제로 존재한다", () => {
-    const keys = scoreEarly(baseMetrics(), CONFIG).breakdown.map((b) => b.key);
-    for (const k of CONFIG.earlyCoreKeys) assert(keys.includes(k), `earlyCoreKeys 의 ${k} 가 breakdown 에 없음`);
+  // 핵심 소계 하한을 없앤 근거 — 움직임 없이 신규 상장만으로는 표시 하한을 못 넘는다.
+  test("신규 상장 단독으로는 표시 하한을 못 넘는다", () => {
+    const freshOnly = scoreEarly(baseMetrics({
+      mom14: 0, mom14Abs: 0, change24h: 0, ageDays: 0,
+    }), CONFIG).score;
+    eq(freshOnly, CONFIG.earlyScoreWeights.freshness, "freshness 만점만 남음");
+    assert(freshOnly < CONFIG.earlyMinScore,
+      `freshness 만점(${freshOnly})이 표시 하한(${CONFIG.earlyMinScore})을 넘으면 소계 하한이 다시 필요하다`);
   });
 
   test("박스 범위·폭·위치 계산", () => {
@@ -179,19 +191,22 @@ export function run() {
     eq(r.prev12h, null);
   });
 
-  test("1단계 매집 판정", () => {
+  test("1단계 관찰 — 검증 항목 1개만 성립", () => {
     const s = classifyEarlyStage(baseMetrics(), CONFIG);
-    eq(s.stage, 1, "매집 단계");
+    eq(s.stage, 1, "관찰 단계");
     eq(s.key, "accumulation");
   });
 
-  test("2단계 임박 — 압축 극단 + 상단 근접 + 거래량 회복 + OI 가속", () => {
-    const s = classifyEarlyStage(baseMetrics({
-      squeezePct: 10, rangePos: 0.97, relVol3: 1.2,
-      oi: { change72h: 10, change12h: 6, prev12h: 2 },
-    }), CONFIG);
+  test("2단계 임박 — 14일 추세 + 24시간 변동 동시 성립", () => {
+    const s = classifyEarlyStage(baseMetrics({ mom14Abs: 30, change24h: 12 }), CONFIG);
     eq(s.stage, 2, "임박 단계");
     eq(s.key, "imminent");
+  });
+
+  test("2단계 임박 — 하락 쪽 움직임도 동일하게 잡힌다(U자)", () => {
+    const up = classifyEarlyStage(baseMetrics({ mom14: 30, mom14Abs: 30, change24h: 12 }), CONFIG);
+    const down = classifyEarlyStage(baseMetrics({ mom14: -30, mom14Abs: 30, change24h: -12 }), CONFIG);
+    eq(up.stage, down.stage, "부호가 반대여도 같은 단계");
   });
 
   test("3단계 돌파 — 상단 종가돌파 + 거래량 급증 + ATR 상승 + 초입", () => {
@@ -209,76 +224,107 @@ export function run() {
     eq(s, null, "초입 아니면 제외");
   });
 
-  test("박스 넓으면 단계 없음", () => {
-    eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 90 }), CONFIG), null);
+  test("죽은 구간(움직임 0개) 이면 단계 없음", () => {
+    eq(classifyEarlyStage(baseMetrics({
+      mom14: 3, mom14Abs: 3, change24h: 1,
+    }), CONFIG), null, "14일 ±15% 안 + 24시간 ±5% 안 = 후보 아님");
+  });
+
+  test("박스가 넓어도 단계는 유지 — 박스 폭은 더 이상 게이트가 아니다", () => {
+    const s = classifyEarlyStage(baseMetrics({ boxWidthPct: 90 }), CONFIG);
+    assert(s != null && s.stage === 1, "넓은 박스는 momentum 후보를 죽이면 안 됨");
   });
 
   test("OI 없어도(null) 1단계 통과 — 후보 유지", () => {
     const s = classifyEarlyStage(baseMetrics({
       oi: { change72h: null, change12h: null, prev12h: null },
     }), CONFIG);
-    eq(s.stage, 1, "OI null 이면 OI 조건은 통과로 간주");
+    eq(s.stage, 1, "OI 는 단계 판정에 안 쓴다");
   });
 
   test("제외 — 이미 급등", () => {
     assert(earlyExclusion(baseMetrics({ change24h: 60 }), CONFIG) !== null, "24h +60% 제외");
   });
 
-  test("제외 — OI 급감", () => {
-    assert(earlyExclusion(baseMetrics({
-      oi: { change72h: -20, change12h: -5, prev12h: -3 },
-    }), CONFIG) !== null, "OI -20% 제외");
+  // 아래 둘은 예전에 "제외" 였다. 실측에서 방향이 반대이거나(펀딩 쏠림 = 1순위 신호)
+  // 표본이 없어(OI 감소 n=5) 근거가 없었다. 되살아나면 여기서 잡힌다.
+  test("펀딩 쏠림은 제외 사유가 아니다", () => {
+    eq(earlyExclusion(baseMetrics({ funding: 0.005, crowdAbs: 0.005 }), CONFIG), null,
+      "펀딩 0.5% 를 제외하면 안 됨");
   });
 
-  test("제외 — 펀딩 과열", () => {
-    assert(earlyExclusion(baseMetrics({ funding: 0.005 }), CONFIG) !== null, "펀딩 0.5% 제외");
+  test("OI 급감은 제외 사유가 아니다", () => {
+    eq(earlyExclusion(baseMetrics({
+      oi: { change72h: -20, change12h: -5, prev12h: -3 },
+    }), CONFIG), null, "OI -20% 를 제외하면 안 됨");
   });
 
   test("제외 — OI·펀딩 null 이면 해당 조건 건너뜀", () => {
     eq(earlyExclusion(baseMetrics({
-      oi: { change72h: null, change12h: null, prev12h: null }, funding: null,
+      oi: { change72h: null, change12h: null, prev12h: null }, funding: null, crowdAbs: null,
     }), CONFIG), null, "null 이면 제외하지 않음");
   });
 
   test("채점 — 조건 좋을수록 점수 높음(단조성)", () => {
-    const weak = scoreEarly(baseMetrics({ squeezePct: 45, oi: { change72h: 1, change12h: 0, prev12h: 0 }, volDry: 0.95, rangePos: 0.1 }), CONFIG).score;
-    const strong = scoreEarly(baseMetrics({ squeezePct: 2, oi: { change72h: 30, change12h: 10, prev12h: 3 }, volDry: 0.2, rangePos: 0.98 }), CONFIG).score;
+    const weak = scoreEarly(baseMetrics({ mom14Abs: 5, change24h: 1, ageDays: 1500 }), CONFIG).score;
+    const strong = scoreEarly(baseMetrics({ mom14Abs: 60, change24h: 20, ageDays: 100 }), CONFIG).score;
     assert(strong > weak, `강한 조건이 더 높아야 (${strong} > ${weak})`);
   });
 
-  test("채점 — 최고 조건은 만점 근처", () => {
+  test("채점 — 최고 조건은 만점", () => {
     const r = scoreEarly(baseMetrics({
-      squeezePct: 0, oi: { change72h: 30, change12h: 10, prev12h: 3 },
-      volDry: 0, rangePos: 1, closeAboveEma200: true,
+      mom14: 60, mom14Abs: 60, change24h: 20, ageDays: 0,
     }), CONFIG);
     eq(r.score, 100, "모든 항목 만점");
+    eq(r.penalties.length, 0, "만점 조건에 감점이 붙으면 안 됨");
   });
 
-  test("채점 — OI 없으면 해당 항목 0점, 나머지는 살아있음", () => {
-    const r = scoreEarly(baseMetrics({ oi: { change72h: null, change12h: null, prev12h: null } }), CONFIG);
-    const oiItem = r.breakdown.find((b) => b.key === "oiBuildUp");
-    eq(oiItem.got, 0, "OI 항목 0점");
-    assert(r.score > 0, "다른 항목 점수는 남음");
+  test("채점 — 죽은 구간은 감점이 아니라 0점", () => {
+    const r = scoreEarly(baseMetrics({ mom14: 3, mom14Abs: 3 }), CONFIG);
+    eq(r.breakdown.find((b) => b.key === "momentum").got, 0, "램프 하단 아래 = 0점");
+    eq(r.penalties.length, 0, "이중 처벌하지 않는다");
+  });
+
+  test("채점 — 상장일 미상이면 400일로 본다", () => {
+    const unknown = scoreEarly(baseMetrics({ ageDays: null }), CONFIG).score;
+    eq(unknown, scoreEarly(baseMetrics({ ageDays: 400 }), CONFIG).score, "결측 대체값 400일");
   });
 
   test("채점 — 감점 반영", () => {
     const base = scoreEarly(baseMetrics(), CONFIG).score;
-    const penalized = scoreEarly(baseMetrics({ change24h: 30, quoteVolume: 1_000_000 }), CONFIG).score;
+    const penalized = scoreEarly(baseMetrics({ quoteVolume: 1_000_000 }), CONFIG).score;
     assert(penalized < base, `감점 후 하락 (${penalized} < ${base})`);
   });
 
+  // 24h 상승은 더 이상 감점이 아니다 — 실측에서 모멘텀은 급등에 선행했다(리프트 2.4~5.5x).
+  test("이미 오른 종목을 감점하지 않는다", () => {
+    const keys = scoreEarly(baseMetrics({ change24h: 30 }), CONFIG).penalties.map((p) => p.key);
+    assert(!keys.includes("alreadyPumped"), "24h 상승 감점이 되살아남");
+  });
+
   test("plan — 손절은 진입 아래, 손익비 유한", () => {
-    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110);
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110, CONFIG);
     assert(p.stop < p.entry, "손절 < 진입");
     assert(isFinite(p.riskReward) && p.riskReward > 0, `손익비 유한 (${p.riskReward})`);
-    assert(p.tp2 > p.tp1, "TP2 > TP1");
+    assert(p.tp2 > p.tp1 && p.tp3 > p.tp2, "TP 순서");
   });
 
   test("plan — 박스 하단이 진입 위여도 손절은 진입 아래로 clamp", () => {
     // 비정상 입력(박스 하단 > 현재가)에서도 손절이 진입 위로 가지 않아야 한다
-    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110);
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110, CONFIG);
     assert(p.stop < p.entry, `손절 clamp (stop ${p.stop} < entry ${p.entry})`);
     assert(isFinite(p.riskReward), "손익비 유한");
+  });
+
+  // 폭락 후 반등 후보에서 박스 폭이 수백 % 라 손익비 1:24 가 찍히던 버그.
+  test("plan — 박스가 아무리 넓어도 손절은 ATR 배수 안, 손익비는 안 부푼다", () => {
+    const wide = earlyPlan(baseMetrics({ boxHigh: 1000, boxLow: 1 }), 2, 110, CONFIG);
+    const tight = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110, CONFIG);
+    const maxRisk = 2 * CONFIG.earlyDetect.stopMaxAtr;
+    assert(wide.entry - wide.stop <= maxRisk + 1e-9,
+      `손절 폭 ${wide.entry - wide.stop} 는 ATR×${CONFIG.earlyDetect.stopMaxAtr}=${maxRisk} 이내여야 함`);
+    eq(wide.riskReward, tight.riskReward, "박스 폭이 손익비를 부풀리면 안 됨");
+    assert(wide.riskReward < 5, `손익비가 현실 범위 (${wide.riskReward})`);
   });
 
   test("지표 조립 — 캔들 부족하면 null", () => {
@@ -286,26 +332,38 @@ export function run() {
     eq(buildEarlyMetrics(c, [], null, { change24h: 0, quoteVolume: 1e7 }, CONFIG), null);
   });
 
-  test("지표 조립 — 좁은 횡보에서 압축·고갈 지표가 나온다", () => {
-    // 200봉 좁은 횡보 + 최근 거래량 감소
-    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
-    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
-    const m = buildEarlyMetrics(c, [], null, { change24h: 2, quoteVolume: 5e7 }, CONFIG);
+  test("지표 조립 — 14일 추세·거래량 비율·상장일수가 나온다", () => {
+    // 200봉 상승 + 최근 거래량 증가. 14일(84봉) 상승률이 실제로 계산돼야 한다.
+    const closes = Array.from({ length: 200 }, (_, i) => 100 * Math.pow(1.004, i));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 180 ? 50 : 200) });
+    const onboardDate = Date.now() - 250 * 86_400_000;
+    const m = buildEarlyMetrics(c, [], 0.0004, { change24h: 2, quoteVolume: 5e7, onboardDate }, CONFIG);
     assert(m !== null, "지표 생성됨");
-    assert(m.boxWidthPct < 25, `박스 좁음 (${m.boxWidthPct})`);
-    assert(m.volDry != null && m.volDry < 1, `거래량 고갈 (${m.volDry})`);
-    assert(m.squeezePct != null, "압축 백분위 계산됨");
+    // 1.004^84 ≈ 1.396 → +39.6%
+    assert(m.mom14 > 35 && m.mom14 < 45, `14일 수익률 (${m.mom14})`);
+    eq(m.mom14Abs, Math.abs(m.mom14), "절대값 동반 계산");
+    assert(m.volExpand > 1, `거래량 확장 (${m.volExpand})`);
+    eq(m.crowdAbs, 0.0004, "펀딩 절대값");
+    assert(m.ageDays > 240 && m.ageDays < 260, `상장 경과일 (${m.ageDays})`);
   });
 
-  // 진폭이 줄어드는 완만한 상승 → 압축 19, 거래량 고갈 0.8, 종가가 EMA200 위(1단계 통과).
-  // 예전 픽스처는 EMA200 조건에 걸려 항상 null 이었고 아래 테스트가 if(r) 로 감싸 아무것도
-  // 검증하지 않았다. 결과가 실제로 나오는 픽스처여야 게이트 회귀를 잡는다.
+  test("지표 조립 — 14일치가 없으면 mom14 는 null (신규 상장을 죽이지 않는다)", () => {
+    const closes = Array.from({ length: 205 }, () => 100);
+    const c = candlesFromCloses(closes, { spread: 0.05 });
+    const short = c.slice(-(CONFIG.earlyDetect.momentumBars - 10));
+    // 박스 계산은 되지만 14일 lookback 은 모자란 길이
+    const m = buildEarlyMetrics(short, [], null, { change24h: 0, quoteVolume: 5e7 }, CONFIG);
+    if (m) eq(m.mom14, null, "데이터 부족이면 null (0 으로 채우면 죽은 구간 감점을 맞는다)");
+  });
+
+  // 14일 +39.6% 상승 + 최근 거래량 확장 → 검증 항목 2개 성립(2단계). 결과가 실제로
+  // 나오는 픽스처여야 게이트 회귀를 잡는다.
   function earlyFixture() {
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + i * 0.06 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    const closes = Array.from({ length: 200 }, (_, i) => 100 * Math.pow(1.004, i));
     return {
-      candles: candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 180 ? 100 : 80) }),
-      item: { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2, newListing: false },
+      candles: candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 180 ? 50 : 200) }),
+      item: { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2,
+        newListing: false, onboardDate: Date.now() - 250 * 86_400_000 },
     };
   }
 
@@ -320,19 +378,15 @@ export function run() {
     assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
   });
 
-  test("OI 조회 실패 — 핵심 소계 분모에서 oiBuildUp 을 뺀다", () => {
-    // OI 없으면 oiBuildUp 은 늘 0점이다. 분모에 남기면 천장이 64% 로 내려가 이 픽스처가
-    // 27.9% 로 탈락하고, early 모드가 OI 엔드포인트 하나 때문에 조용히 0건이 된다.
+  test("펀딩·OI 조회 실패해도 후보는 살아있다 — 엔드포인트 하나로 0건이 되면 안 된다", () => {
     const { candles, item } = earlyFixture();
     const r = buildEarlyResult(item, candles, [], null, CONFIG);
-    assert(r != null, "OI 없다는 이유로 탈락시키면 안 됨");
-    eq(r.early.oi.change72h, null, "픽스처 전제 — OI 는 없는 상태");
-    assert(r.early.corePct >= CONFIG.earlyCoreMinPct,
-      `분모에서 빠졌는지 확인 (실제 ${r.early.corePct.toFixed(1)}%)`);
-    // OI 가 있으면 분모에 다시 들어가고 증가분이 점수에 반영된다(같은 캔들, OI 만 추가).
+    assert(r != null, "펀딩 없다는 이유로 탈락시키면 안 됨");
+    eq(r.early.funding, null, "픽스처 전제 — 펀딩은 없는 상태");
+    assert(r.score >= CONFIG.earlyMinScore, `표시 하한 이상 (실제 ${r.score})`);
     const oiSeries = Array.from({ length: 73 }, (_, i) => ({ oi: 1000 + i * 2 }));
-    assert(buildEarlyResult(item, candles, oiSeries, null, CONFIG).score > r.score,
-      "OI 증가분이 점수에 반영돼야 함");
+    eq(buildEarlyResult(item, candles, oiSeries, null, CONFIG).score, r.score,
+      "OI 는 더 이상 점수를 바꾸지 않는다");
   });
 
   test("리페인트 — 박스는 최근 60봉만 사용(창 밖 데이터 영향 없음)", () => {
@@ -385,19 +439,23 @@ export function run() {
     eq(out[0].baseAsset, "PEPE");
   });
 
-  test("early 1차 선별 — 좁은 횡보는 통과", () => {
-    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
+  // 1차 선별의 게이트가 뒤집혔다: 예전에는 좁은 횡보를 통과시키고 큰 움직임을 잘랐다.
+  test("early 1차 선별 — 추세 없는 횡보는 탈락", () => {
     const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
     const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
     const r = stage3EvaluateEarly({ symbol: "XUSDT" }, c, CONFIG);
-    eq(r.pass, true, `통과해야 함 (사유: ${r.reason})`);
+    eq(r.pass, false, "죽은 구간은 정밀 분석까지 안 간다");
   });
 
-  test("early 1차 선별 — 넓게 출렁이면 탈락", () => {
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * 40);
-    const c = candlesFromCloses(closes, { spread: 1 });
-    const r = stage3EvaluateEarly({ symbol: "YUSDT" }, c, CONFIG);
-    eq(r.pass, false, "박스가 넓으면 탈락");
+  test("early 1차 선별 — 14일 추세가 크면 통과 (상승·하락 양쪽)", () => {
+    for (const [name, f] of [
+      ["상승", (i) => 100 * Math.pow(1.004, i)],
+      ["하락", (i) => 100 * Math.pow(0.996, i)],
+    ]) {
+      const c = candlesFromCloses(Array.from({ length: 200 }, (_, i) => f(i)), { spread: 0.05 });
+      const r = stage3EvaluateEarly({ symbol: "YUSDT" }, c, CONFIG);
+      eq(r.pass, true, `${name} 추세는 통과해야 함 (사유: ${r.reason}, mom14 ${r.mom14})`);
+    }
   });
 
   test("early 1차 선별 — 캔들 부족하면 탈락", () => {

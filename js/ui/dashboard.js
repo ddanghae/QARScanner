@@ -109,7 +109,7 @@ function emptyMessage() {
   const funnel = `깔때기 ${state.universe.length} → ${state.prefiltered.length}`
     + ` → ${state.candidates.length} → ${state.results.length}`;
   const why = state.settings.scanMode === "early"
-    ? `조기 포착은 압축·미결제약정 증가·거래량 고갈을 모두 갖춘 종목만 고릅니다(핵심 ${CONFIG.earlyCoreMinPct}% 이상).`
+    ? `조기 포착은 14일 추세·24시간 변동·최근 상장으로 채점해 ${CONFIG.earlyMinScore}점 이상만 보여줍니다.`
     : "필터를 완화하거나 채점 강도를 낮춰보세요.";
   return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
 }

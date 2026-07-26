@@ -2,9 +2,9 @@
 // Stage 1 종목 수집 → Stage 2 24h 유동성 필터 → Stage 3 급락·초기 후보 필터.
 
 import { CONFIG, STABLE_BASES, LEVERAGED_RE } from "../config.js";
-import { rsi, bollinger } from "../core/indicators.js";
+import { rsi } from "../core/indicators.js";
 import { relativeVolume } from "../core/volume-analysis.js";
-import { boxRange, squeezePercentile, volDryRatio } from "../core/early-detect.js";
+import { boxRange, volDryRatio } from "../core/early-detect.js";
 
 // ---- Stage 1: 거래 가능한 USDT 무기한 선물만 ----
 export function stage1Universe(symbols) {
@@ -139,7 +139,12 @@ export function excludeMajors(list, majors) {
 }
 
 // ---- early 1차 선별 ----
-// 4시간봉으로 "좁은 박스 + 압축 + 거래량 고갈" 을 빠르게 확인해 정밀 분석 후보를 줄인다.
+// 4시간봉으로 "죽은 구간" 을 빠르게 쳐내 정밀 분석 후보를 줄인다.
+// 예전에는 좁은 박스 + 압축 + 거래량 고갈을 요구했는데, 표본 외 검증에서 그 조합의
+// 리프트가 0.64~1.72x 로 기준선을 오르내렸다 — 게이트로 쓸 근거가 없다.
+// 게다가 검증을 통과한 후보(거래량 확장·추세 강함)를 여기서 전부 잘라내고 있었다.
+// 이제 유일한 게이트는 14일 수익률 크기. 죽은 구간(±15%)은 리프트 0.54~1.01x 라
+// 유니버스의 상당 부분을 OI·펀딩 조회 전에 싸게 걸러낸다.
 // OI 호출 전에 걸러내는 것이 목적이므로 여기서는 OI 를 보지 않는다.
 export function stage3EvaluateEarly(item, k4h, cfg) {
   const e = cfg.earlyDetect;
@@ -147,22 +152,18 @@ export function stage3EvaluateEarly(item, k4h, cfg) {
   if (!box) return { pass: false, reason: "데이터 부족" };
 
   const closes = k4h.map((c) => c.close);
-  const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
-  const squeezePct = squeezePercentile(widths, e.squeezeLookback);
-  const volDry = volDryRatio(k4h, e.volRecentN, e.volPriorN);
-
-  const boxOk = box.boxWidthPct <= e.boxWidthMaxPct;
-  // 압축·고갈은 계산 불가(데이터 부족)면 통과시키고 정밀 단계에서 다시 본다.
-  const squeezeOk = squeezePct == null || squeezePct <= e.squeezePctMax;
-  const volOk = volDry == null || volDry <= e.volDryMax;
-  const pass = boxOk && squeezeOk && volOk;
+  const momIdx = closes.length - 1 - e.momentumBars;
+  // 14일치가 없는 신규 상장은 통과시키고 정밀 단계에서 본다(freshness 가 가점 항목이다).
+  const mom14 = momIdx >= 0 && closes[momIdx] > 0
+    ? ((closes[closes.length - 1] - closes[momIdx]) / closes[momIdx]) * 100 : null;
+  const pass = mom14 == null || Math.abs(mom14) >= e.prefilterDeadZonePct;
 
   return {
     pass,
-    reason: pass ? "후보" : !boxOk ? "박스 넓음" : !squeezeOk ? "압축 부족" : "거래량 고갈 아님",
+    reason: pass ? "후보" : "추세 없는 구간",
     boxWidthPct: box.boxWidthPct,
-    squeezePct,
-    volDry,
+    mom14,
+    volExpand: volDryRatio(k4h, e.volRecentN, e.volPriorN),
   };
 }
 

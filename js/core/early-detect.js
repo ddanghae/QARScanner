@@ -1,5 +1,6 @@
 // core/early-detect.js — 조기 포착 모드 계산.
-// 큰 상승 이전 흔적(변동성 압축 + 거래량 고갈 + 미결제약정 증가)을 4시간봉에서 판정한다.
+// 큰 상승 이전 흔적(변동성 압축 + 거래량 고갈 + OI 이력/비감소)을 4시간봉에서 판정한다.
+// OI 증가폭은 단계 공통 게이트와 분리해 근거 품질 점수로 반영한다.
 // 모든 함수는 순수 함수이며 마감 캔들만 사용한다(미래 참조 없음).
 
 import { bollinger, atr, ema, last } from "./indicators.js";
@@ -30,9 +31,9 @@ export function boxRange(candles, lookback) {
 // 볼린저 폭 배열에서 "현재 폭이 최근 lookback 중 몇 %ile 로 좁은가".
 // 0 에 가까울수록 압축. 현재보다 작은 값의 개수 비율.
 export function squeezePercentile(widths, lookback) {
-  const valid = widths.filter((w) => w != null);
-  if (valid.length < lookback) return null;
-  const win = valid.slice(valid.length - lookback);
+  if (!Array.isArray(widths) || !Number.isInteger(lookback) || lookback <= 0 || widths.length < lookback) return null;
+  const win = widths.slice(widths.length - lookback);
+  if (win.some((w) => !Number.isFinite(w))) return null;
   const cur = win[win.length - 1];
   let smaller = 0;
   for (const w of win) if (w < cur) smaller++;
@@ -45,19 +46,44 @@ export function volDryRatio(candles, recentN, priorN) {
   if (n < recentN + priorN) return null;
   const recent = candles.slice(n - recentN);
   const prior = candles.slice(n - recentN - priorN, n - recentN);
+  if (recent.some((c) => !Number.isFinite(c.volume)) || prior.some((c) => !Number.isFinite(c.volume))) return null;
   const avg = (arr) => arr.reduce((s, c) => s + c.volume, 0) / arr.length;
   const prev = avg(prior);
   if (!(prev > 0)) return null;
   return avg(recent) / prev;
 }
 
-// OI 시계열(1시간 간격, 과거→현재)에서 변화율 3종.
-// change72h: 72시간 변화, change12h: 최근 12시간, prev12h: 그 이전 12시간(가속 비교용).
-export function analyzeOi(series) {
+// OI 시계열에서 timestamp 기준 변화율 3종.
+// 목표 시각에 충분히 가까운 표본이 없으면 행 번호로 추정하지 않고 null(fail closed)이다.
+const HOUR_MS = 60 * 60 * 1000;
+export function analyzeOi(series, toleranceMs = 0) {
   const pct = (from, to) => (from > 0 ? ((to - from) / from) * 100 : null);
-  const n = Array.isArray(series) ? series.length : 0;
-  const at = (backHours) => (n > backHours ? series[n - 1 - backHours].oi : null);
-  const now = n > 0 ? series[n - 1].oi : null;
+  const points = Array.isArray(series)
+    ? series
+      .map((p) => ({ time: Number(p?.time), oi: Number(p?.oi) }))
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.oi) && p.oi > 0)
+      .sort((a, b) => a.time - b.time)
+    : [];
+  if (!points.length) return { change72h: null, change12h: null, prev12h: null };
+
+  const tolerance = Number.isFinite(toleranceMs) && toleranceMs >= 0
+    ? toleranceMs
+    : 0; // 생산 경로는 CONFIG.earlyDetect.oiTargetToleranceMs를 명시적으로 전달한다.
+  const nowPoint = points[points.length - 1];
+  const at = (backHours) => {
+    const target = nowPoint.time - backHours * HOUR_MS;
+    let best = null;
+    let bestDistance = Infinity;
+    for (const point of points) {
+      const distance = Math.abs(point.time - target);
+      if (distance < bestDistance) {
+        best = point;
+        bestDistance = distance;
+      }
+    }
+    return best && bestDistance <= tolerance ? best.oi : null;
+  };
+  const now = nowPoint.oi;
   const h72 = at(72), h12 = at(12), h24 = at(24);
   return {
     change72h: now != null && h72 != null ? pct(h72, now) : null,
@@ -66,11 +92,27 @@ export function analyzeOi(series) {
   };
 }
 
-// 제외 사유. 없으면 null. OI·펀딩이 null 이면 해당 조건은 건너뛴다.
+// early 핵심 데이터 준비 상태. 누락을 좋은 신호로 간주하지 않는다.
+export function earlyDataIssue(m) {
+  if (!m || !Number.isFinite(m.boxWidthPct) || !Number.isFinite(m.rangePos) ||
+      !Number.isFinite(m.squeezePct) || !Number.isFinite(m.volDry) ||
+      !Number.isFinite(m.relVol3) || m.ema200Ready !== true || m.atrReady !== true) {
+    return "4시간 지표 자료 부족";
+  }
+  if (!m.oi || !Number.isFinite(m.oi.change72h) ||
+      !Number.isFinite(m.oi.change12h) || !Number.isFinite(m.oi.prev12h)) {
+    return "미결제약정 자료 부족";
+  }
+  return null;
+}
+
+// 제외 사유. 없으면 null. 펀딩은 보조 데이터라 null이면 해당 조건만 건너뛴다.
 export function earlyExclusion(m, cfg) {
   const e = cfg.earlyDetect;
+  const dataIssue = earlyDataIssue(m);
+  if (dataIssue) return dataIssue;
   if (m.change24h != null && m.change24h > e.pumpedMaxPct) return "이미 급등";
-  if (m.oi.change72h != null && m.oi.change72h <= e.oiDumpPct) return "미결제약정 급감";
+  if (m.oi.change72h <= e.oiDumpPct) return "미결제약정 급감";
   if (m.funding != null && Math.abs(m.funding) > e.fundingMaxAbs) return "펀딩 과열";
   return null;
 }
@@ -78,22 +120,30 @@ export function earlyExclusion(m, cfg) {
 // 3단계 분류. 위 단계부터 판정하고, 어디에도 안 걸리면 null(결과에서 제외).
 export function classifyEarlyStage(m, cfg) {
   const e = cfg.earlyDetect;
+  if (earlyDataIssue(m)) return null;
+
+  // 모든 단계는 좁은 박스·후보용 압축/고갈 기준과 OI 비감소를 공통으로 요구한다.
+  const candidateReady =
+    m.boxWidthPct <= e.boxWidthMaxPct &&
+    m.squeezePct <= e.prefilterSqueezePctMax &&
+    m.volDry <= e.volDryMax &&
+    m.oi.change72h >= e.oiChangeMinPct;
+  if (!candidateReady) return null;
 
   // 3단계 돌파 — 박스 상단을 종가로 뚫고, 거래량 급증 + 변동성 확장. 단 아직 초입일 때만.
-  if (m.breakoutClose && m.relVol3 >= e.breakoutRelVol && m.atrRising) {
-    return m.runFromBreakoutPct <= e.breakoutMaxRunPct
+  const breakoutImpulse = Boolean(m.breakoutClose) && Number.isFinite(m.relVol3) &&
+    m.relVol3 >= e.breakoutRelVol && m.atrRising === true;
+  if (breakoutImpulse) {
+    return isConfirmedEarlyBreakout(m, cfg)
       ? stage(3, "breakout", "3 돌파", "purple")
       : null; // 이미 많이 감 → 추격 방지
   }
 
-  // 1단계 조건(매집)을 먼저 확인. OI 데이터가 없으면 OI 조건은 통과로 간주한다.
-  const oiOk = m.oi.change72h == null || m.oi.change72h >= e.oiChangeMinPct;
+  // 1단계 매집은 돌파 후보용 완화 기준과 달리 실제 압축 상한을 적용한다.
   const trendOk = m.closeAboveEma200 || m.ema200SlopeOk;
   const accumulation =
-    m.boxWidthPct <= e.boxWidthMaxPct &&
-    m.squeezePct != null && m.squeezePct <= e.squeezePctMax &&
-    m.volDry != null && m.volDry <= e.volDryMax &&
-    oiOk && trendOk;
+    m.squeezePct <= e.squeezePctMax &&
+    trendOk;
   if (!accumulation) return null;
 
   // 2단계 임박 — 압축 극단 + 박스 상단 근접 + 거래량 회복 + OI 가속
@@ -119,15 +169,18 @@ function stage(n, key, label, badge) {
 export function scoreEarly(m, cfg) {
   const w = cfg.earlyScoreWeights;
   const p = cfg.earlyPenalties;
-  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const clamp01 = (x) => Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0;
 
   // 압축: 백분위 0 → 만점, 50 이상 → 0점
-  const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
+  const squeezeGot = Number.isFinite(m.squeezePct) ? w.squeeze * (1 - Math.min(Math.max(m.squeezePct, 0), 50) / 50) : 0;
   // OI: oiScoreFullPct 이상이면 만점. 데이터 없으면 0점.
-  const oiFull = cfg.earlyDetect.oiScoreFullPct;
-  const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), oiFull) / oiFull);
+  const configuredOiFull = cfg.earlyDetect.oiScoreFullPct;
+  const oiFull = Number.isFinite(configuredOiFull) && configuredOiFull > 0 ? configuredOiFull : null;
+  const oiGot = oiFull && Number.isFinite(m.oi?.change72h)
+    ? w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), oiFull) / oiFull)
+    : 0;
   // 거래량 고갈: 낮을수록 높은 점수
-  const volGot = m.volDry == null ? 0 : w.volumeProfile * (1 - Math.min(m.volDry, 1));
+  const volGot = Number.isFinite(m.volDry) ? w.volumeProfile * (1 - Math.min(Math.max(m.volDry, 0), 1)) : 0;
   // 박스 상단 근접
   const rangeGot = w.rangePosition * clamp01(m.rangePos);
   // 장기선 회복
@@ -162,6 +215,17 @@ export function scoreEarly(m, cfg) {
 function mkItem(key, label, weight, got) {
   const g = Math.round(got * 100) / 100;
   return { key, label, weight, got: g, hit: g > 0 };
+}
+
+export function isConfirmedEarlyBreakout(m, cfg) {
+  const e = cfg.earlyDetect;
+  return Boolean(m?.breakoutClose) && Number.isFinite(m?.relVol3) &&
+    m.relVol3 >= e.breakoutRelVol && m?.atrRising === true &&
+    Number.isFinite(m?.runFromBreakoutPct) && m.runFromBreakoutPct <= e.breakoutMaxRunPct;
+}
+
+export function earlyGradeFor(score, cfg) {
+  return gradeFor(score, { grades: cfg.earlyGrades || cfg.grades });
 }
 
 // ---- 진입 계획 ----
@@ -199,11 +263,11 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
   const squeezePct = squeezePercentile(widths, e.squeezeLookback);
   const volDry = volDryRatio(c4, e.volRecentN, e.volPriorN);
-  const oi = analyzeOi(oiSeries || []);
+  const oi = analyzeOi(oiSeries || [], e.oiTargetToleranceMs);
 
   const relVolArr = relativeVolume(c4, 20);
-  const recentRel = relVolArr.slice(-3).filter((x) => x != null);
-  const relVol3 = recentRel.length ? recentRel.reduce((a, b) => a + b, 0) / recentRel.length : 0;
+  const recentRel = relVolArr.slice(-3).filter((x) => Number.isFinite(x));
+  const relVol3 = recentRel.length === 3 ? recentRel.reduce((a, b) => a + b, 0) / 3 : null;
 
   const ema200 = ema(closes, 200);
   const price = closes[closes.length - 1];
@@ -212,6 +276,7 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   const ema200Prev = ema200Idx - 20 >= 0 ? ema200[ema200Idx - 20] : null;
   const closeAboveEma200 = ema200Now != null && price > ema200Now;
   const ema200SlopeOk = ema200Now != null && ema200Prev != null && ema200Now >= ema200Prev;
+  const ema200Ready = Number.isFinite(ema200Now) && Number.isFinite(ema200Prev);
 
   // 돌파 판정: 직전 봉까지의 박스 상단을 현재 종가가 넘었는가
   const prevBox = boxRange(c4.slice(0, -1), e.boxLookback);
@@ -224,6 +289,7 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   const atrIdx = atrArr.length - 1;
   const atrPrev = atrIdx - 5 >= 0 ? atrArr[atrIdx - 5] : null;
   const atrRising = atrNow != null && atrPrev != null && atrNow > atrPrev;
+  const atrReady = Number.isFinite(atrNow) && Number.isFinite(atrPrev);
 
   return {
     boxHigh: box.boxHigh, boxLow: box.boxLow,
@@ -232,8 +298,8 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
     funding: funding == null ? null : funding,
     change24h: ticker?.change24h ?? null,
     quoteVolume: ticker?.quoteVolume ?? null,
-    closeAboveEma200, ema200SlopeOk,
-    breakoutClose, atrRising, runFromBreakoutPct,
+    closeAboveEma200, ema200SlopeOk, ema200Ready,
+    breakoutClose, atrRising, atrReady, runFromBreakoutPct,
     price, atrVal: atrNow,
   };
 }
@@ -252,6 +318,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
   const plan = earlyPlan(m, m.atrVal, m.price);
 
   return {
+    scanMode: "early",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: m.price,
@@ -261,7 +328,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
     newListing: item.newListing,
     direction: "long",
     score: scored.score,
-    grade: gradeFor(scored.score, cfg),
+    grade: earlyGradeFor(scored.score, cfg),
     stage: stageInfo,
     absorption: { level: "insufficient", label: "조기 포착 모드 — 미적용", score: 0 },
     breakdown: scored.breakdown,
@@ -279,6 +346,6 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
 
 export default {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
-  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
+  classifyEarlyStage, isConfirmedEarlyBreakout, earlyDataIssue, earlyExclusion, scoreEarly, earlyGradeFor, earlyPlan,
   buildEarlyMetrics, buildEarlyResult,
 };

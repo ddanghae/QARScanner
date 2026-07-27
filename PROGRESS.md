@@ -1,180 +1,174 @@
 # 진행 상황 (다른 컴퓨터에서 이어받기용)
 
-이 파일은 세션이 끊겨도 어디까지 했고 뭘 더 할지 파악하기 위한 핸드오프 문서.
-읽고 나서 삭제하지 말 것 — 다음 세션이 또 참고함.
+이 문서는 세션이 끊겨도 구현 배경, 현재 계약, 검증 상태를 이어받기 위한 핸드오프다.
+다음 작업 전에 삭제하지 말고 `README.md`와 함께 읽는다.
 
 ## 저장소 / 배포
 
 - 저장소: https://github.com/ddanghae/QARScanner (public)
-- 라이브: https://ddanghae.github.io/QARScanner/ (GitHub Pages, main/root, 자동 재배포)
-- 로컬 경로(이 작업이 시작된 컴퓨터): `C:\Users\CC\00\qar-ict-scanner`
-- 다른 컴퓨터에서 이어받기: `git clone https://github.com/ddanghae/QARScanner.git` 후 아래 "재개 방법" 참고
+- 라이브: https://ddanghae.github.io/QARScanner/ (GitHub Pages, `main`/root; 현재 통합 브랜치는 아직 미배포)
+- 현재 통합 브랜치: `codex/integrate-claude-early`
+- 정적 GitHub Pages 앱이며 Binance 공개 REST만 사용한다. 개인 API 키와 자동 주문은 없다.
 
-## 지금까지 한 일 (커밋 순서대로)
+## 구현 이력
 
-1. **최초 구현** — 5페이지 한글 개발계획서(QAR+ICT Early Coin Scanner)를 그대로 구현.
-   빈 폴더에서 시작(재사용할 기존 코드 없었음). Vanilla HTML/CSS/JS ES Modules,
-   백엔드 없음, GitHub Pages 정적 배포, Binance 공개 REST API만 사용, 개인 API 키 없음.
-   - 계산 엔진(core/): EMA·SMA·RSI·MACD·ATR·Bollinger·VWAP·OBV·StochRSI,
-     Taker/Delta/CVD, 시장구조(Pivot·HH/HL/LH/LL·BOS·CHoCH), 유동성(Equal H/L·스윕),
-     FVG, 오더블록, 진입/손절/TP+손익비, 흡수 추정+단계 분류(1~5)+100점 점수 체계
-   - 스캐너(scanner/): 1~3단계 필터(전체종목→24h유동성→급락후보) →
-     4단계 멀티타임프레임(4h/1h/15m/5m) 정밀분석 → 점수 필터+정렬
-   - UI: 대시보드, 상세 패널, 필터/설정(localStorage), 토스트, TradingView 연결, PWA(sw.js)
-   - 테스트: Node 실행 가능한 자체 하네스(프레임워크 없음), 계산값 고정 검증 +
-     **리페인트 방지 검증**(prefix==full — 과거 계산이 미래 캔들 추가로 안 바뀌는지)
+### 1. 최초 구현
 
-2. **자동 갱신 기능 추가** — 일정 주기 재스캔 + "다음 갱신까지 남은 시간" 카운트다운 +
-   탭 백그라운드 시 주기 자동 감속(4배). `config.js`의 `refresh.*`로 조정.
+- Vanilla HTML/CSS/JS ES Modules 기반 QAR+ICT Early Coin Scanner를 구현했다.
+- EMA·RSI·MACD·ATR·Bollinger, 시장구조, 유동성, FVG, 오더블록, 거래량 추정,
+  진입·손절·목표 구간과 점수 계산을 순수 모듈로 분리했다.
+- 멀티타임프레임 후보 선별, 상세 패널, 설정 저장, PWA와 리페인트 회귀 테스트를 추가했다.
 
-3. **숏 방향 완전 구현** — 원래 롱 전용이었음. 단순 신호 미러링이 아니라
-   **깔때기 자체가 롱 편향**이었던 걸 발견해 `prefilter.js`의 stage3 필터를 방향 인지로 수정
-   (숏/양방향이면 급등·과매수 후보를 admit하도록). `deep-scanner.js`에 `buildShortSignals`
-   추가, `scoring.js`에 방향별 라벨(급락↔급등, 저점↔고점 스윕 등), `direction: "both"`는
-   종목별로 롱/숏 중 높은 점수 채택.
-   - **실제 버그 발견+수정**: `risk-reward.js`에서 신고가/신저점 갱신 중 마지막 확정
-     스윙이 진입 반대편에 있으면 손절-진입 거리가 거의 0이 돼 손익비가 수천만배로
-     폭발하는 버그(RR 1:73,705,287 실측). 손절을 진입 반대편으로 clamp해서 해결.
+### 2. 자동 갱신과 숏 방향
 
-4. **UI 리스킨** — 사용자가 제공한 대시보드 디자인 레퍼런스(Salleist/Finexy/Skillset류)
-   참고해 사이드바+톱바 레이아웃으로 전면 리스킨. 로직은 전혀 안 건드림(순수 CSS+마크업).
-   화이트 사이드바 + 다크 액티브 필, 다크 히어로 스탯 카드, 카드형 섹션, pill 뱃지.
+- 주기 재스캔과 백그라운드 감속을 추가했다.
+- 롱 편향이던 후보 깔때기를 방향 인지로 바꾸고 숏·양방향을 지원했다.
+- 스윙이 진입 반대편에 있을 때 손익비가 폭발하던 버그를 손절 clamp로 수정했다.
 
-5. **조기 포착 모드 추가** — 기존 깔때기는 "급락+과매도"라 조용한 매집 구간을
-   못 잡는 문제를 발견. 스캔 모드 전환 방식으로 후보 깔때기와 채점만 교체하는
-   `scanMode: reversal | early` 를 추가했다. early 는 4시간봉에서 변동성 압축
-   (기존 볼린저 width 재사용) + 거래량 고갈 + 미결제약정(OI) 증가를 보고
-   매집 → 임박 → 돌파 3단계로 분류한다. OI·펀딩비는 공개 엔드포인트
-   (`openInterestHist`, `premiumIndex`)를 쓰며 펀딩비는 스캔당 1회만 호출한다.
-   결과는 기존과 동일한 shape 을 반환해 결과표·상세 패널을 건드리지 않았다.
-   중형 중심 유니버스(거래대금 5M↑, 상위 200, 대형코인 제외).
-   - 주의: early 모드에서는 방향 필터와 노이즈 필터를 우회한다.
-     (매집 구간은 정의상 횡보라 노이즈 필터에 전멸하고, early 는 롱 전용이다)
-   - 신규 core 모듈은 `js/core/early-detect.js` 1개뿐(압축은 기존 bollinger().width 재사용).
-   - 설계/계획: `docs/superpowers/specs/2026-07-24-early-pump-detection-design.md`,
-     `docs/superpowers/plans/2026-07-24-early-pump-detection.md`
-   - subagent-driven 방식으로 10개 태스크 TDD 구현, 태스크마다 spec+quality 리뷰 통과.
+### 3. UI 리스킨
 
-6. **early 모드 실측 기반 튜닝 + 무증상 버그 2건 수정** — "임계값이 빡세서 후보가 안 나온다"
-   고 보고 숫자를 조정하려 했으나, 실측해 보니 **계산 자체가 죽어 있었다**. 감으로 고치지 말고
-   `docs/` 아래 방식대로 먼저 측정할 것.
-   - **버그 A — OI 72시간 변화가 항상 null**: `oiLimit: 72` 로 요청하면 정확히 72개가 오는데
-     72시간 "전" 값을 집으려면 73개가 필요(현재 봉 포함). 그래서 `change72h` 가 영구 null →
-     `oiBuildUp` **25점이 영구 0점**(최고 점수가 구조적으로 75점), OI 게이트도 조용히 무력화.
-     → `oiLimit: 80`.
-   - **버그 B — EMA200 기울기가 항상 false**: 4h 캔들 220개 요청 → 마감 219개 → EMA200 은
-     200봉 시드라 유효값이 20개뿐 → 20봉 전 값(`[idx-20]`)이 null → 기울기 판정 불가.
-     추세 게이트가 `종가>EMA200` 하나로 축소돼 후보 20개 중 12개(60%) 사망. → `4h: 250`.
-     (Binance klines 가중치는 101~500 동일 구간이라 비용 변화 없음)
-   - **OI 게이트 재조정**: 버그 A 를 고치자 이번엔 `oiChangeMinPct: 5` 가 후보 20개를 전멸시킴.
-     134종목 실측 결과 **압축된 코인과 OI 급증 코인은 거의 배타적** — 압축 통과 20종목의
-     OI 72h 최대가 +1.08%(중앙 -1.76%)인 반면, 전 종목 기준으론 30%가 +5% 이상이었다.
-     즉 시장 전체로는 현실적인 수치지만 압축 코인에는 도달 불가 → 시장 상태와 무관하게 항상 0개.
-     게이트는 "포지션 이탈 없음"(`oiChangeMinPct: 0`)까지만 보고 실제 증가폭은 채점으로 보상,
-     채점 만점 기준도 도달 가능한 값(`oiScoreFullPct: 10`, 하드코딩 30 을 config 로 이동).
-   - **early 최소 점수 분리** (`STRICTNESS_LEVELS[].earlyMinScore`, `minScoreFor()`): early 점수는
-     "얼마나 터지기 직전인가" 사다리라 1 매집은 박스 중앙(위치≈0.4)이라 `rangePosition` 15점을
-     구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+). reversal 기본 컷 55 를 그대로
-     쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다. 두 모드는 척도가 달라 컷을 공유하면 안 됨.
-   - 결과: early 후보 **0개 → 4개**(ADA/VIRTUAL/LIT/LDO, 46~52점 "1 매집"), reversal 회귀 없음.
-   - 회귀 테스트 3개 추가. 옛 설정값(72/220)으로 되돌리면 실제로 실패하는 것까지 확인했다
-     (통과만 하는 무의미한 테스트가 아님).
+- 사이드바·톱바·카드 중심 레이아웃으로 리스킨했다. 계산 계약은 유지했다.
 
-7. **압축 게이트 완화 + 강도 선택기 early 연결** — `squeezePctMax: 30 → 60`.
-   - 30 이 좁았던 이유 둘: (a) **3단계 돌파는 정의상 압축이 이미 풀린 상태**라 좁은 게이트가
-     정상 돌파 후보를 막고 있었다(실측 LINKUSDT 백분위 48 — 박스 상단 돌파 중인데 차단).
-     (b) 압축 점수가 `25*(1-min(백분위,50)/50)` 이라 백분위 50 이상은 어차피 0점 →
-     게이트로 또 막는 건 이중 차단. **게이트는 넓게, 순위는 점수로**가 맞다.
-   - 실측 스윕(표시 후보 수): 30→3, 40→3, 50→4, 60→5, 70→6, 100→6. 60 이후 이득 없어 60 채택.
-   - **중요 — 게이트는 더 이상 병목이 아니다**: OI·추세 게이트를 *둘 다 완전히 제거*해도
-     표시 개수는 5개 그대로였다(단계 통과는 5→23으로 늘지만 추가분이 전부 0~33점이라
-     점수 컷에서 걸림). 200선 아래 + OI 감소 코인은 `trendReclaim`(15) + `oiBuildUp`(25)에서
-     40점을 구조적으로 잃기 때문. 즉 후보를 더 늘리려면 **품질을 낮추는 선택**이 필요하다.
-   - 지난 커밋에서 early 가 `minScore` 를 무시하게 만들어 "채점 강도" 선택기가 early 에서
-     죽은 컨트롤이 됐던 것도 같이 마무리 — 강도 단계마다 `earlyMinScore`(25/32/40/50/60)를
-     두고 `minScoreFor()` 가 단계를 따라가게 했다. 실측: 강도1→5, 3→5, 4→3, 5→0개.
-     (1~3 이 같은 이유는 위처럼 단계 판정에서 이미 5개로 막혀 점수 컷이 병목이 아니기 때문)
-   - 결과: 후보 20→32, 표시 4→5, **"3 돌파" 단계가 처음으로 등장**. reversal 회귀 없음.
+### 4. 조기 포착 모드
+
+- `scanMode: reversal | early`를 추가했다.
+- early는 4시간봉 변동성 압축, 거래량 고갈, OI와 장기 추세를 이용해
+  `1 매집 → 2 임박 → 3 돌파`로 분류한다.
+- early는 롱 전용이고, 중형 중심 유니버스를 사용하며 방향·노이즈 필터를 우회한다.
+- 설계 기록:
+  - `docs/superpowers/specs/2026-07-24-early-pump-detection-design.md`
+  - `docs/superpowers/plans/2026-07-24-early-pump-detection.md`
+
+### 5. early 데이터 창과 OI 수정
+
+- `oiLimit: 72`로는 현재 표본을 포함한 72시간 전 값이 부족해 72시간 변화가 null이던
+  문제를 해결하기 위해 OI 요청을 80개로 늘렸다.
+- 4시간봉 220개에서 EMA200 기울기 비교 표본이 부족하던 문제를 250개 요청으로 해결했다.
+- OI 공통 게이트는 비감소(`oiChangeMinPct: 0`)로 두고 증가폭은 설정 기반 점수로 반영한다.
+- early 최소 컷은 reversal 최소 점수와 분리해 채점 강도별 `earlyMinScore`를 사용한다.
+
+### 6. early 압축 역할 분리와 fail-closed
+
+- OI 조회 전 후보 선별은 압축 백분위 60 이하까지 허용한다.
+- `1 매집`은 30 이하, `2 임박`은 15 이하로 분리한다. 확인된 돌파는 압축이 풀리는
+  특성을 고려하되 박스·거래량·OI 공통 게이트와 추격 방지 상한을 유지한다.
+  장기 추세 회복은 매집·임박 단계 조건이며 돌파 단계의 공통 게이트는 아니다.
+- OI 변화는 배열 위치가 아니라 최신 표본 기준 72/24/12시간 목표 timestamp에 가장
+  가까운 표본으로 계산하며 허용오차 밖이면 자료 부족으로 처리한다.
+- OI 또는 EMA200·ATR 등 필수 자료가 부족하거나 비정상이면 early 후보를 만들지 않는다.
+  펀딩비는 보조 과열 정보이므로 누락만으로 제외하지 않는다.
+- 후보 50개 상한 전 확인된 돌파를 우선하고, 이후 압축 강도와 심볼로 안정 정렬한다.
+
+### 7. early 품질 점수와 UI 정합
+
+- early 점수는 `매집 → 임박 → 돌파` 진행도가 아니라 압축·OI·거래량·박스 위치·추세의
+  근거 품질이다. 단계와 점수를 서로 환산하지 않는다.
+- early 전용 중립 등급(`초기 관찰`, `관찰 후보`, `근거 양호`, `근거 많음`)을 사용한다.
+- early 모드에서는 수동 `최소 셋업 점수`를 숨기고, 채점 강도에 따른 실제
+  `조기 포착 품질 컷`을 읽기 전용으로 표시한다. reversal에서는 기존 입력을 복원한다.
+
+### 8. QAR/Pine 판정 정합성 v3.4
+
+- reversal의 무근거 후보를 `0 근거 부족`으로 분리하고 초기 근거가 2개 이상일 때만
+  `1 관찰 초기`를 부여한다.
+- 보통 흡수와 강한 흡수의 가점을 분리하고, `5 늦음·추격 금지`는 사용자가 5단계를
+  명시적으로 선택한 경우에만 표시한다.
+- UI 용어를 `셋업 점수`와 `진행 단계`로 통일했다.
+- Pine v3.3은 보존하고 v3.4 사본을 추가했다. QAR 링크는 심볼과 15분봉만 전달한다.
+  reversal은 독립 차트 정합 확인, early는 별도 관찰이며 점수·단계는 Pine으로 전달하지 않는다.
+- 정합 PRD: `docs/superpowers/specs/2026-07-27-qar-pine-alignment-prd.md`
+
+### 9. 분기 통합
+
+- `origin/main`의 early 튜닝과 로컬 `main`의 QAR/Pine v3.4 이력을 별도 브랜치에서
+  두 부모 병합으로 통합한다.
+- 승인 PRD: `docs/superpowers/specs/2026-07-27-claude-early-integration-prd.md`
+- Pine v3.3/v3.4 소스 로직은 통합 중 변경하지 않는다.
+- 원격 push와 로그인된 TradingView 저장본 수정은 이 작업의 범위가 아니다.
 
 ## 검증 상태
 
-- **테스트 90/90 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
-  goldenCross, noise, early, repaint, refresh 9개 스위트)
-- **라이브 Binance API로 실제 스캔 여러 번 검증** — 롱/숏/양방향 전부 확인,
-  콘솔 에러 0, RR 폭발 버그도 라이브에서 재현 후 수정 확인(수정 전 1:73M → 수정 후 1:16)
-- **조기 포착 모드 라이브 검증** — early 스캔 526종목→150 1차→14 후보, 결과 전부
-  "1 매집" 단계로 정상 표시(early 라벨·early 신호·박스 기반 진입/손절/목표),
-  reversal 모드로 되돌려 회귀 없음 확인, 콘솔 에러 0.
+- 통합 전 `origin/main`은 `90/90`, 로컬 QAR/Pine `deecc31`은 `100/100`이었고,
+  중복을 제외한 병합 기초 기대치는 `104`개였다.
+- 현재 통합본 자동 테스트는 `118/118` 통과했다. 전체 JavaScript `node --check`와
+  reversal/early 순수 함수 스모크, 충돌 마커 검사도 통과했다. byte-preserved Pine 두 파일을
+  제외한 staged `git diff --check`도 통과했다. 전체 staged 검사는 Pine 원본의 기존 공백
+  주석 6줄을 보고하지만 `deecc31` Git blob 보존을 위해 해당 줄은 정규화하지 않았다.
+- 1280×760 headless Chromium에서 reversal stage 5 상태에서 early로 전환해 단계 필터가
+  `전체`로 정상화되고 수동 점수 입력이 숨겨지며 품질 컷 `40+`가 표시됨을 확인했다.
+  페이지 오류와 4xx 응답은 0건이었다.
+- Pine v3.3/v3.4는 로컬 QAR/Pine 커밋 `deecc31`의 Git blob과 동일함을 확인했다.
+- TradingView 실차트에서 새 롱·숏 후보와 실제 알림 전달을 관찰하는 검증은 아직 남아 있다.
+
+## 과거 실측 스냅샷 주의
+
+아래 수치는 **2026-07-27 통합 전 코드와 당시 시장에서 얻은 일회성 관찰값**이다.
+현재 후보 수·성과·병목을 보장하지 않으며, 통합본에서는 고정 기간·유니버스로 다시 측정해야 한다.
+
+- OI/EMA 데이터 창 수정 전후 관찰에서 early 표시 후보가 0개에서 4개로 바뀐 적이 있다.
+- 압축 선별 상한 스윕에서 30/40/50/60/70/100에 대해 표시 수가 3/3/4/5/6/6이었던 적이 있다.
+- 해당 관찰은 임계값의 성과 우위를 증명하지 않으며 승률·상승 확률 자료가 아니다.
 
 ## 재개 방법
 
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (90/90 나와야 정상)
-python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
+node tests/run.js
+python -m http.server 8123
 # 브라우저에서 http://localhost:8123/ 접속
 ```
 
-배포는 자동 — `main`에 push하면 GitHub Pages가 재빌드함. 별도 빌드 스텝 없음.
+`main`에 push하면 GitHub Pages가 자동 재배포된다. 별도 빌드 단계는 없다.
 
-## 파일 구조 (46개 파일)
+## 주요 파일
 
-```
-index.html, manifest.webmanifest, sw.js, README.md, PROGRESS.md(이 파일)
+```text
+index.html, manifest.webmanifest, sw.js, README.md, PROGRESS.md
 css/style.css
 js/
   main.js, config.js, state.js
   api/binance.js
-  core/  indicators.js volume-analysis.js market-structure.js liquidity.js
-         fvg.js order-block.js risk-reward.js scoring.js
-         golden-cross-retest.js noise-filter.js early-detect.js
-  scanner/  prefilter.js deep-scanner.js scan-controller.js
-  ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
+  core/ indicators.js volume-analysis.js market-structure.js liquidity.js
+        fvg.js order-block.js risk-reward.js scoring.js
+        golden-cross-retest.js noise-filter.js early-detect.js
+  scanner/ prefilter.js deep-scanner.js scan-controller.js
+  ui/ dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
 tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
   golden-cross.test.js noise.test.js early-detect.test.js
-  repaint.test.js refresh.test.js
+  repaint.test.js refresh.test.js settings.test.js tradingview.test.js
+tradingview/
+  easy_market_flow_v3_3.pine easy_market_flow_v3_4.pine VERIFY.md
+docs/superpowers/specs/
+  2026-07-27-qar-pine-alignment-prd.md
+  2026-07-27-claude-early-integration-prd.md
 ```
 
-핵심 진입점: [config.js](js/config.js)(모든 가중치·필터·TTL 조정 지점),
-[scan-controller.js](js/scanner/scan-controller.js)(파이프라인 순서),
-[deep-scanner.js](js/scanner/deep-scanner.js)(신호 조립 → 롱/숏),
-[scoring.js](js/core/scoring.js)(흡수·단계·점수).
+핵심 진입점:
 
-## 앞으로 할 수 있는 것 (우선순위 순, 아무것도 확정 아님)
+- `js/config.js`: 가중치·필터·TTL
+- `js/scanner/scan-controller.js`: 스캔 파이프라인
+- `js/scanner/prefilter.js`: 모드별 1차 후보 선별
+- `js/scanner/deep-scanner.js`: reversal 멀티타임프레임 분석
+- `js/core/early-detect.js`: early 단계·품질 계산
+- `js/core/scoring.js`: reversal 단계·점수
 
-0. **early 후보를 더 늘리려면 (품질 저하를 감수하는 선택)** — OI·압축은 실측으로 맞췄다(6·7번).
-   현재 표시 5개이고, **남은 병목은 게이트가 아니라 점수**다. 더 늘리려면 아래 중 선택:
-   - **추세 게이트 제거** (`classifyEarlyStage` 의 `closeAboveEma200 || ema200SlopeOk`) —
-     후보 32개 중 20개를 죽인다. `trendReclaim` 15점으로 이미 채점에 반영돼 있어 게이트는
-     이중 차단이다(압축에 적용한 논리와 동일). 단 200선 아래 하락 정체 코인이 들어오므로
-     롱 전용 모드에서 위험이 늘어난다. 제거 시 단계통과 5→11, 강도1에서 표시 ~8개.
-   - **OI 게이트 완화** (`oiChangeMinPct: 0 → -3`) — 단계통과 5→9. 표시는 강도를 함께
-     낮춰야 늘어난다.
-   - **채점 강도 1~2단계** — 이미 UI 로 조절 가능(컷 25/32). 단 지금은 단계 판정에서 5개로
-     막혀 있어 강도만 낮춰선 안 늘어난다. 위 게이트 완화와 같이 써야 효과가 있다.
-   - `boxWidthMaxPct: 25` — 실측 중앙 23.6 (통과율 53%). 30~40 으로 풀 여지 있음.
-   - `volDryMax: 0.8` — 실측 중앙 0.82 (통과율 46%). 적정, 손댈 필요 없음.
-   - 임계값 만질 때 반드시 실측부터. 측정 스크립트 패턴은 6번 참고
-     (앱 코드를 그대로 import 하고 `globalThis.localStorage` 만 shim 하면 Node 에서 돈다).
-   - TradingView 지표는 아직 reversal 로직 기준이라 early 모드 포팅도 후보.
-1. **점수 가중치 튜닝** — 실사용하면서 `config.js`의 `scoreWeights`/`penalties`가
-   실제 좋은 셋업을 잘 걸러내는지 관찰 필요. 현재는 최초 설계값 그대로.
-2. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.
-   Safe Area·터치 44px·팝업 차단 대응 코드는 넣어뒀지만 실기기 검증 안 됨.
-3. **WebSocket 실시간가 스트리밍** — 계획서 §5에 언급됐던 것. 지금은 REST 폴링만.
-   전체 재스캔 없이 최종가만 실시간 갱신하고 싶으면 이거 추가.
-4. **모바일 사이드바 드로어** — 지금은 900px 미만에서 사이드바가 CSS만으로
-   가로 스크롤 탭 바로 바뀜(별도 JS 상태 없음). 진짜 슬라이드 드로어 원하면 추가 JS 필요.
-5. **톱바 검색창** — 레퍼런스 디자인엔 있었으나 의도적으로 뺌(기능 없는 장식 안 만듦).
-   심볼 빠른 검색/필터 기능으로 실제 구현하고 싶으면 요청.
+## 다음 검토 우선순위
 
-## 지켜야 할 것 (설계 원칙 — README.md에도 있음)
+1. 통합본을 고정된 기간·유니버스·채점 강도로 반복 측정해 후보 수, 자료 부족률,
+   단계 분포와 사후 결과를 분리 기록한다.
+2. early 임계값은 한 번에 하나만 바꾸고 후보 수 증가와 품질 저하를 함께 비교한다.
+3. 실제 iPhone Safari에서 Safe Area, 터치, 팝업 차단 대응을 검증한다.
+4. Pine에 early를 포팅하려면 별도 PRD와 독립 성과 검증을 먼저 수행한다.
+5. WebSocket 가격 스트리밍과 모바일 사이드바 드로어는 별도 기능 범위로 다룬다.
 
-- 백엔드 없음, GitHub Pages 정적 실행
-- Binance 공개 API만, 개인 키 없음, 자동 주문 없음
-- 모든 계산은 마감 캔들 기준(리페인트 방지) — 미래 데이터 참조 금지
-- 가중치/필터는 `config.js`에서만 조정, 하드코딩 금지
-- 새 기능 추가 시 `tests/`에 계산 검증 최소 1개는 남길 것
+## 설계 원칙
+
+- 백엔드 없음, Binance 공개 데이터만 사용, 자동 주문 없음
+- 기본 계산은 마감 캔들 기준이며 미래 데이터를 참조하지 않음
+- 가중치·필터 임계값은 `js/config.js`에서 관리
+- 자료 부족은 좋은 신호로 대체하지 않음
+- 점수와 단계는 성공 확률·수익 보장이 아닌 규칙 기반 관찰 정보
+- 새 계산 계약에는 재현 가능한 회귀 테스트를 추가

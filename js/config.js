@@ -64,7 +64,8 @@ export const CONFIG = {
   },
 
   // ---- 조기 포착 모드 (early) ----
-  // 큰 상승 이전 흔적: 변동성 압축 + 거래량 고갈 + 미결제약정 증가.
+  // 큰 상승 이전 흔적: 변동성 압축 + 거래량 고갈 + OI 이력 확인/비감소.
+  // OI 증가폭은 공통 게이트가 아니라 근거 품질 점수로 가산한다.
   // 기준 시간봉 4h. 임계값은 실사용하며 조정하는 것을 전제로 한다.
   earlyDetect: {
     // 계산 파라미터
@@ -74,23 +75,20 @@ export const CONFIG = {
     volPriorN: 60,          // 비교 대상 이전 구간
     oiPeriod: "1h",         // openInterestHist period
     // 72시간 "전" 값을 집으려면 72개로는 부족하다(현재 봉 포함 73개 필요).
-    // 누락 레코드 여유까지 두고 80. 줄이면 change72h 가 조용히 null 이 되어
-    // oiBuildUp 25점이 영구 0점이 된다.
+    // timestamp 기준 탐색과 소량의 누락 여유를 위해 80개를 요청한다.
     oiLimit: 80,
+    oiTargetToleranceMs: 90 * 60 * 1000, // 목표 시각에서 ±90분 안의 OI 표본만 인정
     // 유니버스 (중형 중심)
     minQuoteVolume: 5_000_000,
     topByVolume: 200,
     excludeMajors: ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE"],
     keepMax: 50,
-    // 1단계 매집
+    // 후보 선별과 1단계 매집의 압축 기준을 분리한다.
+    // 돌파는 압축이 일부 풀릴 수 있어 1차 후보에는 60까지 허용하지만,
+    // 1단계 "매집"은 실제 압축 점수가 남는 30 이하만 인정한다.
     boxWidthMaxPct: 25,     // 박스 폭 이 % 이하
-    // 압축 백분위 상한. 30 은 두 가지 이유로 지나치게 좁았다.
-    //  (1) 3단계 돌파는 정의상 압축이 이미 풀린 상태라, 좁은 게이트가 정상 돌파 후보를 막았다
-    //      (실측: LINKUSDT 백분위 48 — 박스 상단 돌파 중인데 차단됨).
-    //  (2) 압축 점수가 25*(1-min(백분위,50)/50) 이라 백분위 50 이상은 어차피 0점이다.
-    //      게이트를 풀어도 점수가 스스로 걸러내므로 이중으로 막을 필요가 없다.
-    // 실측 스윕(표시 후보 수): 30→3, 40→3, 50→4, 60→5, 70→6, 100→6. 60 이후는 이득 없음.
-    squeezePctMax: 60,
+    prefilterSqueezePctMax: 60, // OI 조회 전 후보 선별 상한(돌파 후보 포함)
+    squeezePctMax: 30,          // 1단계 매집 압축 상한
     volDryMax: 0.8,         // 거래량 고갈 비율 이하
     // 72시간 OI 변화율 하한. 실측(134종목) 결과 "압축된 코인"과 "OI 급증 코인"은
     // 거의 배타적이었다 — 압축 통과 20종목의 OI 최대가 +1.08%(중앙 -1.76%)라
@@ -128,6 +126,16 @@ export const CONFIG = {
     thinLiquidity: -10,      // 거래대금 10M 미만
   },
 
+  // ---- 조기 포착 전용 품질 등급 ----
+  // 진행 단계(매집/임박/돌파)와 별개이며 성공 확률을 뜻하지 않는다.
+  earlyGrades: [
+    { min: 75, label: "근거 많음", key: "strong" },
+    { min: 60, label: "근거 양호", key: "watch" },
+    { min: 40, label: "관찰 후보", key: "observe" },
+    { min: 25, label: "초기 관찰", key: "weak" },
+    { min: 0, label: "제외", key: "excluded" },
+  ],
+
   // ---- 시장구조 엔진 ----
   structure: {
     internalPivot: 2,   // 좌우 2~3 봉
@@ -156,6 +164,12 @@ export const CONFIG = {
   // ---- 1시간봉 EMA200 밀착 판정 ----
   // 1h 종가가 200일선에서 ATR * 이 배수 이내면 "200선 밀착"으로 표시.
   near1hEma200AtrRatio: 0.5,
+
+  // ---- 점수 판정 규칙 ----
+  scoringRules: {
+    stage1MinEvidence: 2,       // reversal 1단계에 필요한 독립 초기 근거 수
+    normalAbsorptionRatio: 0.6, // 보통 흡수는 흡수 가중치의 60%
+  },
 
   // ---- 점수 가중치 (합계 100) ----
   scoreWeights: {
@@ -207,7 +221,7 @@ export const CONFIG = {
 
   // ---- 멀티타임프레임 캔들 요청 수 ----
   klinesLimit: {
-    // 4h 는 EMA200 기울기(200봉 시드 + 20봉 전 비교)까지 필요 → 마감 기준 최소 221개.
+    // 4h 는 EMA200 기울기(200봉 시드 + 20봉 전 비교)까지 필요 → 마감 기준 최소 220개.
     // 220 이면 유효 EMA200 이 20개뿐이라 기울기가 조용히 항상 false 가 된다.
     // (Binance klines 가중치는 101~500 구간이 동일해 250 으로 올려도 비용 같음)
     "4h": 250,
@@ -235,10 +249,8 @@ export const CONFIG = {
 
 // ---- 채점 강도 5단계 (§13 사용자 조정 — 가중치는 그대로 두고 감점 세기 + 최소 점수만 단계별로 스케일) ----
 // 3단계 = CONFIG.penalties/minListScore 원본값. 1단계로 갈수록 덜 걸러냄(코인 더 많이 나옴).
-// earlyMinScore 는 조기 포착 모드용 별도 컷 — 두 모드의 점수 척도가 다르기 때문이다.
-// early 점수는 "얼마나 터지기 직전인가" 사다리라 1 매집은 박스 중앙(위치≈0.4)이라
-// rangePosition 15점을 구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+).
-// reversal 컷(55~75)을 그대로 쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다.
+// earlyMinScore 는 조기 포착 모드의 근거 품질 컷이다. 매집/임박/돌파 진행 단계와는
+// 독립이며 성공 확률을 뜻하지 않는다. UI에서는 early일 때 이 실제 컷만 표시한다.
 export const STRICTNESS_LEVELS = [
   { level: 1, label: "1 · 아주 널널하게 (코인 많이)", minScore: 30, earlyMinScore: 25,
     penalties: { overExtended15m: -5, farFromLowAtr: -4, strongResistanceAbove: -3, shortTargetDistance: -3, tooLowVolume: -4, strongDowntrend4h: -3, newListingThin: -2, poorRiskReward: -4 } },
@@ -248,7 +260,7 @@ export const STRICTNESS_LEVELS = [
     penalties: { overExtended15m: -12, farFromLowAtr: -10, strongResistanceAbove: -8, shortTargetDistance: -8, tooLowVolume: -10, strongDowntrend4h: -8, newListingThin: -6, poorRiskReward: -10 } },
   { level: 4, label: "4 · 엄격하게", minScore: 65, earlyMinScore: 50,
     penalties: { overExtended15m: -16, farFromLowAtr: -13, strongResistanceAbove: -10, shortTargetDistance: -10, tooLowVolume: -13, strongDowntrend4h: -10, newListingThin: -8, poorRiskReward: -13 } },
-  { level: 5, label: "5 · 아주 엄격하게 (확실한 것만)", minScore: 75, earlyMinScore: 60,
+  { level: 5, label: "5 · 아주 엄격하게 (후보 적게)", minScore: 75, earlyMinScore: 60,
     penalties: { overExtended15m: -19, farFromLowAtr: -16, strongResistanceAbove: -13, shortTargetDistance: -13, tooLowVolume: -16, strongDowntrend4h: -13, newListingThin: -10, poorRiskReward: -16 } },
 ];
 export function strictnessPreset(level) {

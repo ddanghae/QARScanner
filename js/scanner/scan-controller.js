@@ -5,7 +5,10 @@
 import { CONFIG, minScoreFor } from "../config.js";
 import { state, emit } from "../state.js";
 import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll } from "../api/binance.js";
-import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
+import {
+  stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates,
+  excludeMajors, stage3EvaluateEarly, prioritizeEarlyCandidates,
+} from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
 import { buildEarlyResult } from "../core/early-detect.js";
 
@@ -78,10 +81,7 @@ async function runEarlyPipeline(universe, now) {
     const closed = k4h.slice(0, state.settings.includeRealtimeCandle ? k4h.length : -1);
     return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
   });
-  let candidates = evaluated
-    .filter((x) => x.res?.pass)
-    .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
-    .slice(0, e.keepMax);
+  const candidates = prioritizeEarlyCandidates(evaluated, e.keepMax);
   state.candidates = candidates.map((x) => x.item);
   emit("scan:candidates", { count: candidates.length });
   if (abortToken.aborted) return null;

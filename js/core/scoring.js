@@ -26,7 +26,7 @@ export function estimateAbsorption(sig, dir = "long") {
 
 // ---------- §12 상승 초기 단계 분류 ----------
 // 1 매집 → 2 유동성 회수 → 3 구조전환 초기 → 4 진입 구간 → 5 추격 금지
-export function classifyStage(sig) {
+export function classifyStage(sig, cfg = null) {
   // 5단계 추격 금지 먼저 (과열/급등)
   if (
     sig.change15mOverExtended ||
@@ -63,8 +63,18 @@ export function classifyStage(sig) {
   ) {
     return stage(2, "liquidity_grab", "유동성 회수", "green");
   }
-  // 1단계 매집 (기본)
-  return stage(1, "accumulation", "관찰 초기", "blue");
+  // 1단계 관찰 초기 — 근거 부족을 매집으로 오인하지 않도록 최소 2개 축을 요구한다.
+  const earlyEvidence = [
+    sig.shockAndRsi,
+    sig.nearExtreme,
+    sig.volumeReacted,
+    sig.cvdImproved || sig.deltaImproved,
+    sig.fvgCreated || sig.obCreated,
+  ].filter(Boolean).length;
+  const stage1MinEvidence = cfg?.scoringRules?.stage1MinEvidence ?? 2;
+  if (earlyEvidence >= stage1MinEvidence) return stage(1, "accumulation", "관찰 초기", "blue");
+
+  return stage(0, "insufficient", "근거 부족", "muted");
 }
 function stage(n, key, label, badge) {
   return { stage: n, key, label, badge };
@@ -105,7 +115,14 @@ export function scoreCandidate(sig, absorption, stageInfo, cfg, dir = "long") {
   add(sig.goodLiquidity, w.volumeLiquidity, "volumeLiquidity", "거래대금과 유동성");
   add(sig.lowSweepValid, w.lowLiquiditySweep, "lowLiquiditySweep", L.lowLiquiditySweep);
   add(sig.sweepRecovered, w.sweepPriceRecovery, "sweepPriceRecovery", L.sweepPriceRecovery);
-  add(absorption.level !== "insufficient", w.sellAbsorption, "sellAbsorption", L.sellAbsorption);
+  const normalAbsorptionRatio = cfg.scoringRules?.normalAbsorptionRatio ?? 0.6;
+  const absorptionRatio = absorption.level === "strong" ? 1 : absorption.level === "normal" ? normalAbsorptionRatio : 0;
+  const absorptionGot = w.sellAbsorption * absorptionRatio;
+  if (absorptionGot) score += absorptionGot;
+  breakdown.push({
+    key: "sellAbsorption", label: L.sellAbsorption, weight: w.sellAbsorption,
+    got: absorptionGot, hit: absorptionGot > 0,
+  });
   add(sig.structureShift1h, w.structureShift1h, "structureShift1h", "1시간봉 구조전환");
   add(sig.fvgObOverlap, w.fvgObOverlap, "fvgObOverlap", "15분봉 FVG·OB 중첩");
   add(sig.volumeDeltaShift, w.volumeDeltaShift, "volumeDeltaShift", "거래량 및 Delta 전환");

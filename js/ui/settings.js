@@ -8,7 +8,6 @@ import { toast } from "./notifications.js";
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
 const CHECK_BINDINGS = [
   { key: "showFavoritesOnly", ids: ["filter-favorites-only"] },
-  { key: "excludeChaseBan", ids: ["filter-exclude-chase", "set-exclude-chase"] },
   { key: "excludeNewListing", ids: ["filter-exclude-new", "set-exclude-new"] },
   { key: "goldenCrossOnly", ids: ["filter-golden-cross", "set-golden-cross"] },
   { key: "near1hEma200Only", ids: ["filter-near-ema200", "set-near-ema200"] },
@@ -21,6 +20,7 @@ const REALTIME_IDS = ["set-realtime-candle"];
 export function applyFilters(results) {
   const s = state.settings;
   const early = s.scanMode === "early";
+  const stage5Explicit = !early && String(s.stageFilter) === "5";
   let list = results.slice();
 
   // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
@@ -30,8 +30,8 @@ export function applyFilters(results) {
   list = list.filter((r) => r.score >= cut);
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
-  // 추격 금지(5단계) 제외
-  if (s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  // 추격 금지(5단계)는 직접 고른 경우에만 노출한다. 레거시 체크 설정과 무관한 고정 계약이다.
+  if (!stage5Explicit) list = list.filter((r) => r.stage.stage !== 5);
   // 신규 종목 제외
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
@@ -56,9 +56,20 @@ export function applyFilters(results) {
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
+export function scoreControlModel(settings) {
+  const early = settings?.scanMode === "early";
+  return {
+    early,
+    manualMinScoreVisible: !early,
+    effectiveCut: minScoreFor(settings),
+  };
+}
+
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
-  bindSelect("filter-scanmode", "scanMode");
+  // 모드 전환은 점수 컨트롤과 단계 선택지를 즉시 다시 그려야 한다.
+  // dashboard의 filters:apply 구독 여부에 의존하면 독립 초기화/테스트에서 UI가 뒤처진다.
+  bindSelect("filter-scanmode", "scanMode", null, () => syncControls());
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-dropbasis", "dropBasis");
@@ -129,11 +140,12 @@ export function initSettingsUI() {
   applyDarkMode();
 }
 
-function bindSelect(id, key, cast) {
+function bindSelect(id, key, cast, after) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener("change", () => {
     updateSettings({ [key]: cast ? cast(el.value) : el.value });
+    if (after) after(el.value);
     emit("filters:apply");
   });
 }
@@ -156,12 +168,12 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
-  syncStageLabels(s.scanMode);
+  syncStageOptions(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
+  syncScoreControls(s);
   setVal("filter-dropbasis", s.dropBasis);
   setVal("filter-timeframe", s.timeframeFocus);
-  setVal("filter-stage", s.stageFilter);
   setVal("filter-sort", s.sort);
   for (const { key, ids } of CHECK_BINDINGS) for (const id of ids) setChk(id, s[key]);
   for (const id of AUTOREFRESH_IDS) setChk(id, s.autoRefresh);
@@ -174,17 +186,51 @@ export function syncControls() {
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
 
-// 단계 필터의 선택지 문구를 모드에 맞게 바꾼다(값은 그대로 1~5).
-const STAGE_LABELS = {
-  reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
-  early: ["전체", "1 매집", "2 임박", "3 돌파", "—", "—"],
+function syncScoreControls(settings) {
+  const model = scoreControlModel(settings);
+  const manualWrap = document.getElementById("filter-minscore-wrap");
+  const manualSelect = document.getElementById("filter-minscore");
+  const earlyCut = document.getElementById("filter-early-cut");
+  const earlyCutValue = document.getElementById("filter-early-cut-value");
+  if (manualWrap) manualWrap.hidden = !model.manualMinScoreVisible;
+  if (manualSelect) manualSelect.disabled = !model.manualMinScoreVisible;
+  if (earlyCut) earlyCut.hidden = !model.early;
+  if (earlyCutValue) earlyCutValue.textContent = `${model.effectiveCut}+`;
+}
+
+// 진행 단계 필터는 모드별 실제 단계만 노출한다. early의 기존 1~3단계 의미는 유지한다.
+const STAGE_OPTIONS = {
+  reversal: [
+    ["all", "전체"],
+    ["0", "0 근거 부족"],
+    ["1", "1 관찰 초기"],
+    ["2", "2 유동성 회수"],
+    ["3", "3 구조전환"],
+    ["4", "4 진입 구간"],
+    ["5", "5 늦음·추격 금지"],
+  ],
+  early: [
+    ["all", "전체"],
+    ["1", "1 매집"],
+    ["2", "2 임박"],
+    ["3", "3 돌파"],
+  ],
 };
-function syncStageLabels(mode) {
+function syncStageOptions(mode) {
   const el = document.getElementById("filter-stage");
   if (!el) return;
-  const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
-  for (let i = 0; i < el.options.length && i < labels.length; i++) {
-    el.options[i].textContent = labels[i];
+  const options = STAGE_OPTIONS[mode] || STAGE_OPTIONS.reversal;
+  const requested = String(state.settings.stageFilter);
+  const selected = options.some(([value]) => value === requested) ? requested : "all";
+
+  el.innerHTML = options
+    .map(([value, label]) => `<option value="${value}">${label}</option>`)
+    .join("");
+  el.value = selected;
+
+  // 다른 모드에서만 존재하는 단계를 들고 전환하면 빈 목록이 되므로 전체로 정상화한다.
+  if (selected !== requested) {
+    updateSettings({ stageFilter: selected });
   }
 }
 

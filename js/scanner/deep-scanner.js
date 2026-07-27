@@ -92,8 +92,11 @@ function buildLongSignals(item, a4, a1, a15, a5, pre) {
 
   // 급락 + 과매도
   const rsi1h = last(a1.ind.rsi);
-  const dropAndOversold = (pre.change6h <= CONFIG.candidateFilter.drop6hMax || pre.nearLowPct <= CONFIG.candidateFilter.nearLowPct)
+  const hasRecentExtreme = a1.liq.lows.length > 0;
+  const nearExtreme = hasRecentExtreme && pre.nearLowPct <= CONFIG.candidateFilter.nearLowPct;
+  const dropAndOversold = (pre.change6h <= CONFIG.candidateFilter.drop6hMax || nearExtreme)
     && rsi1h != null && rsi1h <= 50;
+  const shockAndRsi = pre.change6h <= CONFIG.candidateFilter.drop6hMax && rsi1h != null && rsi1h <= 50;
 
   // 유동성/거래대금
   const goodLiquidity = item.quoteVolume >= CONFIG.prefilter.minQuoteVolume * 1.5;
@@ -142,7 +145,7 @@ function buildLongSignals(item, a4, a1, a15, a5, pre) {
     direction: "long",
     price,
     // 점수 신호
-    dropAndOversold, goodLiquidity, lowSweepValid, sweepRecovered,
+    dropAndOversold, shockAndRsi, nearExtreme, goodLiquidity, lowSweepValid, sweepRecovered,
     structureShift1h, fvgObOverlap, volumeDeltaShift, entryTrigger5m, riskRewardOk,
     // 단계 신호
     lowSweep, volumeReacted, cvdImproved, deltaImproved,
@@ -234,8 +237,11 @@ function buildShortSignals(item, a4, a1, a15, a5, pre) {
   const volumeReacted = a15.volTrend.avgRel >= 1.0;
 
   const rsi1h = last(a1.ind.rsi);
-  const dropAndOversold = (pre.change6h >= CONFIG.candidateFilter.surge6hMin || pctFromRecentHigh(a1) <= CONFIG.candidateFilter.nearHighPct)
+  const hasRecentExtreme = a1.liq.highs.length > 0;
+  const nearExtreme = hasRecentExtreme && pctFromRecentHigh(a1) <= CONFIG.candidateFilter.nearHighPct;
+  const dropAndOversold = (pre.change6h >= CONFIG.candidateFilter.surge6hMin || nearExtreme)
     && rsi1h != null && rsi1h >= 50; // 급등 + 과매수
+  const shockAndRsi = pre.change6h >= CONFIG.candidateFilter.surge6hMin && rsi1h != null && rsi1h >= 50;
 
   const goodLiquidity = item.quoteVolume >= CONFIG.prefilter.minQuoteVolume * 1.5;
   const lastC = a15.candles[a15.candles.length - 1];
@@ -275,7 +281,7 @@ function buildShortSignals(item, a4, a1, a15, a5, pre) {
 
   return {
     direction: "short", price,
-    dropAndOversold, goodLiquidity, lowSweepValid, sweepRecovered,
+    dropAndOversold, shockAndRsi, nearExtreme, goodLiquidity, lowSweepValid, sweepRecovered,
     structureShift1h, fvgObOverlap, volumeDeltaShift, entryTrigger5m, riskRewardOk,
     lowSweep, volumeReacted, cvdImproved, deltaImproved,
     choch1h, choch15m: choch15, choch5m: choch5,
@@ -336,6 +342,7 @@ export async function deepAnalyze(item, settings) {
   // 신호 노이즈 — 촙 구간/저거래량 판정 (15m 기준). applyFilters 에서 걸러냄.
   const noise = evaluateNoise(noiseTf({ a4, a1, a15, a5 }), CONFIG);
   return {
+    scanMode: "reversal",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: sig.price,
@@ -374,8 +381,8 @@ function noiseTf({ a4, a1, a15, a5 }) {
 // 한 방향 점수 묶음 — 감점은 사용자 채점 강도(settings.penalties, §13 STRICTNESS_LEVELS) 있으면 그걸로 덮어씀
 function scoreSide(side, sig, settings) {
   const absorption = estimateAbsorption(sig, side);
-  const stageInfo = classifyStage(sig);
   const cfg = settings?.penalties ? { ...CONFIG, penalties: settings.penalties } : CONFIG;
+  const stageInfo = classifyStage(sig, cfg);
   const scored = scoreCandidate(sig, absorption, stageInfo, cfg, side);
   return { side, sig, absorption, stageInfo, scored };
 }

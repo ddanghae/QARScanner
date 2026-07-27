@@ -2,9 +2,9 @@
 // Stage 1 종목 수집 → Stage 2 24h 유동성 필터 → Stage 3 급락·초기 후보 필터.
 
 import { CONFIG, STABLE_BASES, LEVERAGED_RE } from "../config.js";
-import { rsi, bollinger } from "../core/indicators.js";
+import { rsi, bollinger, atr, last } from "../core/indicators.js";
 import { relativeVolume } from "../core/volume-analysis.js";
-import { boxRange, squeezePercentile, volDryRatio } from "../core/early-detect.js";
+import { boxRange, squeezePercentile, volDryRatio, isConfirmedEarlyBreakout } from "../core/early-detect.js";
 
 // ---- Stage 1: 거래 가능한 USDT 무기한 선물만 ----
 export function stage1Universe(symbols) {
@@ -147,22 +147,68 @@ export function stage3EvaluateEarly(item, k4h, cfg) {
   const squeezePct = squeezePercentile(widths, e.squeezeLookback);
   const volDry = volDryRatio(k4h, e.volRecentN, e.volPriorN);
 
-  const boxOk = box.boxWidthPct <= e.boxWidthMaxPct;
-  // 압축·고갈은 계산 불가(데이터 부족)면 통과시키고 정밀 단계에서 다시 본다.
-  const squeezeOk = squeezePct == null || squeezePct <= e.squeezePctMax;
-  const volOk = volDry == null || volDry <= e.volDryMax;
-  const pass = boxOk && squeezeOk && volOk;
+  const prevBox = boxRange(k4h.slice(0, -1), e.boxLookback);
+  const price = closes[closes.length - 1];
+  const breakoutLevel = prevBox?.boxHigh ?? null;
+  const breakoutClose = Number.isFinite(breakoutLevel) && price > breakoutLevel;
+  const runFromBreakoutPct = breakoutLevel > 0 ? ((price - breakoutLevel) / breakoutLevel) * 100 : Infinity;
+  const relVolArr = relativeVolume(k4h, 20);
+  const recentRel = relVolArr.slice(-3).filter((x) => Number.isFinite(x));
+  const relVol3 = recentRel.length === 3 ? recentRel.reduce((a, b) => a + b, 0) / 3 : null;
+  const atrArr = atr(k4h, cfg.indicators.atrPeriod);
+  const atrNow = last(atrArr);
+  const atrPrev = atrArr.length > 5 ? atrArr[atrArr.length - 6] : null;
+  const atrRising = Number.isFinite(atrNow) && Number.isFinite(atrPrev) && atrNow > atrPrev;
+  const breakoutReady = isConfirmedEarlyBreakout({
+    breakoutClose, relVol3, atrRising, runFromBreakoutPct,
+  }, cfg);
+
+  const gate = earlyPrefilterGate({ boxWidthPct: box.boxWidthPct, squeezePct, volDry }, cfg);
 
   return {
-    pass,
-    reason: pass ? "후보" : !boxOk ? "박스 넓음" : !squeezeOk ? "압축 부족" : "거래량 고갈 아님",
+    pass: gate.pass,
+    reason: gate.reason,
     boxWidthPct: box.boxWidthPct,
     squeezePct,
     volDry,
+    breakoutClose,
+    breakoutReady,
+    relVol3,
+    atrRising,
   };
+}
+
+export function earlyPrefilterGate(metrics, cfg) {
+  const e = cfg.earlyDetect;
+  const boxOk = Number.isFinite(metrics?.boxWidthPct) && metrics.boxWidthPct <= e.boxWidthMaxPct;
+  const squeezeOk = Number.isFinite(metrics?.squeezePct) && metrics.squeezePct <= e.prefilterSqueezePctMax;
+  const volOk = Number.isFinite(metrics?.volDry) && metrics.volDry <= e.volDryMax;
+  const pass = boxOk && squeezeOk && volOk;
+  return {
+    pass,
+    reason: pass ? "후보" : !boxOk ? "박스 넓음 또는 자료 부족"
+      : !squeezeOk ? "압축 부족 또는 자료 부족" : "거래량 고갈 아님 또는 자료 부족",
+  };
+}
+
+// 후보 상한에서 이미 확인된 돌파를 먼저 보존하고, 나머지는 압축이 강한 순으로 정렬한다.
+export function prioritizeEarlyCandidates(evaluated, keepMax) {
+  const limit = Number.isInteger(keepMax) && keepMax >= 0 ? keepMax : 0;
+  return evaluated
+    .filter((x) => x.res?.pass)
+    .sort((a, b) => {
+      const breakoutOrder = Number(Boolean(b.res.breakoutReady)) - Number(Boolean(a.res.breakoutReady));
+      if (breakoutOrder) return breakoutOrder;
+      const squeezeOrder = (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100);
+      if (squeezeOrder) return squeezeOrder;
+      const aSymbol = String(a.item?.symbol || "");
+      const bSymbol = String(b.item?.symbol || "");
+      return aSymbol < bSymbol ? -1 : aSymbol > bSymbol ? 1 : 0;
+    })
+    .slice(0, limit);
 }
 
 export default {
   stage1Universe, isNewListing, stage2Liquidity, stage3Evaluate, capCandidates,
-  excludeMajors, stage3EvaluateEarly,
+  excludeMajors, stage3EvaluateEarly, earlyPrefilterGate, prioritizeEarlyCandidates,
 };

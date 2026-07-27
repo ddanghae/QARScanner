@@ -4,11 +4,20 @@ import { suite, test, assert, eq } from "./harness.js";
 import { CONFIG, minScoreFor, strictnessPreset, STRICTNESS_LEVELS } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
-  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
+  classifyEarlyStage, earlyDataIssue, earlyExclusion, scoreEarly, earlyGradeFor, earlyPlan,
   buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
 import { candlesFromCloses } from "./fixtures.js";
-import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
+import {
+  stage2Liquidity, excludeMajors, stage3EvaluateEarly, prioritizeEarlyCandidates,
+  earlyPrefilterGate,
+} from "../js/scanner/prefilter.js";
+
+const HOUR_MS = 60 * 60 * 1000;
+
+function oiSeries(length = 80, value = (i) => 1000 + i) {
+  return Array.from({ length }, (_, i) => ({ time: i * HOUR_MS, oi: value(i) }));
+}
 
 // 1단계(매집) 조건을 모두 만족하는 기본 지표. 개별 테스트에서 필요한 값만 덮어쓴다.
 function baseMetrics(over = {}) {
@@ -17,8 +26,8 @@ function baseMetrics(over = {}) {
     squeezePct: 20, volDry: 0.7, relVol3: 0.9,
     oi: { change72h: 10, change12h: 3, prev12h: 2 },
     funding: 0.0001, change24h: 5, quoteVolume: 50_000_000,
-    closeAboveEma200: true, ema200SlopeOk: true,
-    breakoutClose: false, atrRising: false, runFromBreakoutPct: 0,
+    closeAboveEma200: true, ema200SlopeOk: true, ema200Ready: true,
+    breakoutClose: false, atrRising: false, atrReady: true, runFromBreakoutPct: 0,
     ...over,
   };
 }
@@ -39,11 +48,15 @@ export function run() {
 
   test("early 임계값 존재", () => {
     const e = CONFIG.earlyDetect;
-    for (const k of ["boxLookback", "squeezeLookback", "boxWidthMaxPct", "squeezePctMax",
+    for (const k of ["boxLookback", "squeezeLookback", "boxWidthMaxPct", "prefilterSqueezePctMax", "squeezePctMax",
       "volDryMax", "oiChangeMinPct", "squeezePctTight", "rangePosMin", "relVolMin",
-      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "oiDumpPct", "fundingMaxAbs"]) {
+      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "oiDumpPct", "fundingMaxAbs",
+      "oiScoreFullPct", "oiTargetToleranceMs"]) {
       assert(e[k] !== undefined, `earlyDetect.${k} 필요`);
     }
+    assert(e.squeezePctTight < e.squeezePctMax && e.squeezePctMax < e.prefilterSqueezePctMax,
+      "압축 경계는 임박 < 매집 < 후보 선별 순서");
+    assert(Number.isFinite(e.oiScoreFullPct) && e.oiScoreFullPct > 0, "OI 만점 기준은 양의 유한값");
   });
 
   test("박스 범위·폭·위치 계산", () => {
@@ -83,7 +96,7 @@ export function run() {
 
   test("OI 변화율 — 증가", () => {
     // 73개: 0번 100, 이후 선형 증가해서 마지막 200 → 72h 변화 +100%
-    const series = Array.from({ length: 73 }, (_, i) => ({ time: i, oi: 100 + (100 * i) / 72 }));
+    const series = Array.from({ length: 73 }, (_, i) => ({ time: i * HOUR_MS, oi: 100 + (100 * i) / 72 }));
     const r = analyzeOi(series);
     assert(Math.abs(r.change72h - 100) < 1e-6, `72h +100% (실제 ${r.change72h})`);
     assert(r.change12h > 0, "12h 증가");
@@ -92,8 +105,8 @@ export function run() {
   test("OI 변화율 — 가속 판정", () => {
     // 앞 구간은 완만, 최근 12h 가 급증
     const series = [];
-    for (let i = 0; i <= 60; i++) series.push({ time: i, oi: 100 });
-    for (let i = 61; i <= 72; i++) series.push({ time: i, oi: 100 + (i - 60) * 5 });
+    for (let i = 0; i <= 60; i++) series.push({ time: i * HOUR_MS, oi: 100 });
+    for (let i = 61; i <= 72; i++) series.push({ time: i * HOUR_MS, oi: 100 + (i - 60) * 5 });
     const r = analyzeOi(series);
     assert(r.change12h > r.prev12h, `최근 12h 가 이전 12h 보다 큼 (${r.change12h} > ${r.prev12h})`);
   });
@@ -108,6 +121,40 @@ export function run() {
     const r = analyzeOi([]);
     eq(r.change72h, null);
     eq(r.prev12h, null);
+  });
+
+  test("압축 백분위 — 최근 창에 NaN이 있으면 fail closed", () => {
+    eq(squeezePercentile([1, 2, NaN], 3), null, "NaN을 최강 압축으로 오인하지 않음");
+  });
+
+  test("OI 변화율 — 행 번호가 아니라 timestamp 기준", () => {
+    // 마지막은 79h, 72h 전은 7h. 중간 20h 한 행을 빼도 7h 표본을 사용해야 한다.
+    const series = oiSeries(80, (i) => 100 + i).filter((p) => p.time !== 20 * HOUR_MS);
+    const r = analyzeOi(series, CONFIG.earlyDetect.oiTargetToleranceMs);
+    const expected = ((179 - 107) / 107) * 100;
+    assert(Math.abs(r.change72h - expected) < 1e-9, `timestamp 7h 기준 (${r.change72h})`);
+  });
+
+  test("OI 변화율 — 목표 시각 근처 표본이 없으면 null", () => {
+    const series = oiSeries(80).filter((p) => ![6, 7, 8].includes(p.time / HOUR_MS));
+    const r = analyzeOi(series, CONFIG.earlyDetect.oiTargetToleranceMs);
+    eq(r.change72h, null, "72h 목표에서 2시간 이상 떨어지면 추정하지 않음");
+  });
+
+  test("OI 변화율 — 허용오차 경계와 역순 입력", () => {
+    const now = 100 * HOUR_MS;
+    const base = [
+      { time: now, oi: 200 },
+      { time: now - 12 * HOUR_MS, oi: 180 },
+      { time: now - 24 * HOUR_MS, oi: 160 },
+      { time: now - 72 * HOUR_MS + CONFIG.earlyDetect.oiTargetToleranceMs, oi: 100 },
+    ];
+    const atBoundary = analyzeOi(base, CONFIG.earlyDetect.oiTargetToleranceMs);
+    assert(atBoundary.change72h != null, "정확히 허용오차 경계면 통과");
+    const outside = base.map((p, i) => i === 3 ? { ...p, time: p.time + 1 } : p).reverse();
+    const pastBoundary = analyzeOi(outside, CONFIG.earlyDetect.oiTargetToleranceMs);
+    eq(pastBoundary.change72h, null, "허용오차 +1ms면 실패");
+    assert(pastBoundary.change12h != null, "역순 입력도 timestamp로 정렬");
   });
 
   test("1단계 매집 판정", () => {
@@ -133,6 +180,27 @@ export function run() {
     eq(s.key, "breakout");
   });
 
+  test("후보용 압축 60은 돌파만 허용하고 1단계 매집은 허용하지 않는다", () => {
+    const loose = baseMetrics({ squeezePct: 60 });
+    eq(classifyEarlyStage(loose, CONFIG), null, "압축 점수 0인 후보는 매집 아님");
+    const breakout = classifyEarlyStage({
+      ...loose, breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 5,
+    }, CONFIG);
+    eq(breakout.stage, 3, "동일 압축에서도 확인된 돌파는 3단계");
+  });
+
+  test("early 압축 경계 — 매집 30과 임박 15", () => {
+    eq(classifyEarlyStage(baseMetrics({ squeezePct: 30 }), CONFIG).stage, 1, "매집 30 포함");
+    eq(classifyEarlyStage(baseMetrics({ squeezePct: 30.01 }), CONFIG), null, "매집 30 초과 제외");
+    const imminentBase = {
+      rangePos: 0.97, relVol3: 1.2,
+      oi: { change72h: 10, change12h: 6, prev12h: 2 },
+    };
+    eq(classifyEarlyStage(baseMetrics({ ...imminentBase, squeezePct: 15 }), CONFIG).stage, 2, "임박 15 포함");
+    eq(classifyEarlyStage(baseMetrics({ ...imminentBase, squeezePct: 15.01 }), CONFIG).stage, 1,
+      "임박 15 초과는 매집으로 복귀");
+  });
+
   test("돌파했지만 이미 많이 오름 → 단계 없음", () => {
     const s = classifyEarlyStage(baseMetrics({
       breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 30,
@@ -144,11 +212,11 @@ export function run() {
     eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 90 }), CONFIG), null);
   });
 
-  test("OI 없어도(null) 1단계 통과 — 후보 유지", () => {
+  test("OI 없으면 1단계 후보를 만들지 않는다", () => {
     const s = classifyEarlyStage(baseMetrics({
       oi: { change72h: null, change12h: null, prev12h: null },
     }), CONFIG);
-    eq(s.stage, 1, "OI null 이면 OI 조건은 통과로 간주");
+    eq(s, null, "OI 자료 부족은 fail closed");
   });
 
   test("제외 — 이미 급등", () => {
@@ -165,10 +233,18 @@ export function run() {
     assert(earlyExclusion(baseMetrics({ funding: 0.005 }), CONFIG) !== null, "펀딩 0.5% 제외");
   });
 
-  test("제외 — OI·펀딩 null 이면 해당 조건 건너뜀", () => {
+  test("제외 — OI null 은 자료 부족, 펀딩 null 만 허용", () => {
     eq(earlyExclusion(baseMetrics({
       oi: { change72h: null, change12h: null, prev12h: null }, funding: null,
-    }), CONFIG), null, "null 이면 제외하지 않음");
+    }), CONFIG), "미결제약정 자료 부족");
+    eq(earlyExclusion(baseMetrics({ funding: null }), CONFIG), null, "보조 펀딩 자료만 없으면 유지");
+  });
+
+  test("필수 4시간 지표 준비 상태를 명시적으로 검사", () => {
+    eq(earlyDataIssue(baseMetrics()), null, "정상 지표");
+    eq(earlyDataIssue(baseMetrics({ relVol3: null })), "4시간 지표 자료 부족");
+    eq(earlyDataIssue(baseMetrics({ ema200Ready: false })), "4시간 지표 자료 부족");
+    eq(earlyDataIssue(baseMetrics({ atrReady: false })), "4시간 지표 자료 부족");
   });
 
   test("채점 — 조건 좋을수록 점수 높음(단조성)", () => {
@@ -190,6 +266,22 @@ export function run() {
     const oiItem = r.breakdown.find((b) => b.key === "oiBuildUp");
     eq(oiItem.got, 0, "OI 항목 0점");
     assert(r.score > 0, "다른 항목 점수는 남음");
+  });
+
+  test("채점 — 잘못된 OI 만점 설정에서도 NaN을 만들지 않는다", () => {
+    const cfg = { ...CONFIG, earlyDetect: { ...CONFIG.earlyDetect, oiScoreFullPct: 0 } };
+    const r = scoreEarly(baseMetrics(), cfg);
+    assert(Number.isFinite(r.score), `점수는 유한해야 함 (${r.score})`);
+  });
+
+  test("early 전용 등급은 표시 컷 후보를 제외로 표시하지 않는다", () => {
+    eq(earlyGradeFor(25, CONFIG).key, "weak", "강도 1 컷");
+    eq(earlyGradeFor(40, CONFIG).key, "observe", "기본 컷");
+    eq(earlyGradeFor(60, CONFIG).key, "watch", "엄격 컷");
+    for (const preset of STRICTNESS_LEVELS) {
+      assert(earlyGradeFor(preset.earlyMinScore, CONFIG).key !== "excluded",
+        `강도 ${preset.level} 표시 컷은 제외 등급이 아니어야 함`);
+    }
   });
 
   test("채점 — 감점 반영", () => {
@@ -231,17 +323,18 @@ export function run() {
 
   test("결과 조립 — 기존 결과 shape 을 채운다", () => {
     // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
-    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
+    const closes = Array.from({ length: 250 }, (_, i) => 100 + i * 0.01 + Math.sin(i / 5) * (5 * (1 - i / 250)));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 230 ? 100 : 50) });
     const item = { symbol: "TESTUSDT", baseAsset: "TEST", quoteVolume: 5e7, change24h: 2, newListing: false };
-    const r = buildEarlyResult(item, c, [], null, CONFIG);
-    if (r) {
-      for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
-        assert(r[k] !== undefined, `결과에 ${k} 필요`);
-      }
-      eq(r.direction, "long", "early 는 롱 전용");
-      assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+    const r = buildEarlyResult(item, c, oiSeries(), null, CONFIG);
+    assert(r, "충분한 이력과 정상 조건이면 결과가 생성되어야 함");
+    for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
+      assert(r[k] !== undefined, `결과에 ${k} 필요`);
     }
+    eq(r.scanMode, "early", "early 결과는 모드를 명시");
+    eq(r.direction, "long", "early 는 롱 전용");
+    assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+    assert(r.grade.key !== "excluded", "표시 후보는 early 전용 등급 사용");
   });
 
   test("리페인트 — 박스는 최근 60봉만 사용(창 밖 데이터 영향 없음)", () => {
@@ -314,15 +407,40 @@ export function run() {
     eq(stage3EvaluateEarly({ symbol: "ZUSDT" }, c, CONFIG).pass, false);
   });
 
+  test("early 1차 선별 — 박스만 계산되고 압축 이력이 부족해도 탈락", () => {
+    const closes = Array.from({ length: 100 }, (_, i) => 100 + Math.sin(i / 5));
+    const c = candlesFromCloses(closes, { spread: 0.05, vol: 100 });
+    const r = stage3EvaluateEarly({ symbol: "SHORTUSDT" }, c, CONFIG);
+    eq(r.pass, false, "필수 압축 이력 부족은 fail closed");
+  });
+
+  test("early 1차 선별 — 후보 압축 60 경계", () => {
+    const metrics = { boxWidthPct: 20, squeezePct: 60, volDry: 0.7 };
+    eq(earlyPrefilterGate(metrics, CONFIG).pass, true, "60 포함");
+    eq(earlyPrefilterGate({ ...metrics, squeezePct: 60.01 }, CONFIG).pass, false, "60.01 제외");
+  });
+
+  test("early 후보 상한은 확인된 돌파를 압축 후보보다 우선한다", () => {
+    const compressed = Array.from({ length: 50 }, (_, i) => ({
+      item: { symbol: `C${String(i).padStart(2, "0")}USDT` },
+      res: { pass: true, breakoutReady: false, squeezePct: 0 },
+    }));
+    const breakout = {
+      item: { symbol: "BREAKOUTUSDT" },
+      res: { pass: true, breakoutReady: true, squeezePct: 48 },
+    };
+    const ranked = prioritizeEarlyCandidates([...compressed, breakout], 50);
+    assert(ranked.some((x) => x.item.symbol === "BREAKOUTUSDT"), "돌파 후보가 cap 안에 남아야 함");
+    eq(ranked[0].item.symbol, "BREAKOUTUSDT", "돌파 후보 우선");
+  });
+
   // ---- 데이터 창이 lookback 을 못 덮으면 계산이 "조용히 null" 이 되는 계열 회귀 방지 ----
   // 실제로 두 건 다 발생했다: oiLimit=72 → change72h 영구 null(=oiBuildUp 25점 사장),
   // 4h limit=220 → EMA200 기울기 영구 false(=매집 후보 60% 사망).
 
   test("설정된 oiLimit 만큼 받으면 72시간 변화가 계산된다", () => {
     // 실제 API 가 주는 만큼(= oiLimit 개)만 있는 시계열
-    const series = Array.from({ length: CONFIG.earlyDetect.oiLimit }, (_, i) => ({
-      time: i * 3600_000, oi: 1000 + i,
-    }));
+    const series = oiSeries(CONFIG.earlyDetect.oiLimit);
     const r = analyzeOi(series);
     assert(r.change72h != null,
       `oiLimit=${CONFIG.earlyDetect.oiLimit} 로는 72시간 전 값을 못 집는다 → oiBuildUp 이 항상 0점`);
@@ -330,7 +448,7 @@ export function run() {
   });
 
   test("early 는 reversal 과 최소 점수 컷을 공유하지 않는다", () => {
-    // early 1 매집은 구조적으로 ~55 를 못 넘어 reversal 컷을 쓰면 항상 빈 결과가 된다
+    // 두 모드는 품질 점수 분포와 표시 목적이 달라 강도별 컷을 분리한다.
     eq(minScoreFor({ scanMode: "reversal", minScore: 55 }), 55, "reversal 은 사용자 설정 그대로");
     eq(minScoreFor({ scanMode: "early", minScore: 55, strictnessLevel: 3 }),
       strictnessPreset(3).earlyMinScore, "early 는 강도 단계별 자체 컷");

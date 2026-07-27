@@ -146,7 +146,7 @@ export async function getOpenInterestHist(symbol, period, limit) {
     if (!Array.isArray(raw)) return [];
     return raw.map((r) => ({ time: r.timestamp, oi: +r.sumOpenInterest }));
   } catch (e) {
-    // 신규 상장 등으로 데이터가 없으면 빈 배열 (후보를 죽이지 않는다)
+    // 신규 상장·일시 오류는 빈 배열. early 판정 계층에서 자료 부족으로 fail closed한다.
     console.warn(`미결제약정 조회 실패 (${symbol})`, e);
     return [];
   }

@@ -12,7 +12,7 @@ const defaultSettings = {
   direction: "long",         // "long" | "short" | "both"
   scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착)
   timeframeFocus: "15m",
-  stageFilter: "all",        // 1~5 단계 또는 all
+  stageFilter: "all",        // reversal 0~5, early 1~3 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
   favorites: [],             // 관심 종목 심볼 배열
@@ -22,7 +22,7 @@ const defaultSettings = {
   darkMode: false,
   includeRealtimeCandle: false, // 리페인트 방지: 기본은 마감 캔들만
   showFavoritesOnly: false,
-  excludeChaseBan: false,       // "추격 금지(5단계)" 제외
+  excludeChaseBan: false,       // 레거시 저장 설정 호환용(5단계 노출은 stageFilter만 제어)
   excludeNewListing: false,
   goldenCrossOnly: false,       // 골든크로스 리테스트(거부 캔들 확인)만 보기
   near1hEma200Only: false,      // 1시간봉 200일선 밀착만 보기

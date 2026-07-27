@@ -17,7 +17,8 @@
    백엔드 없음, GitHub Pages 정적 배포, Binance 공개 REST API만 사용, 개인 API 키 없음.
    - 계산 엔진(core/): EMA·SMA·RSI·MACD·ATR·Bollinger·VWAP·OBV·StochRSI,
      Taker/Delta/CVD, 시장구조(Pivot·HH/HL/LH/LL·BOS·CHoCH), 유동성(Equal H/L·스윕),
-     FVG, 오더블록, 진입/손절/TP+손익비, 흡수 추정+단계 분류(1~5)+100점 점수 체계
+     FVG, 오더블록, 진입/손절/TP+손익비, 흡수 추정+단계 분류+100점 점수 체계
+     (현재 reversal은 근거 부족을 분리한 0~5단계, early는 1~3단계)
    - 스캐너(scanner/): 1~3단계 필터(전체종목→24h유동성→급락후보) →
      4단계 멀티타임프레임(4h/1h/15m/5m) 정밀분석 → 점수 필터+정렬
    - UI: 대시보드, 상세 패널, 필터/설정(localStorage), 토스트, TradingView 연결, PWA(sw.js)
@@ -55,10 +56,26 @@
      `docs/superpowers/plans/2026-07-24-early-pump-detection.md`
    - subagent-driven 방식으로 10개 태스크 TDD 구현, 태스크마다 spec+quality 리뷰 통과.
 
+6. **QAR/Pine 판정 정합성 v3.4** — reversal의 무근거 후보를 `0 근거 부족`으로
+   분리하고, 실제 초기 근거가 2개 이상일 때만 `1 관찰 초기`를 부여한다. 보통 흡수는
+   설정 가중치의 60%, 강한 흡수는 100%로 분리했으며 `5 늦음·추격 금지`는 사용자가
+   5단계를 명시적으로 고른 경우에만 보인다. UI 용어를 `셋업 점수`·`진행 단계`로
+   통일했다. Pine은 v3.3 원본을 보존하고 v3.4 사본을 추가해 `정밀 조건 AND 최소
+   차트 정합 등급`을 롱·숏 모두 강제했다. 단일 선별 모드 선택자로 정밀/등급 의미를
+   분리하고, 동일 시간봉 1봉 지연 제거, 일반 캔들 가드, FVG·OB 계산 꺼짐 차단,
+   TP1 알림 가격 스냅샷, 후보 알림 범위도 보완했다. QAR 링크는 심볼·15분봉만 전달하며
+   reversal은 독립 차트 정합, early는 별도 관찰임을 UI에 명시했다.
+
 ## 검증 상태
 
-- **테스트 86/86 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
-  goldenCross, noise, early, repaint, refresh 9개 스위트)
+- **테스트 100/100 통과** — `node tests/run.js` (기존 계산·구조·early·repaint 회귀와
+  stage 0/1, 흡수 비율, stage 5 모드별 필터, TradingView 15분봉 인계 테스트 포함)
+- **로컬 UI 검증** — 1280×760 headless Chromium에서 reversal 단계 0~5 옵션,
+  stage 5 기본 제외, 용어 변경과 레이아웃을 확인했고 콘솔 에러는 0건.
+- **TradingView 검증** — 최종 SHA256 `4F141C0FF68484E842038861198F381CD17D828EC2D6AB25E2413592CBDF9DD5`를
+  `쉬운 시장 흐름 + 코인 찾기 [v3.4]` revision 7로 저장했다. Pine 컴파일 오류 0건,
+  TAIKOUSDT.P 일반 캔들 15분봉, 기본 MTF 4H/1H/15m, QAR·ICT Sync 동시 적용을 확인했다.
+  현재 시장에서 새 롱·숏 발생 장면을 각각 확보하는 관찰 검증은 남아 있다.
 - **라이브 Binance API로 실제 스캔 여러 번 검증** — 롱/숏/양방향 전부 확인,
   콘솔 에러 0, RR 폭발 버그도 라이브에서 재현 후 수정 확인(수정 전 1:73M → 수정 후 1:16)
 - **조기 포착 모드 라이브 검증** — early 스캔 526종목→150 1차→14 후보, 결과 전부
@@ -70,14 +87,14 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (38/38 나와야 정상)
+node tests/run.js          # 테스트 확인 (100/100 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
 
 배포는 자동 — `main`에 push하면 GitHub Pages가 재빌드함. 별도 빌드 스텝 없음.
 
-## 파일 구조 (36개 파일)
+## 주요 파일 구조
 
 ```
 index.html, manifest.webmanifest, sw.js, README.md, PROGRESS.md(이 파일)
@@ -94,7 +111,11 @@ tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
   golden-cross.test.js noise.test.js early-detect.test.js
-  repaint.test.js refresh.test.js
+  repaint.test.js refresh.test.js settings.test.js tradingview.test.js
+tradingview/
+  easy_market_flow_v3_3.pine easy_market_flow_v3_4.pine VERIFY.md
+docs/superpowers/specs/
+  2026-07-27-qar-pine-alignment-prd.md
 ```
 
 핵심 진입점: [config.js](js/config.js)(모든 가중치·필터·TTL 조정 지점),
@@ -107,7 +128,8 @@ tests/
 0. **early 모드 임계값 튜닝** — `config.js`의 `earlyDetect`(박스폭·압축백분위·OI증가율 등)는
    감으로 잡은 초기값이다. 실사용하며 후보 수를 보고 `boxWidthMaxPct`, `squeezePctMax`,
    `oiChangeMinPct` 를 조정할 것. `earlyScoreWeights`/`earlyPenalties` 도 마찬가지.
-   TradingView 지표는 아직 reversal 로직 기준이라 early 모드 포팅도 후보.
+   TradingView v3.4 지표는 reversal용 독립 차트 정합 지표라 early 판정을 전달하지 않는다.
+   early 모드 포팅이 필요하면 별도 PRD와 성과 검증이 선행되어야 한다.
 1. **점수 가중치 튜닝** — 실사용하면서 `config.js`의 `scoreWeights`/`penalties`가
    실제 좋은 셋업을 잘 걸러내는지 관찰 필요. 현재는 최초 설계값 그대로.
 2. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.

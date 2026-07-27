@@ -11,7 +11,9 @@ export function tvSymbol(symbol) {
 
 export function tvChartUrl(symbol) {
   const sym = tvSymbol(symbol);
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym)}`;
+  // Pine v3.4 권장/검증 시간봉으로 연다. 차트 종류는 TradingView 레이아웃 설정을 따르며
+  // Pine 자체가 하이킨아시·렌코 등 비표준 차트에서는 후보 생성을 차단한다.
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym)}&interval=15`;
 }
 
 export function binanceFuturesUrl(symbol) {

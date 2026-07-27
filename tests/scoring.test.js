@@ -40,6 +40,38 @@ export function run() {
     eq(abs.level, "insufficient", "캔들 없으면 근거 부족");
   });
 
+  test("보통/강한 흡수는 최종 점수에서 6점/10점으로 구분", () => {
+    const sig = strongSignals();
+    const normal = scoreCandidate(sig, { level: "normal" }, classifyStage(sig), CONFIG);
+    const strong = scoreCandidate(sig, { level: "strong" }, classifyStage(sig), CONFIG);
+    const normalItem = normal.breakdown.find((b) => b.key === "sellAbsorption");
+    const strongItem = strong.breakdown.find((b) => b.key === "sellAbsorption");
+    eq(normalItem.got, 6, "보통 흡수는 가중치의 60%");
+    eq(strongItem.got, 10, "강한 흡수는 가중치의 100%");
+  });
+
+  test("보통 흡수는 사용자 가중치에서도 정확히 60%", () => {
+    const sig = strongSignals();
+    const customCfg = {
+      ...CONFIG,
+      scoreWeights: { ...CONFIG.scoreWeights, sellAbsorption: 7 },
+    };
+    const scored = scoreCandidate(sig, { level: "normal" }, classifyStage(sig), customCfg);
+    const item = scored.breakdown.find((b) => b.key === "sellAbsorption");
+    eq(item.got, 4.2, "7점 가중치의 60%");
+  });
+
+  test("보통 흡수 비율은 config override 반영", () => {
+    const sig = strongSignals();
+    const customCfg = {
+      ...CONFIG,
+      scoringRules: { ...CONFIG.scoringRules, normalAbsorptionRatio: 0.5 },
+    };
+    const scored = scoreCandidate(sig, { level: "normal" }, classifyStage(sig, customCfg), customCfg);
+    const item = scored.breakdown.find((b) => b.key === "sellAbsorption");
+    eq(item.got, 5, "10점 가중치의 50%");
+  });
+
   test("강한 후보 → 높은 점수 + 강한 후보 등급", () => {
     const sig = strongSignals();
     const abs = estimateAbsorption(sig);
@@ -66,6 +98,44 @@ export function run() {
     };
     const stage = classifyStage(sig);
     eq(stage.stage, 2, "유동성 회수 단계");
+  });
+
+  test("초기 근거 없음 → 0단계 근거 부족", () => {
+    const stage = classifyStage({
+      change15mOverExtended: false, farFromLowAtr: false, shortTargetDistance: false,
+      rsiOverheated: false, poorRiskReward: false,
+    });
+    eq(stage.stage, 0, "근거 없으면 0단계");
+    eq(stage.key, "insufficient", "근거 부족 key");
+  });
+
+  test("초기 근거 1개만 → 0단계", () => {
+    const stage = classifyStage({
+      shockAndRsi: true,
+      change15mOverExtended: false, farFromLowAtr: false, shortTargetDistance: false,
+      rsiOverheated: false, poorRiskReward: false,
+    });
+    eq(stage.stage, 0, "근거 하나는 부족");
+  });
+
+  test("초기 근거 2개 이상 → 1단계 관찰 초기", () => {
+    const stage = classifyStage({
+      shockAndRsi: true, nearExtreme: true,
+      change15mOverExtended: false, farFromLowAtr: false, shortTargetDistance: false,
+      rsiOverheated: false, poorRiskReward: false,
+    });
+    eq(stage.stage, 1, "근거 둘이면 관찰 초기");
+    eq(stage.key, "accumulation", "관찰 초기 key 유지");
+  });
+
+  test("1단계 최소 근거 수는 config override 반영", () => {
+    const sig = {
+      shockAndRsi: true, nearExtreme: true,
+      change15mOverExtended: false, farFromLowAtr: false, shortTargetDistance: false,
+      rsiOverheated: false, poorRiskReward: false,
+    };
+    const customCfg = { ...CONFIG, scoringRules: { ...CONFIG.scoringRules, stage1MinEvidence: 3 } };
+    eq(classifyStage(sig, customCfg).stage, 0, "근거 3개 기준에서는 2개가 부족");
   });
 
   test("감점 반영 — 점수 하락", () => {

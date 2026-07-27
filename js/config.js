@@ -143,6 +143,12 @@ export const CONFIG = {
   // 1h 종가가 200일선에서 ATR * 이 배수 이내면 "200선 밀착"으로 표시.
   near1hEma200AtrRatio: 0.5,
 
+  // ---- 점수 판정 규칙 ----
+  scoringRules: {
+    stage1MinEvidence: 2,       // reversal 1단계에 필요한 독립 초기 근거 수
+    normalAbsorptionRatio: 0.6, // 보통 흡수는 흡수 가중치의 60%
+  },
+
   // ---- 점수 가중치 (합계 100) ----
   scoreWeights: {
     dropAndOversold: 10,    // 급락 및 과매도 상태
@@ -227,7 +233,7 @@ export const STRICTNESS_LEVELS = [
     penalties: { overExtended15m: -12, farFromLowAtr: -10, strongResistanceAbove: -8, shortTargetDistance: -8, tooLowVolume: -10, strongDowntrend4h: -8, newListingThin: -6, poorRiskReward: -10 } },
   { level: 4, label: "4 · 엄격하게", minScore: 65,
     penalties: { overExtended15m: -16, farFromLowAtr: -13, strongResistanceAbove: -10, shortTargetDistance: -10, tooLowVolume: -13, strongDowntrend4h: -10, newListingThin: -8, poorRiskReward: -13 } },
-  { level: 5, label: "5 · 아주 엄격하게 (확실한 것만)", minScore: 75,
+  { level: 5, label: "5 · 아주 엄격하게 (후보 적게)", minScore: 75,
     penalties: { overExtended15m: -19, farFromLowAtr: -16, strongResistanceAbove: -13, shortTargetDistance: -13, tooLowVolume: -16, strongDowntrend4h: -13, newListingThin: -10, poorRiskReward: -16 } },
 ];
 export function strictnessPreset(level) {

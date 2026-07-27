@@ -1,5 +1,5 @@
 // ui/detail-panel.js — 종목 상세 분석 패널 (§15 상세 보기).
-// 점수 근거, 단계, 흡수, 시간봉별 상태, 진입·손절·목표, 손익비, TradingView 버튼.
+// 셋업 점수 근거, 진행 단계, 흡수, 시간봉별 상태, 진입·손절·목표, 손익비, TradingView 버튼.
 
 import { fmtPrice, fmtPct, fmtVolume, pctClass, escapeHtml } from "./format.js";
 import { openTradingView, copyTvLink, tvChartUrl, binanceFuturesUrl } from "./tradingview.js";
@@ -40,7 +40,13 @@ export function showDetail(r) {
 
 function renderDetail(r) {
   const p = r.plan;
-  const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${r.stage.label}</span>`;
+  const isEarly = r.scanMode === "early" || Boolean(r.early);
+  const tvButtonLabel = isEarly ? "TradingView 차트 열기" : "TradingView에서 독립 차트 정합 확인";
+  const tvHandoffNote = isEarly
+    ? "조기 포착(early) 판정은 Pine v3.4에 이식되지 않았습니다. TradingView에는 심볼과 15분봉만 전달되며 차트는 별도 관찰용입니다."
+    : "TradingView에는 심볼과 15분봉만 전달됩니다. Pine v3.4는 QAR 방향·셋업 점수·진행 단계를 전달받지 않고, 일반 캔들에서 독립적으로 차트 정합을 확인합니다.";
+  const stageLabel = String(r.stage.label || "").replace(/^\d+\s*/, "");
+  const stageBadge = `<span class="badge badge-${r.stage.badge}">진행 ${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
 
   return `
@@ -50,7 +56,7 @@ function renderDetail(r) {
       <div class="detail-title">
         <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
         <h2>${escapeHtml(r.symbol)}</h2>
-        <span class="score-pill score-${r.grade.key}">${r.score}</span>
+        <span class="score-pill score-${r.grade.key}">셋업 점수 ${r.score}</span>
         ${dirBadge}
       </div>
       <div class="detail-sub">
@@ -89,15 +95,16 @@ function renderDetail(r) {
     </section>
 
     <section class="detail-section">
-      <h3>점수 근거</h3>
+      <h3>셋업 점수 근거</h3>
       <ul class="breakdown">
         ${r.breakdown.map((b) => `<li class="${b.hit ? "hit" : "miss"}"><span>${escapeHtml(b.label)}</span><span>${b.got}/${b.weight}</span></li>`).join("")}
         ${r.penalties.map((p) => `<li class="penalty"><span>${escapeHtml(p.label)}</span><span>${p.val}</span></li>`).join("")}
       </ul>
     </section>
 
+    <p class="tv-handoff-note">${tvHandoffNote}</p>
     <footer class="detail-actions">
-      <button class="btn btn-primary" data-tv-open>TradingView에서 타점 확인</button>
+      <button class="btn btn-primary" data-tv-open>${tvButtonLabel}</button>
       <button class="btn" data-tv-copy>링크 복사</button>
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>

@@ -42,7 +42,7 @@ function renderCountdown(e) {
 
 const PHASE_LABEL = {
   idle: "대기", universe: "종목 수집", prefilter: "유동성 필터",
-  candidate: "1차 분석", deep: "정밀 분석", score: "점수 계산",
+  candidate: "1차 분석", deep: "정밀 분석", score: "셋업 점수 계산",
   done: "완료", error: "오류",
 };
 
@@ -92,7 +92,7 @@ export function renderResults() {
     <table class="result-table">
       <thead><tr>
         <th>#</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>손익비</th><th></th><th></th>
+        <th>셋업 점수</th><th>진행 단계</th><th>방향</th><th>손익비</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
@@ -116,6 +116,20 @@ function noiseBadge(r) {
   return r.noise?.noisy ? `<span class="badge badge-noise">노이즈 · ${r.noise.reasons.join("/")}</span>` : "";
 }
 
+function progressStageText(r) {
+  const label = String(r.stage.label || "").replace(/^\d+\s*/, "");
+  return `진행 ${r.stage.stage}단계 · ${escapeHtml(label)}`;
+}
+
+function isEarlyResult(r) {
+  return r.scanMode === "early" || Boolean(r.early);
+}
+
+function tvHandoffLabel(r, compact = false) {
+  if (isEarlyResult(r)) return compact ? "TV 차트" : "TradingView 차트 (early 판정과 별개)";
+  return compact ? "TV 정합" : "TradingView 독립 차트 정합 확인";
+}
+
 function rowHtml(r) {
   return `<tr data-sym="${r.symbol}">
     <td>${r.rank}</td>
@@ -123,12 +137,12 @@ function rowHtml(r) {
     <td>${fmtPrice(r.price)}</td>
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
-    <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}</td>
+    <td><span class="score-pill score-${r.grade.key}" aria-label="셋업 점수 ${r.score}" title="셋업 점수">${r.score}</span></td>
+    <td><span class="badge badge-${r.stage.badge}">${progressStageText(r)}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${r.plan.rrText}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
-    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
+    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="${tvHandoffLabel(r)}" title="${tvHandoffLabel(r)}">${isEarlyResult(r) ? "TV" : "TV 정합"}</button></td>
   </tr>`;
 }
 
@@ -138,10 +152,10 @@ function cardHtml(r) {
     <div class="rcard-top">
       <button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>
       <b class="rcard-sym">${escapeHtml(r.symbol)}</b>
-      <span class="score-pill score-${r.grade.key}">${r.score}</span>
+      <span class="score-pill score-${r.grade.key}" aria-label="셋업 점수 ${r.score}">셋업 ${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${progressStageText(r)}</span>${nearEma200Badge(r)}${noiseBadge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>
@@ -153,7 +167,7 @@ function cardHtml(r) {
     </div>
     <div class="rcard-actions">
       <button class="btn-mini" data-detail="${r.symbol}">상세 보기</button>
-      <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
+      <button class="btn-mini tv" data-tv="${r.symbol}" title="${tvHandoffLabel(r)}">${tvHandoffLabel(r, true)}</button>
     </div>
   </div>`;
 }

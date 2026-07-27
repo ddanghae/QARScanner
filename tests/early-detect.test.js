@@ -239,6 +239,7 @@ export function run() {
       for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
         assert(r[k] !== undefined, `결과에 ${k} 필요`);
       }
+      eq(r.scanMode, "early", "early 결과는 모드를 명시");
       eq(r.direction, "long", "early 는 롱 전용");
       assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
     }

@@ -1,0 +1,1877 @@
+//@version=6
+indicator(
+     "쉬운 시장 흐름 + 코인 찾기 [v3.3]",
+     shorttitle = "쉬운 흐름 v3.3",
+     overlay = true,
+     dynamic_requests = true,
+     max_bars_back = 2000,
+     max_boxes_count = 200,
+     max_lines_count = 500,
+     max_labels_count = 500)
+
+// ============================================================================
+//  현재 차트 정밀 확인(14점) + 여러 코인 후보 찾기(100점)를 한 지표에 통합.
+//  두 점수는 계산 목적이 다르므로 서로 합산하거나 성공 확률로 해석하지 않습니다.
+//  기본 권장: 15분 차트 / 큰 흐름 4시간 / 중간 흐름 1시간 / 코인 찾기 15분·1시간.
+// ============================================================================
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 초보자 빠른 설정
+// ─────────────────────────────────────────────────────────────────────────────
+groupQuick = "00. 빠른 설정 — 초보자는 여기만"
+screenLevel = input.string("아주 쉽게 (추천)", "화면 난이도",
+     options = ["아주 쉽게 (추천)", "자세히"],
+     tooltip = "아주 쉽게는 조건 부족→조건 일부→검토 후보만 크게 보여줍니다. 자세히는 L·M·S와 조건점수를 모두 보여줍니다.", group = groupQuick)
+showBeginnerGuide = input.bool(true, "쉬운 상태 요약표 표시",
+     tooltip = "상승·하락 검토 조건을 조건 부족→조건 일부→검토 후보로 설명합니다. 끄면 쉬운 화면의 요약표만 숨깁니다. 자동 주문이나 매매 지시가 아닙니다.", group = groupQuick)
+showTechnicalDetailsInEasyMode = input.bool(false, "쉬운 화면에서도 전문 표시 함께 보기",
+     tooltip = "끄면 큰·작은 흐름선, 비슷한 고·저점, 복귀 표시, 가격 빈 구간과 반응 구간을 화면에서 숨깁니다. 계산에는 그대로 사용하므로 초보자는 꺼두는 것을 권장합니다.", group = groupQuick)
+viewMode = input.string("표시 (추천)", "현재 차트 요약표",
+     options = ["표시 (추천)", "숨김"], group = groupQuick)
+confirmedOnly = input.bool(true, "일반 모드도 봉 마감으로 확인 (추천)",
+     tooltip = "정밀 모드와 최종 검토 후보는 항상 봉 마감 후 확정됩니다. 끄면 일반 모드의 요약 조건만 봉 안에서 변할 수 있습니다.", group = groupQuick)
+showSignals = input.bool(true, "현재 차트 검토 후보 표시",
+     tooltip = "현재 설정의 조건과 최소 점수를 처음 함께 충족한 확정봉을 표시합니다. 실제 진입 지시나 수익 보장이 아닙니다.", group = groupQuick)
+entryFilterMode = input.string("정밀 (추천)", "검토 후보 선별 모드",
+     options = ["정밀 (추천)", "일반"],
+     tooltip = "정밀 모드는 추가 조건으로 검토 후보 수를 줄입니다. 정확도나 수익을 보장하지 않습니다. 일반 모드는 기존 점수·순서·구간 조건을 사용합니다.", group = groupQuick)
+signalScoreMin = input.int(8, "검토 후보 최소 조건점수 (14점 만점)", minval = 1, maxval = 14,
+     tooltip = "미리 정한 조건별 점수를 더한 값이며 조건 개수나 성공 확률이 아닙니다.", group = groupQuick)
+// scanMinimumScore = input.int(65, "코인 관심 점수 기준 (100점 만점)", minval = 0, maxval = 100,
+//      tooltip = "코인끼리 조건을 비교하기 위한 점수이며 성공 확률이 아닙니다.", group = groupQuick)
+// scanStrongScore = input.int(75, "검토 후보 기준점수 (100점 만점)", minval = 0, maxval = 100,
+//      tooltip = "복귀→돌파와 구간 재접촉까지 충족했을 때 적용할 별도 기준입니다.", group = groupQuick)
+// scanRowsInput = input.int(6, "표시할 코인 수", minval = 3, maxval = 16,
+//      tooltip = "작은 표는 3~6개가 보기 좋습니다.", group = groupQuick)
+// scanOnlyInterested = input.bool(false, "관심 기준 이상인 코인만 목록에 표시", group = groupQuick)
+
+bool beginnerView = screenLevel == "아주 쉽게 (추천)"
+bool showDetailVisuals = not beginnerView or showTechnicalDetailsInEasyMode
+bool showDashboard = viewMode == "표시 (추천)"
+bool showScanner = false  // 코인 탐색기 비활성화 (아래 스캐너 코드 전체 주석 처리됨)
+
+groupVisual = "01. 화면과 색상"
+dashPositionInput = input.string("왼쪽 위", "현재 차트 요약표 위치",
+     options = ["왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"], group = groupVisual)
+// scanPositionInput = input.string("오른쪽 위", "코인 찾기 표 위치",
+//      options = ["왼쪽 위", "오른쪽 위", "왼쪽 아래", "오른쪽 아래"], group = groupVisual)
+dashSizeInput = input.string("작게", "표 글자 크기", options = ["아주 작게", "작게", "보통"], group = groupVisual)
+signalLabelSizeInput = input.string("보통", "상승·하락 검토 후보 글자 크기", options = ["아주 작게", "작게", "보통", "크게"], group = groupVisual)
+planLabelSizeInput = input.string("작게", "계획 가격표 글자 크기", options = ["아주 작게", "작게", "보통", "크게"], group = groupVisual)
+zoneTextSizeInput = input.string("아주 작게", "관심 구간 글자 크기", options = ["아주 작게", "작게", "보통"], group = groupVisual)
+showZoneText = input.bool(true, "관심 구간 안에 쉬운 설명 표시", inline = "detail", group = groupVisual)
+paintSignalBar = input.bool(true, "검토 후보 캔들 강조", inline = "detail", group = groupVisual)
+
+groupPalette = "01A. 색상 — 모든 주요 요소"
+bullColor = input.color(color.rgb(0, 211, 149), "상승 방향", inline = "direction", group = groupPalette)
+bearColor = input.color(color.rgb(59, 130, 246), "하락 방향", inline = "direction", group = groupPalette)
+accentColor = input.color(color.rgb(124, 92, 252), "중립·강조", inline = "direction", group = groupPalette)
+tradeEntryColor = input.color(color.rgb(124, 92, 252), "보는 가격 (ENTRY)", inline = "plan", group = groupPalette)
+tradeTp1Color = input.color(color.rgb(34, 211, 238), "목표 1", inline = "plan", group = groupPalette)
+tradeTp2Color = input.color(color.rgb(34, 197, 94), "목표 2", inline = "plan", group = groupPalette)
+tradeSlColor = input.color(color.rgb(255, 77, 109), "계획 중단선 (SL)", inline = "plan", group = groupPalette)
+warningColor = color.rgb(255, 179, 71)
+bullFvgColor = color.rgb(0, 188, 212)
+bearFvgColor = color.rgb(96, 165, 250)
+vwapColor = color.rgb(192, 132, 252)
+panelColor = color.rgb(14, 19, 29)
+panelAltColor = color.rgb(23, 30, 44)
+panelBorderColor = color.rgb(46, 57, 77)
+panelTextColor = color.rgb(235, 239, 247)
+panelMutedColor = color.rgb(143, 153, 173)
+
+groupLines = "01B. 선 모양·굵기"
+vwapWidth = 2
+vwapLineStyleInput = "실선"
+swingLineStyleInput = "실선"
+swingLineWidth = 2
+internalLineStyleInput = "점선"
+internalLineWidth = 1
+equalLineStyleInput = "도트"
+equalLineWidth = 1
+rangeLineStyleInput = "실선"
+rangeLineWidth = 1
+tradeEntryLineStyleInput = "실선"
+tradeEntryLineWidth = 3
+tradeTp1LineStyleInput = "점선"
+tradeTp1LineWidth = 2
+tradeTp2LineStyleInput = "점선"
+tradeTp2LineWidth = 2
+tradeSlLineStyleInput = "실선"
+tradeSlLineWidth = 3
+zoneBorderStyleInput = "실선"
+zoneBorderWidth = 1
+tradeAreaBorderStyleInput = "실선"
+tradeAreaBorderWidth = 1
+panelFrameWidth = 1
+panelGridWidth = 1
+
+groupOpacity = "01C. 투명도 — 0=진하게, 100=안 보임"
+signalLabelTransparency = 0
+signalBarTransparency = 18
+signalBgTransparency = 92
+vwapTransparency = 5
+swingLineTransparency = 12
+internalLineTransparency = 58
+equalLineTransparency = 18
+rangeLineTransparency = 28
+rangeFillTransparency = 94
+zoneBorderTransparency = 25
+zoneFillTransparency = 88
+inactiveZoneTransparency = 94
+zoneTextTransparency = 8
+tradeLabelTransparency = 5
+tradeRewardTransparency = 93
+tradeRiskTransparency = 91
+tradeAreaBorderTransparency = 76
+obBaseTransparency = 91
+obMinTransparency = 72
+obVolumeOpacityCap = 3.0
+obVolumeOpacityStep = 6.0
+panelBgTransparency = 4
+panelHeaderTransparency = 35
+panelFrameTransparency = 0
+panelGridTransparency = 35
+directionCellTransparency = 18
+interestCellTransparency = 28
+mutedCellTransparency = 76
+errorCellTransparency = 72
+
+string dashPosition = dashPositionInput == "오른쪽 위" ? position.top_right :
+     dashPositionInput == "왼쪽 아래" ? position.bottom_left :
+     dashPositionInput == "오른쪽 아래" ? position.bottom_right : position.top_left
+// bool panelPositionsSame = showDashboard and showScanner and scanPositionInput == dashPositionInput
+// string scanPosition = panelPositionsSame ?
+//      (scanPositionInput == "왼쪽 위" ? position.top_right :
+//       scanPositionInput == "오른쪽 위" ? position.top_left :
+//       scanPositionInput == "왼쪽 아래" ? position.bottom_right : position.bottom_left) :
+//      scanPositionInput == "왼쪽 위" ? position.top_left :
+//      scanPositionInput == "왼쪽 아래" ? position.bottom_left :
+//      scanPositionInput == "오른쪽 아래" ? position.bottom_right : position.top_right
+string dashTextSize = dashSizeInput == "아주 작게" ? size.tiny : dashSizeInput == "보통" ? size.normal : size.small
+
+groupCore = "02. 현재 차트 — 기본 조건"
+requireSequence = input.bool(true, "고·저점 복귀 → 흐름 돌파 순서 필수",
+     tooltip = "일반 모드 설정입니다. 정밀 모드는 더 강한 순서 조건을 항상 확인합니다.", group = groupCore)
+requireZoneTouch = input.bool(true, "관심 구간 재접촉 필수",
+     tooltip = "일반 모드 설정입니다. 정밀 모드는 구조 돌파 뒤 만들어진 구간의 재접촉과 반응봉을 항상 확인합니다.", group = groupCore)
+setupWindow = input.int(40, "조건 연결 허용 기간 (봉)", minval = 5, maxval = 300,
+     tooltip = "고·저점 복귀 후 흐름 돌파가 이어져야 하는 최대 봉 수입니다.", group = groupCore)
+
+groupPrecision = "02A. 현재 차트 — 정밀 검토 후보"
+precisionScoreMin = input.int(10, "정밀 최소점수 (14점)", minval = 8, maxval = 14,
+     tooltip = "일반 최소점수와 이 값 중 더 높은 기준을 사용합니다. 기본 10점은 후보를 더 엄격하게 거릅니다.", group = groupPrecision)
+precisionScoreGap = input.int(2, "상승·하락 최소 점수차", minval = 1, maxval = 6,
+     tooltip = "상승·하락 점수가 비슷한 애매한 상황을 제외합니다.", group = groupPrecision)
+precisionUseVolume = input.bool(false, "거래량 배수 조건 사용",
+     tooltip = "반응봉 거래량이 최근 평균의 설정 배수 이상인지 확인합니다. 거래량 자료가 없는 종목은 이 조건을 건너뜁니다.", group = groupPrecision)
+precisionVolumeRatio = input.float(1.2, "최소 거래량 배수", minval = 0.5, maxval = 5.0, step = 0.1,
+     tooltip = "1.2는 최근 평균 거래량의 1.2배를 뜻합니다.", group = groupPrecision)
+precisionUseVolatility = input.bool(true, "큰 변동·평균선 이격 제외",
+     tooltip = "평균보다 너무 작거나 큰 변동, 큰 캔들, 빠른 평균선에서 멀어진 봉을 제외합니다.", group = groupPrecision)
+precisionCooldownBars = input.int(5, "같은 방향 재표시 대기 (봉)", minval = 0, maxval = 100,
+     tooltip = "같은 방향 후보가 짧은 시간에 반복 표시되는 것을 줄입니다. 15분 차트의 5봉은 75분입니다.", group = groupPrecision)
+
+groupPrecisionAdvanced = "02AA. 정밀 검토 후보 — 세부값"
+precisionRequireTrend = true
+precisionRequireStructure = true
+precisionRequireStrongSequence = true
+precisionRequireLinkedZone = true
+precisionRequireReaction = true
+precisionBodyMin = 0.35
+precisionCloseStrength = 0.65
+atrBaselineLen = 50
+precisionAtrMin = 0.75
+precisionAtrMax = 2.50
+precisionMaxRangeAtr = 2.00
+precisionMaxChaseAtr = 1.25
+structureBreakBufferAtr = 0.00
+sweepMinDepthAtr = 0.00
+sweepReturnBufferAtr = 0.00
+zoneMinDepthPct = 0.00
+fvgFillPct = 100.00
+
+groupEntryTier = "02C. 확정 타점 등급 — 롱/숏 직접 표시"
+useEntryTiers = input.bool(true, "타점을 1~5 신뢰 등급으로 잡기 (권장)",
+     tooltip = "켜면 정밀/일반 대신 신뢰 등급으로 타점을 잡습니다. 1=낮은 신뢰, 5=거의 완벽. 각 타점에 롱/숏과 TP1·TP2·SL을 함께 표시합니다. 자동 주문이 아닙니다.", group = groupEntryTier)
+entryMinTier = input.int(3, "표시할 최소 타점 등급 (1~5)", minval = 1, maxval = 5,
+     tooltip = "이 등급 이상만 표시합니다. 3=신뢰 이상. 신호가 너무 적으면 2로, 너무 많으면 4로 조정하세요.", group = groupEntryTier)
+showTierStars = input.bool(false, "별점(★) 함께 표시", group = groupEntryTier)
+tierBound2 = input.int(40, "2등급 시작 점수", minval = 1, maxval = 99, inline = "tier", group = groupEntryTier)
+tierBound3 = input.int(58, "3등급", minval = 1, maxval = 99, inline = "tier", group = groupEntryTier)
+tierBound4 = input.int(74, "4등급", minval = 1, maxval = 99, inline = "tier2", group = groupEntryTier)
+tierBound5 = input.int(88, "5등급", minval = 1, maxval = 99, inline = "tier2", group = groupEntryTier)
+
+groupTradePlan = "02B. 현재 차트 — 참고 계획선"
+showTradePlan = input.bool(true, "참고 계획선 표시 (자동 주문 아님)",
+     tooltip = "검토 후보봉의 종가를 보는 가격으로 삼아 첫 목표·마지막 목표·계획 중단선을 계산해 표시합니다. 끄면 계획선 추적과 관련 알림도 함께 꺼집니다. 실제 주문·체결·청산을 실행하거나 수익을 보장하지 않습니다.", group = groupTradePlan)
+tradeSlAtrBuffer = input.float(0.20, "중단선 구간 밖 여유 (ATR)", minval = 0.0, maxval = 3.0, step = 0.05,
+     tooltip = "상승은 연결 구간과 후보봉 저가 아래, 하락은 연결 구간과 후보봉 고가 위에 이 ATR 여유를 더합니다.", group = groupTradePlan)
+tradeMinRiskAtr = input.float(0.50, "최소 위험거리 (ATR)", minval = 0.10, maxval = 3.0, step = 0.10,
+     tooltip = "손절 기준이 진입 기준에 지나치게 가까워지는 것을 막습니다.", group = groupTradePlan)
+tradeMaxRiskAtr = input.float(3.00, "최대 위험거리 (ATR)", minval = 0.50, maxval = 10.0, step = 0.25,
+     tooltip = "필요한 손절 거리가 이 값보다 넓으면 무리한 계획선을 만들지 않고 생략합니다. 최소 위험거리보다 작게 입력하면 최소 위험거리 값을 실제 상한으로 사용합니다.", group = groupTradePlan)
+tradeTp1R = input.float(1.0, "첫 목표 배수 (TP1·R)", minval = 0.25, maxval = 5.0, step = 0.25,
+     tooltip = "1R은 진입 기준과 손절 기준 사이의 거리입니다.", group = groupTradePlan)
+tradeTp2R = input.float(2.0, "마지막 목표 배수 (TP2·R)", minval = 0.50, maxval = 10.0, step = 0.25,
+     tooltip = "TP2가 TP1보다 작게 설정되면 코드가 TP1보다 0.25R 높은 값으로 보정합니다.", group = groupTradePlan)
+tradeMaxHoldBars = input.int(40, "계획선 최대 추적 기간 (봉)", minval = 5, maxval = 500,
+     tooltip = "이 기간 안에 마지막 목표 또는 계획 중단선이 닿지 않으면 관찰 기간 종료로 처리합니다. 15분 차트의 40봉은 10시간입니다.", group = groupTradePlan)
+tradePlanRightBars = input.int(12, "가격표 오른쪽 여백 (봉)", minval = 2, maxval = 50, group = groupTradePlan)
+tradePlanHistoryCount = input.int(3, "과거 표시 켤 때 남길 타점 개수", minval = 1, maxval = 10,
+     tooltip = "'과거 타점도 함께 표시'를 켰을 때 최근 몇 개까지 남길지 정합니다.", group = groupTradePlan)
+showPastPositions = input.bool(false, "과거 타점도 함께 표시",
+     tooltip = "끄면 최근 타점 1개만 표시합니다(기본). 켜면 위 개수만큼 과거 타점을 남깁니다.", group = groupTradePlan)
+showTradeLabels = input.bool(true, "가격 라벨 표시 (진입·TP·SL 글자)",
+     tooltip = "끄면 선과 영역은 남기고 글자 라벨만 숨겨 화면을 깔끔하게 합니다.", group = groupTradePlan)
+showTradeAreaBoxes = input.bool(false, "목표·손절 영역 색칠 박스",
+     tooltip = "끄면 진입·TP·SL 가로선만 표시합니다(기본, 깔끔). 켜면 목표·손절 영역을 반투명 색으로 채웁니다.", group = groupTradePlan)
+tradeResultDisplayBars = input.int(3, "종료 결과를 요약표에 유지 (봉)", minval = 1, maxval = 50,
+     tooltip = "마지막 목표, 중단선, 동시 접촉, 기간 종료 결과를 쉬운 요약표에 몇 봉 동안 보여줄지 정합니다. 목표·중단선 접촉 판정은 항상 후보봉을 제외한 다음 봉부터 시작합니다.", group = groupTradePlan)
+tradeMinRiskTicks = input.int(2, "최소 중단선 거리 (틱)", minval = 1, maxval = 20, group = groupTradePlan)
+tradeMinTargetGapR = input.float(0.25, "목표 간 최소 간격 (R)", minval = 0.05, maxval = 2.00, step = 0.05, inline = "targetGap", group = groupTradePlan)
+tradeMinTargetGapTicks = input.int(1, "최소 틱", minval = 1, maxval = 20, inline = "targetGap", group = groupTradePlan)
+
+groupStructure = "03. 현재 차트 — 흐름 변화"
+showSwingStructure = input.bool(true, "큰 흐름 변화 표시", group = groupStructure)
+showInternalStructure = input.bool(false, "작은 흐름 변화 표시 (화면이 복잡해질 수 있음)", group = groupStructure)
+swingLen = input.int(10, "큰 고점·저점 확인 강도", minval = 2, maxval = 50, group = groupStructure)
+internalLen = input.int(3, "작은 고점·저점 확인 강도", minval = 1, maxval = 15, group = groupStructure)
+showSwingLevels = input.bool(false, "최근 큰 고점·저점 선 표시", group = groupStructure)
+
+groupLiquidity = "04. 현재 차트 — 고·저점 복귀"
+showLiquidity = input.bool(true, "고·저점을 찍고 돌아온 자리 표시", group = groupLiquidity)
+showEqualLevels = input.bool(true, "비슷한 고점·저점 추가 사용 및 표시", group = groupLiquidity)
+eqAtrTolerance = input.float(0.15, "비슷하다고 보는 가격 오차 (ATR)", minval = 0.02, maxval = 1.0, step = 0.01,
+     tooltip = "ATR은 최근 캔들의 평균 움직임 크기입니다.", group = groupLiquidity)
+sweepRecentBars = input.int(25, "복귀 신호 유지 기간 (봉)", minval = 3, maxval = 200, group = groupLiquidity)
+
+groupFvg = "05. 현재 차트 — 가격 빈 구간"
+showFVG = input.bool(true, "가격 빈 구간을 조건에 사용 및 표시", group = groupFvg)
+fvgMinAtr = input.float(0.10, "가격 빈 구간 최소 크기 (ATR)", minval = 0.0, maxval = 2.0, step = 0.05,
+     tooltip = "ATR은 최근 캔들의 평균 움직임 크기입니다.", group = groupFvg)
+fvgExtendBars = input.int(80, "구간을 오른쪽으로 유지할 기간 (봉)", minval = 5, maxval = 500, group = groupFvg)
+deleteFilledFVG = input.bool(true, "가격이 완전히 채운 구간은 삭제", group = groupFvg)
+maxFvgZones = input.int(12, "방향별 최대 표시 개수", minval = 1, maxval = 40, group = groupFvg)
+
+groupOB = "06. 현재 차트 — 반응 후보 구간"
+showOB = input.bool(true, "반응 후보 구간을 조건에 사용 및 표시", group = groupOB)
+obLookback = input.int(12, "돌파 전 반대색 캔들 탐색 범위", minval = 2, maxval = 50, group = groupOB)
+obExtendBars = input.int(120, "구간을 오른쪽으로 유지할 기간 (봉)", minval = 5, maxval = 500, group = groupOB)
+maxObZones = input.int(8, "방향별 최대 표시 개수", minval = 1, maxval = 30, group = groupOB)
+obFromInternalChoch = input.bool(true, "작은 흐름 전환에서도 구간 만들기", group = groupOB)
+
+groupTrend = "07. 평균선·거래량"
+emaFastLen = input.int(20, "EMA 정렬 점수 · 빠른 길이", minval = 2, maxval = 200, tooltip = "화면 EMA선이 아니라 'EMA 정렬' 점수 계산용 길이입니다. 화면 EMA는 07A에서 켜세요.", group = groupTrend)
+emaSlowLen = input.int(50, "EMA 정렬 점수 · 느린 길이", minval = 3, maxval = 400, tooltip = "화면 EMA선이 아니라 'EMA 정렬' 점수 계산용 길이입니다.", group = groupTrend)
+showVWAP = input.bool(false, "당일 평균 거래가격 표시 (VWAP)",
+     tooltip = "VWAP은 오늘의 거래량을 반영한 평균 가격입니다.", group = groupTrend)
+volumeLen = input.int(20, "평균 거래량 계산 길이", minval = 2, maxval = 200, group = groupTrend)
+volumeMult = input.float(1.5, "거래량 증가 기준 배수", minval = 1.0, maxval = 10.0, step = 0.1, group = groupTrend)
+atrLen = input.int(14, "가격 변동폭 계산 길이 (ATR)", minval = 2, maxval = 100,
+     tooltip = "ATR은 최근 캔들의 평균 움직임 크기입니다.", group = groupTrend)
+
+groupEmaDisplay = "07A. 이동평균선 표시 (EMA) — 체크 · 길이 · 색 · 굵기"
+ema1Show = input.bool(false, "EMA", inline = "ema1", group = groupEmaDisplay)
+ema1Len = input.int(25, "", minval = 1, maxval = 400, inline = "ema1", group = groupEmaDisplay)
+ema1Color = input.color(color.rgb(56, 189, 248), "", inline = "ema1", group = groupEmaDisplay)
+ema1Width = input.int(1, "굵기", minval = 1, maxval = 5, inline = "ema1", group = groupEmaDisplay)
+ema2Show = input.bool(true, "EMA", inline = "ema2", group = groupEmaDisplay)
+ema2Len = input.int(50, "", minval = 1, maxval = 400, inline = "ema2", group = groupEmaDisplay)
+ema2Color = input.color(color.rgb(250, 204, 21), "", inline = "ema2", group = groupEmaDisplay)
+ema2Width = input.int(1, "굵기", minval = 1, maxval = 5, inline = "ema2", group = groupEmaDisplay)
+ema3Show = input.bool(false, "EMA", inline = "ema3", group = groupEmaDisplay)
+ema3Len = input.int(100, "", minval = 1, maxval = 400, inline = "ema3", group = groupEmaDisplay)
+ema3Color = input.color(color.rgb(124, 92, 252), "", inline = "ema3", group = groupEmaDisplay)
+ema3Width = input.int(1, "굵기", minval = 1, maxval = 5, inline = "ema3", group = groupEmaDisplay)
+ema4Show = input.bool(true, "EMA", inline = "ema4", group = groupEmaDisplay)
+ema4Len = input.int(200, "", minval = 1, maxval = 400, inline = "ema4", group = groupEmaDisplay)
+ema4Color = input.color(color.rgb(255, 99, 132), "", inline = "ema4", group = groupEmaDisplay)
+ema4Width = input.int(2, "굵기", minval = 1, maxval = 5, inline = "ema4", group = groupEmaDisplay)
+
+groupBB = "07B. 볼린저밴드"
+bbShow = input.bool(false, "볼린저밴드 표시", group = groupBB)
+bbLen = input.int(20, "기간", minval = 2, maxval = 200, inline = "bb", group = groupBB)
+bbMult = input.float(2.0, "표준편차 배수", minval = 0.1, maxval = 5.0, step = 0.1, inline = "bb", group = groupBB)
+bbColor = input.color(color.rgb(148, 163, 184), "밴드 색", inline = "bbc", group = groupBB)
+bbWidth = input.int(1, "굵기", minval = 1, maxval = 5, inline = "bbc", group = groupBB)
+bbFill = input.bool(true, "밴드 안 옅게 채우기", group = groupBB)
+
+groupMTF = "08. 시간봉 설정"
+tfTrend = input.timeframe("240", "현재 차트 큰 흐름 시간봉", tooltip = "큰 흐름 ≥ 중간 흐름 ≥ 짧은 흐름 ≥ 현재 차트 순서로 설정하세요.", group = groupMTF)
+tfStructure = input.timeframe("60", "현재 차트 중간 흐름 시간봉", tooltip = "큰 흐름 ≥ 중간 흐름 ≥ 짧은 흐름 ≥ 현재 차트 순서로 설정하세요.", group = groupMTF)
+tfEntry = input.timeframe("15", "현재 차트 짧은 흐름 시간봉", tooltip = "큰 흐름 ≥ 중간 흐름 ≥ 짧은 흐름 ≥ 현재 차트 순서로 설정하세요.", group = groupMTF)
+
+groupShock = "09. 급변·과열도 보조점수"
+useShockBonus = input.bool(true, "급변 + 과열도(RSI) 보조점수 사용",
+     tooltip = "1시간 이하 차트에서 사용합니다. 더 큰 차트에서는 현재 차트 관심 조건이 안전을 위해 중지됩니다.", group = groupShock)
+shockCalculationTf = input.timeframe("60", "급변 계산 시간봉", inline = "shockTime", group = groupShock)
+shockLookbackBars = input.int(6, "비교 봉 수", minval = 1, maxval = 48, inline = "shockTime",
+     tooltip = "기본값은 1시간봉 6개를 비교하므로 약 6시간 변화입니다.", group = groupShock)
+shockPct = input.float(12.0, "가격 변화 기준 (%)", minval = 1.0, maxval = 50.0, step = 0.5, group = groupShock)
+rsiLen = input.int(14, "과열도 계산 길이 (RSI)", minval = 2, maxval = 100,
+     tooltip = "RSI가 낮거나 높다는 사실만으로 상승·하락이 보장되지는 않습니다.", group = groupShock)
+rsiOversold = input.int(35, "많이 떨어졌다고 보는 기준", minval = 5, maxval = 50, group = groupShock)
+rsiOverbought = input.int(65, "많이 올랐다고 보는 기준", minval = 50, maxval = 95, group = groupShock)
+
+groupZones = "10. 최근 가격 범위"
+showPD = input.bool(false, "최근 큰 범위의 위·중간·아래 표시", group = groupZones)
+requirePD = input.bool(false, "상승 후보=범위 아래쪽 / 하락 후보=범위 위쪽 필수", group = groupZones)
+pdDepthPct = input.float(50.0, "위·아래 구간 깊이 (%)", minval = 10.0, maxval = 50.0, step = 5.0,
+     tooltip = "50은 가운데를 기준으로 위·아래를 나눕니다. 40은 가운데 20%를 중립 구간으로 비웁니다.", group = groupZones)
+linkedZoneReferencePct = input.float(50.0, "가까운 구간을 고르는 기준 위치 (%)", minval = 0.0, maxval = 100.0, step = 5.0,
+     tooltip = "상승은 구간 아래에서, 하락은 구간 위에서 이 비율만큼 들어간 지점을 거리 비교에 사용합니다.", group = groupZones)
+
+// groupScanner = "11. 여러 코인 찾기 — 기본"
+// scanTf = input.timeframe("15", "코인을 비교할 시간봉 (15분 추천)", group = groupScanner)
+// scanTrendTf = input.timeframe("60", "코인 큰 흐름 확인 시간봉 (1시간 추천)", group = groupScanner)
+// enableScanAlert = input.bool(true, "새 기준 충족 후보가 생기면 알림 허용",
+//      tooltip = "TradingView 알림 만들기에서 ‘Any alert() function call’을 선택하면 동적 코인명이 포함됩니다.", group = groupScanner)
+// 
+// groupScanAdvanced = "90. 고급 — 코인 찾기 계산"
+// scanPivotLen = input.int(5, "고점·저점 확인 강도", minval = 2, maxval = 20, group = groupScanAdvanced)
+// scanSweepLookback = input.int(20, "이전 고·저점 확인 범위 (봉)", minval = 5, maxval = 100, group = groupScanAdvanced)
+// scanSweepRecentBars = input.int(20, "고·저점 복귀 신호 유지 기간", minval = 2, maxval = 100, group = groupScanAdvanced)
+// scanStructureWindow = input.int(30, "흐름 돌파 신호 유지 기간", minval = 3, maxval = 150, group = groupScanAdvanced)
+// scanZoneWindow = input.int(30, "관심 구간 유효 기간", minval = 3, maxval = 150,
+//      tooltip = "코인 찾기는 속도를 위해 각 방향의 최신 가격 빈 구간과 최신 반응 구간을 근사 계산합니다. 최종 판단은 현재 차트에서 확인하세요.", group = groupScanAdvanced)
+// scanZoneRecentBars = input.int(5, "구간 재접촉 신호 유지 기간", minval = 0, maxval = 30, group = groupScanAdvanced)
+// scanFvgMinAtr = input.float(0.10, "가격 빈 구간 최소 크기 (ATR)", minval = 0.0, maxval = 2.0, step = 0.05,
+//      tooltip = "ATR은 최근 캔들의 평균 움직임 크기입니다.", group = groupScanAdvanced)
+// scanObLookback = input.int(12, "반대색 캔들 탐색 범위", minval = 2, maxval = 50, group = groupScanAdvanced)
+// scanAbsorptionMult = input.float(1.2, "거래량 흡수 추정 기준 배수", minval = 1.0, maxval = 5.0, step = 0.1, group = groupScanAdvanced)
+// scanTrendFastLen = input.int(50, "큰 흐름 빠른 평균선", minval = 5, maxval = 200, tooltip = "느린 길이보다 크게 입력하면 두 값을 자동으로 바꿔 계산합니다.", group = groupScanAdvanced)
+// scanTrendSlowLen = input.int(200, "큰 흐름 느린 평균선", minval = 20, maxval = 500, tooltip = "빠른 길이보다 작게 입력하면 두 값을 자동으로 바꿔 계산합니다.", group = groupScanAdvanced)
+// scanAtrLen = input.int(14, "스캐너 ATR 길이", minval = 2, maxval = 100, group = groupScanAdvanced)
+// scanChangeHours = input.int(6, "가격 변화 비교 시간", minval = 1, maxval = 72, inline = "scanChange", group = groupScanAdvanced)
+// scanRsiRecoveryLookback = input.int(10, "RSI 회복 확인 봉", minval = 2, maxval = 100, inline = "scanChange", group = groupScanAdvanced)
+// scanAbsorptionWickRatio = input.float(0.50, "흡수봉 최소 꼬리/몸통 배수", minval = 0.00, maxval = 5.00, step = 0.10, group = groupScanAdvanced)
+// scanAbsorptionCloseStrength = input.float(0.50, "흡수봉 종가 힘", minval = 0.50, maxval = 0.95, step = 0.05, group = groupScanAdvanced)
+// scanMinTfMinutes = input.int(1, "코인 비교 최소 시간 (분)", minval = 1, maxval = 60, inline = "scanTfRange", group = groupScanAdvanced)
+// scanMaxTfMinutes = input.int(60, "최대 시간 (분)", minval = 1, maxval = 1440, inline = "scanTfRange", group = groupScanAdvanced)
+// scanCalcBars = input.int(500, "종목당 계산 과거봉 수", minval = 300, maxval = 5000,
+//      tooltip = "느린 평균선·가격 변화 비교에 부족하면 코드가 필요한 과거봉 수까지 자동으로 올립니다. 값이 클수록 계산량이 늘어납니다. 로딩이 느리면 낮추세요.", group = groupScanAdvanced)
+
+groupChartWeights = "90A. 고급 — 현재 차트 14점 비중"
+weightTrend = input.int(2, "L 큰 흐름", minval = 0, maxval = 10, inline = "cw1", group = groupChartWeights)
+weightStructureTf = input.int(2, "M 중간 흐름", minval = 0, maxval = 10, inline = "cw1", group = groupChartWeights)
+weightEntryTf = input.int(1, "S 짧은 흐름", minval = 0, maxval = 10, inline = "cw1", group = groupChartWeights)
+weightSweep = input.int(2, "고·저점 복귀", minval = 0, maxval = 10, inline = "cw2", group = groupChartWeights)
+weightStructureBreak = input.int(2, "흐름 돌파", minval = 0, maxval = 10, inline = "cw2", group = groupChartWeights)
+weightZoneTouch = input.int(1, "구간 재접촉", minval = 0, maxval = 10, inline = "cw2", group = groupChartWeights)
+weightVolume = input.int(1, "거래량", minval = 0, maxval = 10, inline = "cw3", group = groupChartWeights)
+weightEma = input.int(1, "EMA", minval = 0, maxval = 10, inline = "cw3", group = groupChartWeights)
+weightVwap = input.int(1, "VWAP", minval = 0, maxval = 10, inline = "cw3", group = groupChartWeights)
+weightShock = input.int(1, "급변·RSI", minval = 0, maxval = 10, inline = "cw3", group = groupChartWeights)
+
+// groupScanWeights = "90B. 고급 — 코인 찾기 100점 비중"
+// scanWeightTrend = input.int(15, "큰 흐름", minval = 0, maxval = 50, inline = "sw1", group = groupScanWeights)
+// scanWeightLocal = input.int(5, "현재 흐름", minval = 0, maxval = 50, inline = "sw1", group = groupScanWeights)
+// scanWeightVwap = input.int(5, "VWAP", minval = 0, maxval = 50, inline = "sw1", group = groupScanWeights)
+// scanWeightSweep = input.int(20, "고·저점 복귀", minval = 0, maxval = 50, inline = "sw2", group = groupScanWeights)
+// scanWeightStructure = input.int(20, "흐름 돌파", minval = 0, maxval = 50, inline = "sw2", group = groupScanWeights)
+// scanWeightZone = input.int(15, "구간 재접촉", minval = 0, maxval = 50, inline = "sw2", group = groupScanWeights)
+// scanWeightAbsorption = input.int(10, "거래량 흡수", minval = 0, maxval = 50, inline = "sw3", group = groupScanWeights)
+// scanWeightVolume = input.int(5, "거래량 증가", minval = 0, maxval = 50, inline = "sw3", group = groupScanWeights)
+// scanWeightShock = input.int(5, "급변·RSI", minval = 0, maxval = 50, inline = "sw3", group = groupScanWeights)
+
+// groupS1 = "91A. 검색할 코인 01–06 · 기본값은 선물"
+// scanUse01 = input.bool(true, "", inline = "s01", group = groupS1)
+// scanSym01 = input.symbol("BINANCE:BTCUSDT.P", "01", inline = "s01", group = groupS1)
+// scanUse02 = input.bool(true, "", inline = "s02", group = groupS1)
+// scanSym02 = input.symbol("BINANCE:ETHUSDT.P", "02", inline = "s02", group = groupS1)
+// scanUse03 = input.bool(true, "", inline = "s03", group = groupS1)
+// scanSym03 = input.symbol("BINANCE:SOLUSDT.P", "03", inline = "s03", group = groupS1)
+// scanUse04 = input.bool(true, "", inline = "s04", group = groupS1)
+// scanSym04 = input.symbol("BINANCE:XRPUSDT.P", "04", inline = "s04", group = groupS1)
+// scanUse05 = input.bool(true, "", inline = "s05", group = groupS1)
+// scanSym05 = input.symbol("BINANCE:BNBUSDT.P", "05", inline = "s05", group = groupS1)
+// scanUse06 = input.bool(true, "", inline = "s06", group = groupS1)
+// scanSym06 = input.symbol("BINANCE:DOGEUSDT.P", "06", inline = "s06", group = groupS1)
+// 
+// groupS2 = "91B. 검색할 코인 07–12 · 기본값은 선물"
+// scanUse07 = input.bool(true, "", inline = "s07", group = groupS2)
+// scanSym07 = input.symbol("BINANCE:ADAUSDT.P", "07", inline = "s07", group = groupS2)
+// scanUse08 = input.bool(true, "", inline = "s08", group = groupS2)
+// scanSym08 = input.symbol("BINANCE:LINKUSDT.P", "08", inline = "s08", group = groupS2)
+// scanUse09 = input.bool(true, "", inline = "s09", group = groupS2)
+// scanSym09 = input.symbol("BINANCE:AVAXUSDT.P", "09", inline = "s09", group = groupS2)
+// scanUse10 = input.bool(true, "", inline = "s10", group = groupS2)
+// scanSym10 = input.symbol("BINANCE:DOTUSDT.P", "10", inline = "s10", group = groupS2)
+// scanUse11 = input.bool(true, "", inline = "s11", group = groupS2)
+// scanSym11 = input.symbol("BINANCE:LTCUSDT.P", "11", inline = "s11", group = groupS2)
+// scanUse12 = input.bool(true, "", inline = "s12", group = groupS2)
+// scanSym12 = input.symbol("BINANCE:BCHUSDT.P", "12", inline = "s12", group = groupS2)
+// 
+// groupS3 = "91C. 검색할 코인 13–16 · 기본값은 선물"
+// scanUse13 = input.bool(true, "", inline = "s13", group = groupS3)
+// scanSym13 = input.symbol("BINANCE:TRXUSDT.P", "13", inline = "s13", group = groupS3)
+// scanUse14 = input.bool(true, "", inline = "s14", group = groupS3)
+// scanSym14 = input.symbol("BINANCE:NEARUSDT.P", "14", inline = "s14", group = groupS3)
+// scanUse15 = input.bool(true, "", inline = "s15", group = groupS3)
+// scanSym15 = input.symbol("BINANCE:APTUSDT.P", "15", inline = "s15", group = groupS3)
+// scanUse16 = input.bool(true, "", inline = "s16", group = groupS3)
+// scanSym16 = input.symbol("BINANCE:INJUSDT.P", "16", inline = "s16", group = groupS3)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BASE CALCULATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+bool barClosed = barstate.isconfirmed
+bool confirmed = not confirmedOnly or barClosed
+int effectiveEmaFastLen = math.min(emaFastLen, emaSlowLen)
+int effectiveEmaSlowLen = math.max(emaFastLen, emaSlowLen)
+// int effectiveScanTrendFastLen = math.min(scanTrendFastLen, scanTrendSlowLen)
+// int effectiveScanTrendSlowLen = math.max(scanTrendFastLen, scanTrendSlowLen)
+float atr = ta.atr(atrLen)
+float emaFast = ta.ema(close, effectiveEmaFastLen)
+float emaSlow = ta.ema(close, effectiveEmaSlowLen)
+float vwapValue = ta.vwap(hlc3)
+float volSma = ta.sma(volume, volumeLen)
+float entryCandleRange = math.max(high - low, syminfo.mintick)
+float entryBodyRatio = math.abs(close - open) / entryCandleRange
+float entryCloseLocation = (close - low) / entryCandleRange
+float entryVolumeRatio = na(volume) or na(volSma) or volSma <= 0 ? na : volume / volSma
+float atrBaseline = ta.sma(atr, atrBaselineLen)
+float entryAtrRatio = na(atrBaseline) or atrBaseline <= 0 ? na : atr / atrBaseline
+float effectiveFvgTouchDepthPct = math.min(zoneMinDepthPct, math.max(0.0, fvgFillPct - 5.0))
+bool structureAtrReady = structureBreakBufferAtr == 0 or not na(atr)
+bool sweepAtrReady = sweepMinDepthAtr == 0 and sweepReturnBufferAtr == 0 or not na(atr)
+float structureBreakBuffer = na(atr) ? 0.0 : atr * structureBreakBufferAtr
+float sweepDepthBuffer = na(atr) ? 0.0 : atr * sweepMinDepthAtr
+float sweepReturnBuffer = na(atr) ? 0.0 : atr * sweepReturnBufferAtr
+
+bool emaBull = close > emaFast and emaFast > emaSlow
+bool emaBear = close < emaFast and emaFast < emaSlow
+bool volumeBull = volume > volSma * volumeMult and close > open
+bool volumeBear = volume > volSma * volumeMult and close < open
+
+plot(ema1Show ? ta.ema(close, ema1Len) : na, "EMA 1", color = color.new(ema1Color, 0), linewidth = ema1Width)
+plot(ema2Show ? ta.ema(close, ema2Len) : na, "EMA 2", color = color.new(ema2Color, 0), linewidth = ema2Width)
+plot(ema3Show ? ta.ema(close, ema3Len) : na, "EMA 3", color = color.new(ema3Color, 0), linewidth = ema3Width)
+plot(ema4Show ? ta.ema(close, ema4Len) : na, "EMA 4", color = color.new(ema4Color, 0), linewidth = ema4Width)
+
+float bbBasisVal = ta.sma(close, bbLen)
+float bbDevVal = bbMult * ta.stdev(close, bbLen)
+plotBbUpper = plot(bbShow ? bbBasisVal + bbDevVal : na, "BB 상단", color = color.new(bbColor, 0), linewidth = bbWidth)
+plotBbBasis = plot(bbShow ? bbBasisVal : na, "BB 중앙", color = color.new(bbColor, 35), linewidth = 1)
+plotBbLower = plot(bbShow ? bbBasisVal - bbDevVal : na, "BB 하단", color = color.new(bbColor, 0), linewidth = bbWidth)
+fill(plotBbUpper, plotBbLower, color = bbShow and bbFill ? color.new(bbColor, 92) : na, title = "볼린저밴드 채우기")
+plot(showVWAP ? vwapValue : na, "당일 평균 거래가격 (VWAP)", color = color.new(vwapColor, vwapTransparency), linewidth = vwapWidth,
+     linestyle = vwapLineStyleInput == "점선" ? plot.linestyle_dashed : vwapLineStyleInput == "도트" ? plot.linestyle_dotted : plot.linestyle_solid)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+f_lineStyle(_style) =>
+    _style == "점선" ? line.style_dashed : _style == "도트" ? line.style_dotted : line.style_solid
+
+f_textSize(_size) =>
+    _size == "아주 작게" ? size.tiny : _size == "작게" ? size.small : _size == "크게" ? size.large : size.normal
+
+f_stars(_n) =>
+    _n >= 5 ? "★★★★★" : _n == 4 ? "★★★★☆" : _n == 3 ? "★★★☆☆" : _n == 2 ? "★★☆☆☆" : "★☆☆☆☆"
+
+f_tfState(_fastLen, _slowLen) =>
+    float _fast = ta.ema(close, _fastLen)
+    float _slow = ta.ema(close, _slowLen)
+    close > _fast and _fast > _slow ? 1 : close < _fast and _fast < _slow ? -1 : 0
+
+f_stateText(_state) =>
+    beginnerView ? (_state == 1 ? "🟢 위쪽 흐름" : _state == -1 ? "🔵 아래쪽 흐름" : "⚪ 방향 혼합") :
+     _state == 1 ? "▲ 상승 정렬" : _state == -1 ? "▼ 하락 정렬" : "• 혼조"
+
+f_tfLabel(_tf) =>
+    int _seconds = timeframe.in_seconds(_tf)
+    int _minutes = int(_seconds / 60)
+    _seconds < 60 ? str.tostring(_seconds) + "초" :
+     _seconds < 3600 ? str.tostring(_minutes) + "분" :
+     _seconds < 86400 and _minutes % 60 == 0 ? str.tostring(int(_minutes / 60)) + "시간" :
+     _seconds < 86400 ? str.tostring(_minutes) + "분" :
+     str.tostring(_seconds / 86400.0, "#.##") + "일"
+
+f_stateColor(_state) =>
+    _state == 1 ? color.new(bullColor, directionCellTransparency) : _state == -1 ? color.new(bearColor, directionCellTransparency) : color.new(panelAltColor, 0)
+
+f_lastBearishCandle(_lookback) =>
+    float _top = na
+    float _bottom = na
+    int _offset = na
+    float _volRatio = na
+    for _i = 1 to _lookback
+        if close[_i] < open[_i]
+            _top := high[_i]
+            _bottom := low[_i]
+            _offset := _i
+            _volRatio := nz(volume[_i]) / math.max(nz(volSma[_i]), 1.0)
+            break
+    [_top, _bottom, _offset, _volRatio]
+
+f_lastBullishCandle(_lookback) =>
+    float _top = na
+    float _bottom = na
+    int _offset = na
+    float _volRatio = na
+    for _i = 1 to _lookback
+        if close[_i] > open[_i]
+            _top := high[_i]
+            _bottom := low[_i]
+            _offset := _i
+            _volRatio := nz(volume[_i]) / math.max(nz(volSma[_i]), 1.0)
+            break
+    [_top, _bottom, _offset, _volRatio]
+
+// [1] + lookahead_on is non-repainting only when the request is equal to or
+// higher than the chart timeframe. Unsafe lower-TF requests are not used.
+float chartTfSeconds = timeframe.in_seconds()
+float trendTfSeconds = timeframe.in_seconds(tfTrend)
+float structureTfSeconds = timeframe.in_seconds(tfStructure)
+float entryTfSeconds = timeframe.in_seconds(tfEntry)
+bool trendTfBad = trendTfSeconds < chartTfSeconds or trendTfSeconds < structureTfSeconds
+bool structTfBad = structureTfSeconds < chartTfSeconds or structureTfSeconds < entryTfSeconds
+bool entryTfBad = entryTfSeconds < chartTfSeconds
+bool shockTfBad = timeframe.in_seconds(shockCalculationTf) < chartTfSeconds
+bool mtfInvalid = trendTfBad or structTfBad or entryTfBad or (useShockBonus and shockTfBad)
+
+int mtfTrendState = trendTfBad ? 0 : request.security(
+     syminfo.tickerid, tfTrend, f_tfState(effectiveEmaFastLen, effectiveEmaSlowLen)[1],
+     lookahead = barmerge.lookahead_on)
+
+int mtfStructureState = structTfBad ? 0 : request.security(
+     syminfo.tickerid, tfStructure, f_tfState(effectiveEmaFastLen, effectiveEmaSlowLen)[1],
+     lookahead = barmerge.lookahead_on)
+
+int mtfEntryState = entryTfBad ? 0 : request.security(
+     syminfo.tickerid, tfEntry, f_tfState(effectiveEmaFastLen, effectiveEmaSlowLen)[1],
+     lookahead = barmerge.lookahead_on)
+
+float sixHourReturn = shockTfBad ? na : request.security(
+     syminfo.tickerid,
+     shockCalculationTf,
+     not na(close[shockLookbackBars + 1]) and close[shockLookbackBars + 1] != 0 ? (close[1] / close[shockLookbackBars + 1] - 1.0) * 100.0 : na,
+     lookahead = barmerge.lookahead_on)
+
+float shockRsi = shockTfBad ? na : request.security(
+     syminfo.tickerid,
+     shockCalculationTf,
+     ta.rsi(close, rsiLen)[1],
+     lookahead = barmerge.lookahead_on)
+
+bool longShock = not shockTfBad and sixHourReturn <= -shockPct and shockRsi <= rsiOversold
+bool shortShock = not shockTfBad and sixHourReturn >= shockPct and shockRsi >= rsiOverbought
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SWING STRUCTURE
+// ─────────────────────────────────────────────────────────────────────────────
+float swingPH = ta.pivothigh(high, swingLen, swingLen)
+float swingPL = ta.pivotlow(low, swingLen, swingLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+var bool swingHighBroken = false
+var bool swingLowBroken = false
+var int swingBias = 0
+
+// Equal high/low tracking
+var float prevPivotHigh = na
+var float prevPivotLow = na
+var int prevPivotHighBar = na
+var int prevPivotLowBar = na
+
+var float eqHighLevel = na
+var float eqLowLevel = na
+var bool eqHighActive = false
+var bool eqLowActive = false
+var bool eqHighSwept = false
+var bool eqLowSwept = false
+var line eqHighLine = na
+var line eqLowLine = na
+var int eqHighActivatedBar = na
+var int eqLowActivatedBar = na
+
+if barClosed and not na(swingPH)
+    int _pivotBar = bar_index - swingLen
+    float _tol = nz(atr[swingLen], atr) * eqAtrTolerance
+    if showEqualLevels and not na(prevPivotHigh) and math.abs(swingPH - prevPivotHigh) <= _tol
+        eqHighLevel := (swingPH + prevPivotHigh) / 2.0
+        eqHighActive := true
+        eqHighSwept := false
+        eqHighActivatedBar := bar_index
+        if not na(eqHighLine)
+            line.set_extend(eqHighLine, extend.none)
+            line.set_x2(eqHighLine, bar_index)
+            line.set_color(eqHighLine, color.new(panelMutedColor, math.min(100, equalLineTransparency + 47)))
+        // Activate the level only on the confirmation bar to avoid backpainting.
+        if showDetailVisuals
+            eqHighLine := line.new(bar_index, eqHighLevel, bar_index + 1, eqHighLevel,
+                 xloc = xloc.bar_index, extend = extend.right,
+                 color = color.new(bearColor, equalLineTransparency), style = f_lineStyle(equalLineStyleInput), width = equalLineWidth)
+            label.new(bar_index, eqHighLevel, "비슷한 고점  ◆",
+                 xloc = xloc.bar_index, yloc = yloc.price,
+                 style = label.style_label_down, color = color.new(bearColor, equalLineTransparency),
+                 textcolor = color.white, size = f_textSize(zoneTextSizeInput))
+        else
+            eqHighLine := na
+    prevPivotHigh := swingPH
+    prevPivotHighBar := _pivotBar
+    lastSwingHigh := swingPH
+    lastSwingHighBar := _pivotBar
+    swingHighBroken := false
+
+if barClosed and not na(swingPL)
+    int _pivotBar = bar_index - swingLen
+    float _tol = nz(atr[swingLen], atr) * eqAtrTolerance
+    if showEqualLevels and not na(prevPivotLow) and math.abs(swingPL - prevPivotLow) <= _tol
+        eqLowLevel := (swingPL + prevPivotLow) / 2.0
+        eqLowActive := true
+        eqLowSwept := false
+        eqLowActivatedBar := bar_index
+        if not na(eqLowLine)
+            line.set_extend(eqLowLine, extend.none)
+            line.set_x2(eqLowLine, bar_index)
+            line.set_color(eqLowLine, color.new(panelMutedColor, math.min(100, equalLineTransparency + 47)))
+        // Activate the level only on the confirmation bar to avoid backpainting.
+        if showDetailVisuals
+            eqLowLine := line.new(bar_index, eqLowLevel, bar_index + 1, eqLowLevel,
+                 xloc = xloc.bar_index, extend = extend.right,
+                 color = color.new(bullColor, equalLineTransparency), style = f_lineStyle(equalLineStyleInput), width = equalLineWidth)
+            label.new(bar_index, eqLowLevel, "비슷한 저점  ◆",
+                 xloc = xloc.bar_index, yloc = yloc.price,
+                 style = label.style_label_up, color = color.new(bullColor, equalLineTransparency),
+                 textcolor = panelColor, size = f_textSize(zoneTextSizeInput))
+        else
+            eqLowLine := na
+    prevPivotLow := swingPL
+    prevPivotLowBar := _pivotBar
+    lastSwingLow := swingPL
+    lastSwingLowBar := _pivotBar
+    swingLowBroken := false
+
+bool bullSwingBreak = barClosed and structureAtrReady and not na(lastSwingHigh) and not swingHighBroken and close > lastSwingHigh + structureBreakBuffer
+bool bearSwingBreak = barClosed and structureAtrReady and not na(lastSwingLow) and not swingLowBroken and close < lastSwingLow - structureBreakBuffer
+
+bool bullSwingChoch = bullSwingBreak and swingBias == -1
+bool bearSwingChoch = bearSwingBreak and swingBias == 1
+
+if bullSwingBreak
+    swingHighBroken := true
+    swingBias := 1
+    if showSwingStructure and showDetailVisuals
+        int _safeStartBar = math.max(lastSwingHighBar, math.max(0, bar_index - 9999))
+        line.new(_safeStartBar, lastSwingHigh, bar_index, lastSwingHigh,
+             xloc = xloc.bar_index, color = color.new(bullColor, swingLineTransparency), style = f_lineStyle(swingLineStyleInput), width = swingLineWidth)
+        label.new(bar_index, lastSwingHigh, bullSwingChoch ? "큰 흐름 전환  ▲" : "큰 고점 돌파  ▲",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_up, color = color.new(bullColor, swingLineTransparency),
+             textcolor = panelColor, size = f_textSize(zoneTextSizeInput))
+
+if bearSwingBreak
+    swingLowBroken := true
+    swingBias := -1
+    if showSwingStructure and showDetailVisuals
+        int _safeStartBar = math.max(lastSwingLowBar, math.max(0, bar_index - 9999))
+        line.new(_safeStartBar, lastSwingLow, bar_index, lastSwingLow,
+             xloc = xloc.bar_index, color = color.new(bearColor, swingLineTransparency), style = f_lineStyle(swingLineStyleInput), width = swingLineWidth)
+        label.new(bar_index, lastSwingLow, bearSwingChoch ? "큰 흐름 전환  ▼" : "큰 저점 이탈  ▼",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_down, color = color.new(bearColor, swingLineTransparency),
+             textcolor = color.white, size = f_textSize(zoneTextSizeInput))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERNAL STRUCTURE
+// ─────────────────────────────────────────────────────────────────────────────
+float internalPH = ta.pivothigh(high, internalLen, internalLen)
+float internalPL = ta.pivotlow(low, internalLen, internalLen)
+
+var float lastInternalHigh = na
+var float lastInternalLow = na
+var int lastInternalHighBar = na
+var int lastInternalLowBar = na
+var bool internalHighBroken = false
+var bool internalLowBroken = false
+var int internalBias = 0
+
+if barClosed and not na(internalPH)
+    lastInternalHigh := internalPH
+    lastInternalHighBar := bar_index - internalLen
+    internalHighBroken := false
+
+if barClosed and not na(internalPL)
+    lastInternalLow := internalPL
+    lastInternalLowBar := bar_index - internalLen
+    internalLowBroken := false
+
+bool bullInternalBreak = barClosed and structureAtrReady and not na(lastInternalHigh) and not internalHighBroken and close > lastInternalHigh + structureBreakBuffer
+bool bearInternalBreak = barClosed and structureAtrReady and not na(lastInternalLow) and not internalLowBroken and close < lastInternalLow - structureBreakBuffer
+
+bool bullInternalChoch = bullInternalBreak and internalBias == -1
+bool bearInternalChoch = bearInternalBreak and internalBias == 1
+bool bullInternalBos = bullInternalBreak and not bullInternalChoch
+bool bearInternalBos = bearInternalBreak and not bearInternalChoch
+
+if bullInternalBreak
+    internalHighBroken := true
+    internalBias := 1
+    if showInternalStructure and showDetailVisuals
+        int _safeStartBar = math.max(lastInternalHighBar, math.max(0, bar_index - 9999))
+        line.new(_safeStartBar, lastInternalHigh, bar_index, lastInternalHigh,
+             xloc = xloc.bar_index, color = color.new(bullColor, internalLineTransparency), style = f_lineStyle(internalLineStyleInput), width = internalLineWidth)
+        label.new(bar_index, lastInternalHigh, bullInternalChoch ? "작은 흐름 전환  ▲" : "작은 고점 돌파  ▲",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_up, color = color.new(bullColor, internalLineTransparency),
+             textcolor = panelColor, size = f_textSize(zoneTextSizeInput))
+
+if bearInternalBreak
+    internalLowBroken := true
+    internalBias := -1
+    if showInternalStructure and showDetailVisuals
+        int _safeStartBar = math.max(lastInternalLowBar, math.max(0, bar_index - 9999))
+        line.new(_safeStartBar, lastInternalLow, bar_index, lastInternalLow,
+             xloc = xloc.bar_index, color = color.new(bearColor, internalLineTransparency), style = f_lineStyle(internalLineStyleInput), width = internalLineWidth)
+        label.new(bar_index, lastInternalLow, bearInternalChoch ? "작은 흐름 전환  ▼" : "작은 저점 이탈  ▼",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_down, color = color.new(bearColor, internalLineTransparency),
+             textcolor = color.white, size = f_textSize(zoneTextSizeInput))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIQUIDITY SWEEPS
+// ─────────────────────────────────────────────────────────────────────────────
+var int sweptSwingLowPivotBar = na
+var int sweptSwingHighPivotBar = na
+
+bool bullEqSweep = barClosed and sweepAtrReady and eqLowActive and not eqLowSwept and
+     bar_index > eqLowActivatedBar and low < eqLowLevel - sweepDepthBuffer and close > eqLowLevel + sweepReturnBuffer
+bool bearEqSweep = barClosed and sweepAtrReady and eqHighActive and not eqHighSwept and
+     bar_index > eqHighActivatedBar and high > eqHighLevel + sweepDepthBuffer and close < eqHighLevel - sweepReturnBuffer
+
+bool bullSwingSweep = barClosed and sweepAtrReady and not na(lastSwingLow) and not swingLowBroken and
+     lastSwingLowBar != sweptSwingLowPivotBar and low < lastSwingLow - sweepDepthBuffer and close > lastSwingLow + sweepReturnBuffer
+
+bool bearSwingSweep = barClosed and sweepAtrReady and not na(lastSwingHigh) and not swingHighBroken and
+     lastSwingHighBar != sweptSwingHighPivotBar and high > lastSwingHigh + sweepDepthBuffer and close < lastSwingHigh - sweepReturnBuffer
+
+if bullEqSweep
+    eqLowSwept := true
+    eqLowActive := false
+    eqLowActivatedBar := na
+    if not na(eqLowLine)
+        line.set_extend(eqLowLine, extend.none)
+        line.set_x2(eqLowLine, bar_index)
+        line.set_color(eqLowLine, color.new(bullColor, math.min(100, equalLineTransparency + 44)))
+        eqLowLine := na
+
+if bearEqSweep
+    eqHighSwept := true
+    eqHighActive := false
+    eqHighActivatedBar := na
+    if not na(eqHighLine)
+        line.set_extend(eqHighLine, extend.none)
+        line.set_x2(eqHighLine, bar_index)
+        line.set_color(eqHighLine, color.new(bearColor, math.min(100, equalLineTransparency + 44)))
+        eqHighLine := na
+
+if bullSwingSweep
+    sweptSwingLowPivotBar := lastSwingLowBar
+
+if bearSwingSweep
+    sweptSwingHighPivotBar := lastSwingHighBar
+
+// If equal liquidity is cleanly broken rather than swept, deactivate it.
+if barClosed and eqLowActive and bar_index > eqLowActivatedBar and close < eqLowLevel
+    eqLowActive := false
+    eqLowActivatedBar := na
+    if not na(eqLowLine)
+        line.set_extend(eqLowLine, extend.none)
+        line.set_x2(eqLowLine, bar_index)
+        line.set_color(eqLowLine, color.new(panelMutedColor, math.min(100, equalLineTransparency + 50)))
+        eqLowLine := na
+if barClosed and eqHighActive and bar_index > eqHighActivatedBar and close > eqHighLevel
+    eqHighActive := false
+    eqHighActivatedBar := na
+    if not na(eqHighLine)
+        line.set_extend(eqHighLine, extend.none)
+        line.set_x2(eqHighLine, bar_index)
+        line.set_color(eqHighLine, color.new(panelMutedColor, math.min(100, equalLineTransparency + 50)))
+        eqHighLine := na
+
+bool bullSweepEvent = bullEqSweep or bullSwingSweep
+bool bearSweepEvent = bearEqSweep or bearSwingSweep
+
+bool showBullSweepShape = showLiquidity and showDetailVisuals and barClosed and bullSweepEvent
+bool showBearSweepShape = showLiquidity and showDetailVisuals and barClosed and bearSweepEvent
+plotshape(showBullSweepShape and zoneTextSizeInput == "아주 작게", title = "저점을 찍고 복귀 · 아주 작게",
+     style = shape.labelup, location = location.belowbar,
+     color = color.new(bullColor, signalLabelTransparency), textcolor = panelColor, size = size.tiny, text = "저점 복귀 ▲")
+plotshape(showBullSweepShape and zoneTextSizeInput == "작게", title = "저점을 찍고 복귀 · 작게",
+     style = shape.labelup, location = location.belowbar,
+     color = color.new(bullColor, signalLabelTransparency), textcolor = panelColor, size = size.small, text = "저점 복귀 ▲")
+plotshape(showBullSweepShape and zoneTextSizeInput == "보통", title = "저점을 찍고 복귀 · 보통",
+     style = shape.labelup, location = location.belowbar,
+     color = color.new(bullColor, signalLabelTransparency), textcolor = panelColor, size = size.normal, text = "저점 복귀 ▲")
+
+plotshape(showBearSweepShape and zoneTextSizeInput == "아주 작게", title = "고점을 찍고 복귀 · 아주 작게",
+     style = shape.labeldown, location = location.abovebar,
+     color = color.new(bearColor, signalLabelTransparency), textcolor = color.white, size = size.tiny, text = "고점 복귀 ▼")
+plotshape(showBearSweepShape and zoneTextSizeInput == "작게", title = "고점을 찍고 복귀 · 작게",
+     style = shape.labeldown, location = location.abovebar,
+     color = color.new(bearColor, signalLabelTransparency), textcolor = color.white, size = size.small, text = "고점 복귀 ▼")
+plotshape(showBearSweepShape and zoneTextSizeInput == "보통", title = "고점을 찍고 복귀 · 보통",
+     style = shape.labeldown, location = location.abovebar,
+     color = color.new(bearColor, signalLabelTransparency), textcolor = color.white, size = size.normal, text = "고점 복귀 ▼")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FAIR VALUE GAPS
+// ─────────────────────────────────────────────────────────────────────────────
+var bullFvgBoxes = array.new_box(0)
+var bearFvgBoxes = array.new_box(0)
+var bullFvgCreatedBars = array.new_int(0)
+var bearFvgCreatedBars = array.new_int(0)
+var filledFvgBoxHistory = array.new_box(0)
+int filledFvgHistoryLimit = math.min(maxFvgZones, 20)
+
+bool bullFvgCreated = barClosed and showFVG and bar_index >= 2 and
+     low > high[2] and (low - high[2]) >= atr * fvgMinAtr
+
+bool bearFvgCreated = barClosed and showFVG and bar_index >= 2 and
+     high < low[2] and (low[2] - high) >= atr * fvgMinAtr
+
+if bullFvgCreated
+    box _b = box.new(
+         left = bar_index - 2, top = low,
+         right = bar_index + fvgExtendBars, bottom = high[2],
+         xloc = xloc.bar_index, extend = extend.none,
+         border_color = color.new(bullFvgColor, showDetailVisuals ? zoneBorderTransparency : 100),
+         border_width = zoneBorderWidth, border_style = f_lineStyle(zoneBorderStyleInput),
+         bgcolor = color.new(bullFvgColor, showDetailVisuals ? zoneFillTransparency : 100),
+         text = showDetailVisuals and showZoneText ? "가격 빈 구간  ▲" : "",
+         text_color = color.new(bullFvgColor, showDetailVisuals ? zoneTextTransparency : 100),
+         text_size = f_textSize(zoneTextSizeInput))
+    array.push(bullFvgBoxes, _b)
+    array.push(bullFvgCreatedBars, bar_index)
+    if array.size(bullFvgBoxes) > maxFvgZones
+        box.delete(array.shift(bullFvgBoxes))
+        array.shift(bullFvgCreatedBars)
+
+if bearFvgCreated
+    box _b = box.new(
+         left = bar_index - 2, top = low[2],
+         right = bar_index + fvgExtendBars, bottom = high,
+         xloc = xloc.bar_index, extend = extend.none,
+         border_color = color.new(bearFvgColor, showDetailVisuals ? zoneBorderTransparency : 100),
+         border_width = zoneBorderWidth, border_style = f_lineStyle(zoneBorderStyleInput),
+         bgcolor = color.new(bearFvgColor, showDetailVisuals ? zoneFillTransparency : 100),
+         text = showDetailVisuals and showZoneText ? "가격 빈 구간  ▼" : "",
+         text_color = color.new(bearFvgColor, showDetailVisuals ? zoneTextTransparency : 100),
+         text_size = f_textSize(zoneTextSizeInput))
+    array.push(bearFvgBoxes, _b)
+    array.push(bearFvgCreatedBars, bar_index)
+    if array.size(bearFvgBoxes) > maxFvgZones
+        box.delete(array.shift(bearFvgBoxes))
+        array.shift(bearFvgCreatedBars)
+
+bool inBullFvg = false
+bool inBearFvg = false
+
+if array.size(bullFvgBoxes) > 0
+    for _i = array.size(bullFvgBoxes) - 1 to 0
+        box _b = array.get(bullFvgBoxes, _i)
+        int _createdBar = array.get(bullFvgCreatedBars, _i)
+        bool _expired = bar_index > box.get_right(_b)
+        if _expired
+            box.delete(_b)
+            array.remove(bullFvgBoxes, _i)
+            array.remove(bullFvgCreatedBars, _i)
+        else
+            float _top = box.get_top(_b)
+            float _bottom = box.get_bottom(_b)
+            float _height = math.max(_top - _bottom, syminfo.mintick)
+            float _touchThreshold = _top - _height * effectiveFvgTouchDepthPct / 100.0
+            float _fillThreshold = _top - _height * fvgFillPct / 100.0
+            bool _overlap = low <= _top and high >= _bottom
+            bool _filled = bar_index > _createdBar and low <= _fillThreshold
+            bool _touch = bar_index > _createdBar and _overlap and low <= _touchThreshold
+            // 표시 보존 설정과 신호 유효성은 분리합니다. 완전히 채워진 구간은 다시 신호에 쓰지 않습니다.
+            bool _validTouch = _touch and not _filled
+            inBullFvg := inBullFvg or _validTouch
+            if barClosed and _filled
+                if deleteFilledFVG
+                    box.delete(_b)
+                else
+                    box.set_right(_b, bar_index)
+                    box.set_border_color(_b, color.new(panelMutedColor, showDetailVisuals ? math.max(0, inactiveZoneTransparency - 22) : 100))
+                    box.set_bgcolor(_b, color.new(panelMutedColor, showDetailVisuals ? inactiveZoneTransparency : 100))
+                    box.set_text(_b, showDetailVisuals and showZoneText ? "채워진 구간" : "")
+                    box.set_text_color(_b, color.new(panelMutedColor, showDetailVisuals ? math.max(0, inactiveZoneTransparency - 59) : 100))
+                    array.push(filledFvgBoxHistory, _b)
+                    if array.size(filledFvgBoxHistory) > filledFvgHistoryLimit
+                        box.delete(array.shift(filledFvgBoxHistory))
+                array.remove(bullFvgBoxes, _i)
+                array.remove(bullFvgCreatedBars, _i)
+
+if array.size(bearFvgBoxes) > 0
+    for _i = array.size(bearFvgBoxes) - 1 to 0
+        box _b = array.get(bearFvgBoxes, _i)
+        int _createdBar = array.get(bearFvgCreatedBars, _i)
+        bool _expired = bar_index > box.get_right(_b)
+        if _expired
+            box.delete(_b)
+            array.remove(bearFvgBoxes, _i)
+            array.remove(bearFvgCreatedBars, _i)
+        else
+            float _top = box.get_top(_b)
+            float _bottom = box.get_bottom(_b)
+            float _height = math.max(_top - _bottom, syminfo.mintick)
+            float _touchThreshold = _bottom + _height * effectiveFvgTouchDepthPct / 100.0
+            float _fillThreshold = _bottom + _height * fvgFillPct / 100.0
+            bool _overlap = high >= _bottom and low <= _top
+            bool _filled = bar_index > _createdBar and high >= _fillThreshold
+            bool _touch = bar_index > _createdBar and _overlap and high >= _touchThreshold
+            bool _validTouch = _touch and not _filled
+            inBearFvg := inBearFvg or _validTouch
+            if barClosed and _filled
+                if deleteFilledFVG
+                    box.delete(_b)
+                else
+                    box.set_right(_b, bar_index)
+                    box.set_border_color(_b, color.new(panelMutedColor, showDetailVisuals ? math.max(0, inactiveZoneTransparency - 22) : 100))
+                    box.set_bgcolor(_b, color.new(panelMutedColor, showDetailVisuals ? inactiveZoneTransparency : 100))
+                    box.set_text(_b, showDetailVisuals and showZoneText ? "채워진 구간" : "")
+                    box.set_text_color(_b, color.new(panelMutedColor, showDetailVisuals ? math.max(0, inactiveZoneTransparency - 59) : 100))
+                    array.push(filledFvgBoxHistory, _b)
+                    if array.size(filledFvgBoxHistory) > filledFvgHistoryLimit
+                        box.delete(array.shift(filledFvgBoxHistory))
+                array.remove(bearFvgBoxes, _i)
+                array.remove(bearFvgCreatedBars, _i)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER BLOCKS
+// ─────────────────────────────────────────────────────────────────────────────
+var bullObBoxes = array.new_box(0)
+var bearObBoxes = array.new_box(0)
+var bullObCreatedBars = array.new_int(0)
+var bearObCreatedBars = array.new_int(0)
+
+bool bullObTrigger = bullSwingBreak or (obFromInternalChoch and bullInternalChoch)
+bool bearObTrigger = bearSwingBreak or (obFromInternalChoch and bearInternalChoch)
+
+if barClosed and showOB and bullObTrigger
+    [_top, _bottom, _offset, _volRatio] = f_lastBearishCandle(obLookback)
+    if not na(_offset)
+        float _obOpaque = math.min(obMinTransparency, obBaseTransparency)
+        float _obBase = math.max(obMinTransparency, obBaseTransparency)
+        int _transp = showDetailVisuals ? int(math.max(_obOpaque, _obBase - math.min(_volRatio, obVolumeOpacityCap) * obVolumeOpacityStep)) : 100
+        box _b = box.new(
+             left = bar_index - _offset, top = _top,
+             right = bar_index + obExtendBars, bottom = _bottom,
+             xloc = xloc.bar_index, extend = extend.none,
+             border_color = color.new(bullColor, showDetailVisuals ? zoneBorderTransparency : 100),
+             border_width = zoneBorderWidth, border_style = f_lineStyle(zoneBorderStyleInput),
+             bgcolor = color.new(bullColor, _transp),
+             text = showDetailVisuals and showZoneText ? "반응 후보  ▲  · 기준봉 거래량 " + str.tostring(_volRatio, "#.0") + "×" : "",
+             text_color = color.new(bullColor, showDetailVisuals ? zoneTextTransparency : 100),
+             text_size = f_textSize(zoneTextSizeInput))
+        array.push(bullObBoxes, _b)
+        array.push(bullObCreatedBars, bar_index)
+        if array.size(bullObBoxes) > maxObZones
+            box.delete(array.shift(bullObBoxes))
+            array.shift(bullObCreatedBars)
+
+if barClosed and showOB and bearObTrigger
+    [_top, _bottom, _offset, _volRatio] = f_lastBullishCandle(obLookback)
+    if not na(_offset)
+        float _obOpaque = math.min(obMinTransparency, obBaseTransparency)
+        float _obBase = math.max(obMinTransparency, obBaseTransparency)
+        int _transp = showDetailVisuals ? int(math.max(_obOpaque, _obBase - math.min(_volRatio, obVolumeOpacityCap) * obVolumeOpacityStep)) : 100
+        box _b = box.new(
+             left = bar_index - _offset, top = _top,
+             right = bar_index + obExtendBars, bottom = _bottom,
+             xloc = xloc.bar_index, extend = extend.none,
+             border_color = color.new(bearColor, showDetailVisuals ? zoneBorderTransparency : 100),
+             border_width = zoneBorderWidth, border_style = f_lineStyle(zoneBorderStyleInput),
+             bgcolor = color.new(bearColor, _transp),
+             text = showDetailVisuals and showZoneText ? "반응 후보  ▼  · 기준봉 거래량 " + str.tostring(_volRatio, "#.0") + "×" : "",
+             text_color = color.new(bearColor, showDetailVisuals ? zoneTextTransparency : 100),
+             text_size = f_textSize(zoneTextSizeInput))
+        array.push(bearObBoxes, _b)
+        array.push(bearObCreatedBars, bar_index)
+        if array.size(bearObBoxes) > maxObZones
+            box.delete(array.shift(bearObBoxes))
+            array.shift(bearObCreatedBars)
+
+bool inBullOb = false
+bool inBearOb = false
+
+if array.size(bullObBoxes) > 0
+    for _i = array.size(bullObBoxes) - 1 to 0
+        box _b = array.get(bullObBoxes, _i)
+        int _createdBar = array.get(bullObCreatedBars, _i)
+        bool _expired = bar_index > box.get_right(_b)
+        if _expired
+            box.delete(_b)
+            array.remove(bullObBoxes, _i)
+            array.remove(bullObCreatedBars, _i)
+        else
+            float _top = box.get_top(_b)
+            float _bottom = box.get_bottom(_b)
+            float _height = math.max(_top - _bottom, syminfo.mintick)
+            float _touchThreshold = _top - _height * zoneMinDepthPct / 100.0
+            bool _invalid = close < _bottom
+            bool _touch = bar_index > _createdBar and low <= _touchThreshold and high >= _bottom and not _invalid
+            inBullOb := inBullOb or _touch
+            if barClosed and _invalid
+                box.delete(_b)
+                array.remove(bullObBoxes, _i)
+                array.remove(bullObCreatedBars, _i)
+
+if array.size(bearObBoxes) > 0
+    for _i = array.size(bearObBoxes) - 1 to 0
+        box _b = array.get(bearObBoxes, _i)
+        int _createdBar = array.get(bearObCreatedBars, _i)
+        bool _expired = bar_index > box.get_right(_b)
+        if _expired
+            box.delete(_b)
+            array.remove(bearObBoxes, _i)
+            array.remove(bearObCreatedBars, _i)
+        else
+            float _top = box.get_top(_b)
+            float _bottom = box.get_bottom(_b)
+            float _height = math.max(_top - _bottom, syminfo.mintick)
+            float _touchThreshold = _bottom + _height * zoneMinDepthPct / 100.0
+            bool _invalid = close > _top
+            bool _touch = bar_index > _createdBar and high >= _touchThreshold and low <= _top and not _invalid
+            inBearOb := inBearOb or _touch
+            if barClosed and _invalid
+                box.delete(_b)
+                array.remove(bearObBoxes, _i)
+                array.remove(bearObCreatedBars, _i)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM / DISCOUNT
+// ─────────────────────────────────────────────────────────────────────────────
+bool pdValid = not na(lastSwingHigh) and not na(lastSwingLow) and lastSwingHigh > lastSwingLow
+float rangeHigh = pdValid ? lastSwingHigh : na
+float rangeLow = pdValid ? lastSwingLow : na
+float rangeSize = pdValid ? lastSwingHigh - lastSwingLow : na
+float discountCeiling = pdValid ? lastSwingLow + rangeSize * pdDepthPct / 100.0 : na
+float premiumFloor = pdValid ? lastSwingHigh - rangeSize * pdDepthPct / 100.0 : na
+
+rangePlotLineStyle = rangeLineStyleInput == "점선" ? plot.linestyle_dashed : rangeLineStyleInput == "도트" ? plot.linestyle_dotted : plot.linestyle_solid
+pRangeHigh = plot(showPD ? rangeHigh : na, "최근 큰 범위 위쪽", color = color.new(bearColor, math.min(100, rangeLineTransparency + 44)), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+pPremiumFloor = plot(showPD ? premiumFloor : na, "하락 후보 범위 시작", color = color.new(accentColor, rangeLineTransparency), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+pDiscountCeiling = plot(showPD ? discountCeiling : na, "상승 후보 범위 끝", color = color.new(accentColor, rangeLineTransparency), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+pRangeLow = plot(showPD ? rangeLow : na, "최근 큰 범위 아래쪽", color = color.new(bullColor, math.min(100, rangeLineTransparency + 44)), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+
+fill(pRangeHigh, pPremiumFloor, color = showPD ? color.new(bearColor, rangeFillTransparency) : na, title = "범위 위쪽")
+fill(pDiscountCeiling, pRangeLow, color = showPD ? color.new(bullColor, rangeFillTransparency) : na, title = "범위 아래쪽")
+
+plot(showSwingLevels ? lastSwingHigh : na, "최근 큰 고점", color = color.new(bearColor, rangeLineTransparency), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+plot(showSwingLevels ? lastSwingLow : na, "최근 큰 저점", color = color.new(bullColor, rangeLineTransparency), style = plot.style_linebr, linewidth = rangeLineWidth, linestyle = rangePlotLineStyle)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEQUENCE + SCORE ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+bool bullStructureEvent = bullSwingBreak or bullInternalChoch or bullInternalBos
+bool bearStructureEvent = bearSwingBreak or bearInternalChoch or bearInternalBos
+// 정밀 모드에서는 짧은 내부 BOS 잡음을 구조 확인으로 사용하지 않습니다.
+bool bullEntryStructureEvent = bullSwingBreak or bullInternalChoch
+bool bearEntryStructureEvent = bearSwingBreak or bearInternalChoch
+
+var int lastBullSweepBar = na
+var int lastBearSweepBar = na
+var int lastBullStructureBar = na
+var int lastBearStructureBar = na
+var int lastBullEntryStructureBar = na
+var int lastBearEntryStructureBar = na
+
+if bullSweepEvent
+    lastBullSweepBar := bar_index
+if bearSweepEvent
+    lastBearSweepBar := bar_index
+if bullStructureEvent
+    lastBullStructureBar := bar_index
+if bearStructureEvent
+    lastBearStructureBar := bar_index
+if bullEntryStructureEvent
+    lastBullEntryStructureBar := bar_index
+if bearEntryStructureEvent
+    lastBearEntryStructureBar := bar_index
+
+bool bullSweepRecent = not na(lastBullSweepBar) and bar_index - lastBullSweepBar <= sweepRecentBars
+bool bearSweepRecent = not na(lastBearSweepBar) and bar_index - lastBearSweepBar <= sweepRecentBars
+bool bullStructureRecent = not na(lastBullStructureBar) and bar_index - lastBullStructureBar <= setupWindow
+bool bearStructureRecent = not na(lastBearStructureBar) and bar_index - lastBearStructureBar <= setupWindow
+bool bullEntryStructureRecent = not na(lastBullEntryStructureBar) and bar_index - lastBullEntryStructureBar <= setupWindow
+bool bearEntryStructureRecent = not na(lastBearEntryStructureBar) and bar_index - lastBearEntryStructureBar <= setupWindow
+
+bool longSequence = bullSweepRecent and bullStructureRecent and
+     lastBullSweepBar <= lastBullStructureBar and
+     lastBullStructureBar - lastBullSweepBar <= setupWindow and
+     bar_index - lastBullStructureBar <= setupWindow
+
+bool shortSequence = bearSweepRecent and bearStructureRecent and
+     lastBearSweepBar <= lastBearStructureBar and
+     lastBearStructureBar - lastBearSweepBar <= setupWindow and
+     bar_index - lastBearStructureBar <= setupWindow
+
+bool longPrecisionSequence = bullSweepRecent and bullEntryStructureRecent and
+     lastBullSweepBar <= lastBullEntryStructureBar and
+     lastBullEntryStructureBar - lastBullSweepBar <= setupWindow and
+     bar_index - lastBullEntryStructureBar <= setupWindow
+
+bool shortPrecisionSequence = bearSweepRecent and bearEntryStructureRecent and
+     lastBearSweepBar <= lastBearEntryStructureBar and
+     lastBearEntryStructureBar - lastBearSweepBar <= setupWindow and
+     bar_index - lastBearEntryStructureBar <= setupWindow
+
+bool bullZoneTouch = inBullFvg or inBullOb
+bool bearZoneTouch = inBearFvg or inBearOb
+
+// 정밀 모드용: 구조 확인 뒤 생성된 구간 중 현재 가격과 가장 가까운 구간을 선택합니다.
+// 반응 후보 구간(OB)을 가격 빈 구간(FVG)보다 우선하고, 같은 종류는 사용자가 정한 기준 위치가 종가에 가까운 구간을 고릅니다(동률은 최신).
+float bullLinkedFvgTop = na
+float bullLinkedFvgBottom = na
+float bullLinkedFvgDistance = na
+int bullLinkedFvgCreatedBar = na
+float bullLinkedObTop = na
+float bullLinkedObBottom = na
+float bullLinkedObDistance = na
+int bullLinkedObCreatedBar = na
+float bearLinkedFvgTop = na
+float bearLinkedFvgBottom = na
+float bearLinkedFvgDistance = na
+int bearLinkedFvgCreatedBar = na
+float bearLinkedObTop = na
+float bearLinkedObBottom = na
+float bearLinkedObDistance = na
+int bearLinkedObCreatedBar = na
+
+if not na(lastBullEntryStructureBar) and array.size(bullFvgBoxes) > 0
+    for _i = array.size(bullFvgBoxes) - 1 to 0
+        box _b = array.get(bullFvgBoxes, _i)
+        int _createdBar = array.get(bullFvgCreatedBars, _i)
+        float _top = box.get_top(_b)
+        float _bottom = box.get_bottom(_b)
+        float _touchThreshold = _top - math.max(_top - _bottom, syminfo.mintick) * effectiveFvgTouchDepthPct / 100.0
+        bool _validTouch = _createdBar >= lastBullEntryStructureBar and bar_index > _createdBar and low <= _touchThreshold and high >= _bottom
+        if _validTouch
+            float _reference = _bottom + (_top - _bottom) * linkedZoneReferencePct / 100.0
+            float _distance = math.abs(close - _reference)
+            bool _better = na(bullLinkedFvgDistance) or _distance < bullLinkedFvgDistance or (math.abs(_distance - bullLinkedFvgDistance) <= syminfo.mintick and _createdBar > bullLinkedFvgCreatedBar)
+            if _better
+                bullLinkedFvgTop := _top
+                bullLinkedFvgBottom := _bottom
+                bullLinkedFvgDistance := _distance
+                bullLinkedFvgCreatedBar := _createdBar
+
+if not na(lastBullEntryStructureBar) and array.size(bullObBoxes) > 0
+    for _i = array.size(bullObBoxes) - 1 to 0
+        box _b = array.get(bullObBoxes, _i)
+        int _createdBar = array.get(bullObCreatedBars, _i)
+        float _top = box.get_top(_b)
+        float _bottom = box.get_bottom(_b)
+        float _touchThreshold = _top - math.max(_top - _bottom, syminfo.mintick) * zoneMinDepthPct / 100.0
+        bool _validTouch = _createdBar >= lastBullEntryStructureBar and bar_index > _createdBar and low <= _touchThreshold and high >= _bottom and close >= _bottom
+        if _validTouch
+            float _reference = _bottom + (_top - _bottom) * linkedZoneReferencePct / 100.0
+            float _distance = math.abs(close - _reference)
+            bool _better = na(bullLinkedObDistance) or _distance < bullLinkedObDistance or (math.abs(_distance - bullLinkedObDistance) <= syminfo.mintick and _createdBar > bullLinkedObCreatedBar)
+            if _better
+                bullLinkedObTop := _top
+                bullLinkedObBottom := _bottom
+                bullLinkedObDistance := _distance
+                bullLinkedObCreatedBar := _createdBar
+
+if not na(lastBearEntryStructureBar) and array.size(bearFvgBoxes) > 0
+    for _i = array.size(bearFvgBoxes) - 1 to 0
+        box _b = array.get(bearFvgBoxes, _i)
+        int _createdBar = array.get(bearFvgCreatedBars, _i)
+        float _top = box.get_top(_b)
+        float _bottom = box.get_bottom(_b)
+        float _touchThreshold = _bottom + math.max(_top - _bottom, syminfo.mintick) * effectiveFvgTouchDepthPct / 100.0
+        bool _validTouch = _createdBar >= lastBearEntryStructureBar and bar_index > _createdBar and high >= _touchThreshold and low <= _top
+        if _validTouch
+            float _reference = _top - (_top - _bottom) * linkedZoneReferencePct / 100.0
+            float _distance = math.abs(close - _reference)
+            bool _better = na(bearLinkedFvgDistance) or _distance < bearLinkedFvgDistance or (math.abs(_distance - bearLinkedFvgDistance) <= syminfo.mintick and _createdBar > bearLinkedFvgCreatedBar)
+            if _better
+                bearLinkedFvgTop := _top
+                bearLinkedFvgBottom := _bottom
+                bearLinkedFvgDistance := _distance
+                bearLinkedFvgCreatedBar := _createdBar
+
+if not na(lastBearEntryStructureBar) and array.size(bearObBoxes) > 0
+    for _i = array.size(bearObBoxes) - 1 to 0
+        box _b = array.get(bearObBoxes, _i)
+        int _createdBar = array.get(bearObCreatedBars, _i)
+        float _top = box.get_top(_b)
+        float _bottom = box.get_bottom(_b)
+        float _touchThreshold = _bottom + math.max(_top - _bottom, syminfo.mintick) * zoneMinDepthPct / 100.0
+        bool _validTouch = _createdBar >= lastBearEntryStructureBar and bar_index > _createdBar and high >= _touchThreshold and low <= _top and close <= _top
+        if _validTouch
+            float _reference = _top - (_top - _bottom) * linkedZoneReferencePct / 100.0
+            float _distance = math.abs(close - _reference)
+            bool _better = na(bearLinkedObDistance) or _distance < bearLinkedObDistance or (math.abs(_distance - bearLinkedObDistance) <= syminfo.mintick and _createdBar > bearLinkedObCreatedBar)
+            if _better
+                bearLinkedObTop := _top
+                bearLinkedObBottom := _bottom
+                bearLinkedObDistance := _distance
+                bearLinkedObCreatedBar := _createdBar
+
+bool bullLinkedZoneTouch = not na(bullLinkedObBottom) or not na(bullLinkedFvgBottom)
+bool bearLinkedZoneTouch = not na(bearLinkedObTop) or not na(bearLinkedFvgTop)
+float bullLinkedZoneTop = not na(bullLinkedObTop) ? bullLinkedObTop : bullLinkedFvgTop
+float bullLinkedZoneBottom = not na(bullLinkedObBottom) ? bullLinkedObBottom : bullLinkedFvgBottom
+float bearLinkedZoneTop = not na(bearLinkedObTop) ? bearLinkedObTop : bearLinkedFvgTop
+float bearLinkedZoneBottom = not na(bearLinkedObBottom) ? bearLinkedObBottom : bearLinkedFvgBottom
+
+int activeZoneWeight = showFVG or showOB ? weightZoneTouch : 0
+int activeShockWeight = useShockBonus ? weightShock : 0
+int chartWeightTotal = weightTrend + weightStructureTf + weightEntryTf + weightSweep + weightStructureBreak +
+     activeZoneWeight + weightVolume + weightEma + weightVwap + activeShockWeight
+int longRawScore = 0
+longRawScore += mtfTrendState == 1 ? weightTrend : 0
+longRawScore += mtfStructureState == 1 ? weightStructureTf : 0
+longRawScore += mtfEntryState == 1 ? weightEntryTf : 0
+longRawScore += bullSweepRecent ? weightSweep : 0
+longRawScore += bullStructureRecent ? weightStructureBreak : 0
+longRawScore += bullZoneTouch ? activeZoneWeight : 0
+longRawScore += volumeBull ? weightVolume : 0
+longRawScore += emaBull ? weightEma : 0
+longRawScore += close > vwapValue ? weightVwap : 0
+longRawScore += useShockBonus and longShock ? activeShockWeight : 0
+
+int shortRawScore = 0
+shortRawScore += mtfTrendState == -1 ? weightTrend : 0
+shortRawScore += mtfStructureState == -1 ? weightStructureTf : 0
+shortRawScore += mtfEntryState == -1 ? weightEntryTf : 0
+shortRawScore += bearSweepRecent ? weightSweep : 0
+shortRawScore += bearStructureRecent ? weightStructureBreak : 0
+shortRawScore += bearZoneTouch ? activeZoneWeight : 0
+shortRawScore += volumeBear ? weightVolume : 0
+shortRawScore += emaBear ? weightEma : 0
+shortRawScore += close < vwapValue ? weightVwap : 0
+shortRawScore += useShockBonus and shortShock ? activeShockWeight : 0
+
+int longScore = chartWeightTotal > 0 ? int(math.round(longRawScore * 14.0 / chartWeightTotal)) : 0
+int shortScore = chartWeightTotal > 0 ? int(math.round(shortRawScore * 14.0 / chartWeightTotal)) : 0
+
+bool longPdOk = not requirePD or (not na(discountCeiling) and close <= discountCeiling)
+bool shortPdOk = not requirePD or (not na(premiumFloor) and close >= premiumFloor)
+
+bool longSharedBase = not mtfInvalid and longScore >= signalScoreMin and longPdOk
+bool shortSharedBase = not mtfInvalid and shortScore >= signalScoreMin and shortPdOk
+bool longGeneralRaw = longSharedBase and
+     (not requireSequence or longSequence) and
+     (not requireZoneTouch or bullZoneTouch)
+
+bool shortGeneralRaw = shortSharedBase and
+     (not requireSequence or shortSequence) and
+     (not requireZoneTouch or bearZoneTouch)
+
+bool usePrecisionEntry = entryFilterMode == "정밀 (추천)"
+string entryModeText = usePrecisionEntry ? "정밀" : "일반"
+int precisionRequiredScore = math.max(signalScoreMin, precisionScoreMin)
+bool longRaw = usePrecisionEntry ? longSharedBase : longGeneralRaw
+bool shortRaw = usePrecisionEntry ? shortSharedBase : shortGeneralRaw
+
+bool longMtfOk = (not precisionRequireTrend or mtfTrendState == 1) and (not precisionRequireStructure or mtfStructureState == 1)
+bool shortMtfOk = (not precisionRequireTrend or mtfTrendState == -1) and (not precisionRequireStructure or mtfStructureState == -1)
+bool longScoreGapOk = longScore - shortScore >= precisionScoreGap
+bool shortScoreGapOk = shortScore - longScore >= precisionScoreGap
+
+bool bullReactionCandle = bullLinkedZoneTouch and not na(lastBullEntryStructureBar) and
+     bar_index > lastBullEntryStructureBar and close > open and
+     entryCloseLocation >= precisionCloseStrength and entryBodyRatio >= precisionBodyMin
+bool bearReactionCandle = bearLinkedZoneTouch and not na(lastBearEntryStructureBar) and
+     bar_index > lastBearEntryStructureBar and close < open and
+     entryCloseLocation <= 1.0 - precisionCloseStrength and entryBodyRatio >= precisionBodyMin
+
+bool precisionVolumeOk = not precisionUseVolume or na(entryVolumeRatio) or entryVolumeRatio >= precisionVolumeRatio
+float precisionAtrLower = math.min(precisionAtrMin, precisionAtrMax)
+float precisionAtrUpper = math.max(precisionAtrMin, precisionAtrMax)
+bool precisionAtrOk = not precisionUseVolatility or (not na(entryAtrRatio) and entryAtrRatio >= precisionAtrLower and entryAtrRatio <= precisionAtrUpper)
+bool precisionRangeOk = not precisionUseVolatility or (not na(atr) and entryCandleRange <= atr * precisionMaxRangeAtr)
+bool longChaseOk = not precisionUseVolatility or (not na(atr) and not na(emaFast) and close - emaFast <= atr * precisionMaxChaseAtr)
+bool shortChaseOk = not precisionUseVolatility or (not na(atr) and not na(emaFast) and emaFast - close <= atr * precisionMaxChaseAtr)
+
+bool longBaseReady = confirmed and longGeneralRaw and longScore > shortScore
+bool shortBaseReady = confirmed and shortGeneralRaw and shortScore > longScore
+
+// 모든 정밀 조건을 먼저 완성한 뒤 edge를 계산해야, 후행 반응봉이 누락되지 않습니다.
+bool longPrecisionReady = barClosed and longSharedBase and longScore >= precisionRequiredScore and
+     longMtfOk and longScoreGapOk and (not precisionRequireStrongSequence or longPrecisionSequence) and
+     (not precisionRequireLinkedZone or bullLinkedZoneTouch) and
+     (not precisionRequireReaction or bullReactionCandle) and precisionVolumeOk and precisionAtrOk and
+     precisionRangeOk and longChaseOk
+bool shortPrecisionReady = barClosed and shortSharedBase and shortScore >= precisionRequiredScore and
+     shortMtfOk and shortScoreGapOk and (not precisionRequireStrongSequence or shortPrecisionSequence) and
+     (not precisionRequireLinkedZone or bearLinkedZoneTouch) and
+     (not precisionRequireReaction or bearReactionCandle) and precisionVolumeOk and precisionAtrOk and
+     precisionRangeOk and shortChaseOk
+
+// ── 확정 타점 신뢰 등급: 0~100 신뢰도를 1~5 단계로 환산 ─────────────
+// ponytail: 가중치·경계는 고정 heuristic. 표시가 과하거나 부족하면 tierBound 조정.
+float longConfidence = math.min(100.0,
+     (mtfTrendState == 1 ? 22.0 : 0.0) + (mtfStructureState == 1 ? 16.0 : 0.0) + (mtfEntryState == 1 ? 8.0 : 0.0) +
+     (bullSweepRecent ? 10.0 : 0.0) + (bullStructureRecent ? 12.0 : 0.0) + (longPrecisionSequence ? 8.0 : 0.0) +
+     (bullLinkedZoneTouch ? 8.0 : 0.0) + (bullReactionCandle ? 8.0 : 0.0) + (emaBull ? 3.0 : 0.0) +
+     (close > vwapValue ? 3.0 : 0.0) + (volumeBull ? 2.0 : 0.0) + (longShock ? 2.0 : 0.0))
+float shortConfidence = math.min(100.0,
+     (mtfTrendState == -1 ? 22.0 : 0.0) + (mtfStructureState == -1 ? 16.0 : 0.0) + (mtfEntryState == -1 ? 8.0 : 0.0) +
+     (bearSweepRecent ? 10.0 : 0.0) + (bearStructureRecent ? 12.0 : 0.0) + (shortPrecisionSequence ? 8.0 : 0.0) +
+     (bearLinkedZoneTouch ? 8.0 : 0.0) + (bearReactionCandle ? 8.0 : 0.0) + (emaBear ? 3.0 : 0.0) +
+     (close < vwapValue ? 3.0 : 0.0) + (volumeBear ? 2.0 : 0.0) + (shortShock ? 2.0 : 0.0))
+int longTier = longConfidence >= tierBound5 ? 5 : longConfidence >= tierBound4 ? 4 : longConfidence >= tierBound3 ? 3 : longConfidence >= tierBound2 ? 2 : 1
+int shortTier = shortConfidence >= tierBound5 ? 5 : shortConfidence >= tierBound4 ? 4 : shortConfidence >= tierBound3 ? 3 : shortConfidence >= tierBound2 ? 2 : 1
+bool longTierBase = longScore > shortScore and (bullSweepRecent or bullStructureRecent or bullLinkedZoneTouch)
+bool shortTierBase = shortScore > longScore and (bearSweepRecent or bearStructureRecent or bearLinkedZoneTouch)
+bool longTierReady = barClosed and not mtfInvalid and longTierBase and longTier >= entryMinTier
+bool shortTierReady = barClosed and not mtfInvalid and shortTierBase and shortTier >= entryMinTier
+
+bool longEligible = useEntryTiers ? longTierReady : usePrecisionEntry ? longPrecisionReady : longBaseReady
+bool shortEligible = useEntryTiers ? shortTierReady : usePrecisionEntry ? shortPrecisionReady : shortBaseReady
+bool longEntryEdge = longEligible and not longEligible[1]
+bool shortEntryEdge = shortEligible and not shortEligible[1]
+
+var int lastLongEntryBar = na
+var int lastShortEntryBar = na
+bool longCooldownOk = not (usePrecisionEntry or useEntryTiers) or precisionCooldownBars == 0 or na(lastLongEntryBar) or bar_index - lastLongEntryBar >= precisionCooldownBars
+bool shortCooldownOk = not (usePrecisionEntry or useEntryTiers) or precisionCooldownBars == 0 or na(lastShortEntryBar) or bar_index - lastShortEntryBar >= precisionCooldownBars
+bool longSignal = longEntryEdge and longCooldownOk
+bool shortSignal = shortEntryEdge and shortCooldownOk
+bool longEntryCandidate = barClosed and longSignal
+bool shortEntryCandidate = barClosed and shortSignal
+
+if longEntryCandidate
+    lastLongEntryBar := bar_index
+if shortEntryCandidate
+    lastShortEntryBar := bar_index
+
+string longPrecisionReason = precisionRequireTrend and mtfTrendState != 1 ? "큰 흐름 다름" :
+     precisionRequireStructure and mtfStructureState != 1 ? "중간 흐름 다름" :
+     longScore < precisionRequiredScore ? "점수 미달" :
+     not longScoreGapOk ? "점수차 부족" :
+     precisionRequireStrongSequence and not longPrecisionSequence ? "순서 미완료" :
+     precisionRequireLinkedZone and not bullLinkedZoneTouch ? "구간 미접촉" :
+     precisionRequireReaction and not bullReactionCandle ? "반응봉 없음" :
+     not precisionVolumeOk ? "거래량 미달" :
+     not precisionAtrOk ? "변동폭 범위 밖" :
+     not precisionRangeOk ? "큰 봉 제외" :
+     not longChaseOk ? "평균선과 멂" : "조건 충족"
+
+string shortPrecisionReason = precisionRequireTrend and mtfTrendState != -1 ? "큰 흐름 다름" :
+     precisionRequireStructure and mtfStructureState != -1 ? "중간 흐름 다름" :
+     shortScore < precisionRequiredScore ? "점수 미달" :
+     not shortScoreGapOk ? "점수차 부족" :
+     precisionRequireStrongSequence and not shortPrecisionSequence ? "순서 미완료" :
+     precisionRequireLinkedZone and not bearLinkedZoneTouch ? "구간 미접촉" :
+     precisionRequireReaction and not bearReactionCandle ? "반응봉 없음" :
+     not precisionVolumeOk ? "거래량 미달" :
+     not precisionAtrOk ? "변동폭 범위 밖" :
+     not precisionRangeOk ? "큰 봉 제외" :
+     not shortChaseOk ? "평균선과 멂" : "조건 충족"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY · TP1 · TP2 · SL REFERENCE PLAN
+// 확정 후보봉 종가를 기준으로 계산하는 시각적 계획이며 실제 주문을 실행하지 않습니다.
+// ─────────────────────────────────────────────────────────────────────────────
+var int tradePlanState = 0          // 0=없음, 1=TP1 전, 2=TP1 후
+var int tradePlanDirection = 0      // 1=상승, -1=하락
+var int tradePlanEntryBar = na
+var float tradePlanEntry = na
+var float tradePlanSl = na
+var float tradePlanTp1 = na
+var float tradePlanTp2 = na
+var float tradePlanRisk = na
+var float tradePlanRiskPercent = na
+var bool tradePlanTp1Reached = false
+var string lastTradeResultText = ""
+var int lastTradeResultBar = na
+var color lastTradeResultColor = na
+
+var line activeTradeEntryLine = na
+var line activeTradeTp1Line = na
+var line activeTradeTp2Line = na
+var line activeTradeSlLine = na
+var box activeTradeRewardBox = na
+var box activeTradeRiskBox = na
+var label activeTradeEntryTag = na
+var label activeTradeEntryLabel = na
+var label activeTradeTp1Label = na
+var label activeTradeTp2Label = na
+var label activeTradeSlLabel = na
+
+var tradeEntryLineHistory = array.new_line(0)
+var tradeTp1LineHistory = array.new_line(0)
+var tradeTp2LineHistory = array.new_line(0)
+var tradeSlLineHistory = array.new_line(0)
+var tradeRewardBoxHistory = array.new_box(0)
+var tradeRiskBoxHistory = array.new_box(0)
+var tradeEntryTagHistory = array.new_label(0)
+var tradeEntryLabelHistory = array.new_label(0)
+var tradeTp1LabelHistory = array.new_label(0)
+var tradeTp2LabelHistory = array.new_label(0)
+var tradeSlLabelHistory = array.new_label(0)
+
+bool tradePlanLongEntryEvent = false
+bool tradePlanShortEntryEvent = false
+bool tradePlanTp1Event = false
+bool tradePlanTp2Event = false
+bool tradePlanSlEvent = false
+bool tradePlanAmbiguousEvent = false
+bool tradePlanTimeoutEvent = false
+bool tradePlanRiskRejectedEvent = false
+bool tradePlanClosedThisBar = false
+
+// 기존 계획의 결과를 먼저 판정합니다. 엔트리봉 자체는 판정에서 제외합니다.
+if showTradePlan and tradePlanState > 0 and barClosed and bar_index > tradePlanEntryBar
+    bool _isLong = tradePlanDirection == 1
+    bool _slTouched = _isLong ? low <= tradePlanSl : high >= tradePlanSl
+    bool _tp1Touched = _isLong ? high >= tradePlanTp1 : low <= tradePlanTp1
+    bool _tp2Touched = _isLong ? high >= tradePlanTp2 : low <= tradePlanTp2
+    bool _gapSl = _isLong ? open <= tradePlanSl : open >= tradePlanSl
+    bool _gapTp1 = _isLong ? open >= tradePlanTp1 : open <= tradePlanTp1
+    bool _gapTp2 = _isLong ? open >= tradePlanTp2 : open <= tradePlanTp2
+
+    if tradePlanState == 1
+        if _gapSl
+            tradePlanSlEvent := true
+        else if _gapTp2
+            tradePlanTp1Event := true
+            tradePlanTp2Event := true
+        else if _gapTp1
+            tradePlanTp1Event := true
+            if _slTouched and _tp2Touched
+                tradePlanAmbiguousEvent := true
+            else if _tp2Touched
+                tradePlanTp2Event := true
+            else if _slTouched
+                tradePlanSlEvent := true
+            else
+                tradePlanState := 2
+        else if _slTouched and (_tp1Touched or _tp2Touched)
+            tradePlanAmbiguousEvent := true
+        else if _slTouched
+            tradePlanSlEvent := true
+        else if _tp2Touched
+            tradePlanTp1Event := true
+            tradePlanTp2Event := true
+        else if _tp1Touched
+            tradePlanTp1Event := true
+            tradePlanState := 2
+    else if tradePlanState == 2
+        if _gapSl
+            tradePlanSlEvent := true
+        else if _gapTp2
+            tradePlanTp2Event := true
+        else if _slTouched and _tp2Touched
+            tradePlanAmbiguousEvent := true
+        else if _slTouched
+            tradePlanSlEvent := true
+        else if _tp2Touched
+            tradePlanTp2Event := true
+
+    if tradePlanTp1Event
+        tradePlanTp1Reached := true
+        if not na(activeTradeTp1Label)
+            label.set_text(activeTradeTp1Label, beginnerView ? "✓ 첫 목표 도착" : "✓ 목표 1")
+
+    if tradePlanTp2Event or tradePlanSlEvent or tradePlanAmbiguousEvent
+        tradePlanState := 0
+        tradePlanClosedThisBar := true
+
+    if not tradePlanClosedThisBar and tradePlanState > 0 and bar_index - tradePlanEntryBar >= tradeMaxHoldBars
+        tradePlanTimeoutEvent := true
+        tradePlanState := 0
+        tradePlanClosedThisBar := true
+
+    if tradePlanClosedThisBar
+        string _resultText = useEntryTiers ?
+             (tradePlanTp2Event ? "TP2 도달" : tradePlanSlEvent ? (tradePlanTp1Reached ? "TP1후 SL" : "SL 도달") : tradePlanAmbiguousEvent ? "TP·SL 동시" : "기간 종료") :
+             beginnerView ?
+             (tradePlanTp2Event ? "마지막 목표 도착" :
+              tradePlanSlEvent ? (tradePlanTp1Reached ? "첫 목표 후 계획 중단선" : "계획 중단선 닿음") :
+              tradePlanAmbiguousEvent ? (tradePlanTp1Reached ? "첫 목표 후 둘 다 닿음 · 순서 모름" : "둘 다 닿음 · 순서 모름") :
+              tradePlanTp1Reached ? "첫 목표 후 관찰 기간 종료" : "관찰 기간 종료") :
+             (tradePlanTp2Event ? "목표 2 도달 · 종료" :
+              tradePlanSlEvent ? (tradePlanTp1Reached ? "목표 1 후 손절 기준" : "손절 기준 도달 · 종료") :
+              tradePlanAmbiguousEvent ? (tradePlanTp1Reached ? "목표 1 후 동시 접촉 · 순서 불명" : "동시 접촉 · 순서 불명") :
+              tradePlanTp1Reached ? "목표 1 후 기간 종료" : "기간 종료")
+        color _resultColor = tradePlanTp2Event ? tradeTp2Color : tradePlanSlEvent ? tradeSlColor : warningColor
+        lastTradeResultText := _resultText
+        lastTradeResultBar := bar_index
+        lastTradeResultColor := _resultColor
+        if not na(activeTradeEntryTag)
+            string _resultPrefix = useEntryTiers ? (tradePlanDirection == 1 ? "🟢 롱 · " : "🔴 숏 · ") : beginnerView ? (tradePlanDirection == 1 ? "🟢 상승 검토 끝\n" : "🔵 하락 검토 끝\n") : (tradePlanDirection == 1 ? "▲ 상승 계획\n" : "▼ 하락 계획\n")
+            label.set_text(activeTradeEntryTag, _resultPrefix + _resultText)
+            label.set_color(activeTradeEntryTag, color.new(_resultColor, tradeLabelTransparency))
+        if tradePlanTp2Event and not na(activeTradeTp2Label)
+            label.set_text(activeTradeTp2Label, beginnerView ? "✓ 마지막 목표" : "✓ 목표 2")
+        if tradePlanSlEvent and not na(activeTradeSlLabel)
+            label.set_text(activeTradeSlLabel, beginnerView ? "✋ 계획 중단선" : "✓ 손절 기준")
+        if tradePlanAmbiguousEvent
+            if _tp2Touched and not na(activeTradeTp2Label)
+                label.set_text(activeTradeTp2Label, "? 목표 2·손절 순서 불명")
+            else if _tp1Touched and not na(activeTradeTp1Label)
+                label.set_text(activeTradeTp1Label, "? 목표 1·손절 순서 불명")
+            if not na(activeTradeSlLabel)
+                label.set_text(activeTradeSlLabel, "? 동시 접촉")
+        if not na(activeTradeEntryLine)
+            line.set_x2(activeTradeEntryLine, bar_index)
+        if not na(activeTradeTp1Line)
+            line.set_x2(activeTradeTp1Line, bar_index)
+        if not na(activeTradeTp2Line)
+            line.set_x2(activeTradeTp2Line, bar_index)
+        if not na(activeTradeSlLine)
+            line.set_x2(activeTradeSlLine, bar_index)
+        if not na(activeTradeRewardBox)
+            box.set_right(activeTradeRewardBox, bar_index)
+        if not na(activeTradeRiskBox)
+            box.set_right(activeTradeRiskBox, bar_index)
+        if not na(activeTradeEntryLabel)
+            label.set_x(activeTradeEntryLabel, bar_index)
+        if not na(activeTradeTp1Label)
+            label.set_x(activeTradeTp1Label, bar_index)
+        if not na(activeTradeTp2Label)
+            label.set_x(activeTradeTp2Label, bar_index)
+        if not na(activeTradeSlLabel)
+            label.set_x(activeTradeSlLabel, bar_index)
+
+// 새 타점이 나오면 방향과 무관하게 최신 타점으로 교체합니다(롱·숏 모두 표시). 같은 봉 종료 직후만 대기.
+bool tradePlanCanStart = showTradePlan and not tradePlanClosedThisBar
+if tradePlanCanStart and (longEntryCandidate or shortEntryCandidate)
+    int _direction = longEntryCandidate ? 1 : -1
+    float _entry = math.round_to_mintick(close)
+    float _entryAtr = not na(atr) and atr > 0 ? atr : entryCandleRange
+    float _zoneBoundary = _direction == 1 ? bullLinkedZoneBottom : bearLinkedZoneTop
+    float _slBase = _direction == 1 ? (not na(_zoneBoundary) ? math.min(low, _zoneBoundary) : low) : (not na(_zoneBoundary) ? math.max(high, _zoneBoundary) : high)
+    float _rawSl = _direction == 1 ? _slBase - _entryAtr * tradeSlAtrBuffer : _slBase + _entryAtr * tradeSlAtrBuffer
+    float _rawRisk = _direction == 1 ? _entry - _rawSl : _rawSl - _entry
+    float _minimumRisk = math.max(_entryAtr * tradeMinRiskAtr, syminfo.mintick * tradeMinRiskTicks)
+    float _risk = math.max(_rawRisk, _minimumRisk)
+    float _slCandidate = _direction == 1 ? _entry - _risk : _entry + _risk
+    // 손절 버퍼가 최근접 반올림으로 구간 안쪽에 들어오지 않도록 방향별로 바깥쪽 틱에 맞춥니다.
+    float _sl = math.round_to_mintick((_direction == 1 ? math.floor(_slCandidate / syminfo.mintick) : math.ceil(_slCandidate / syminfo.mintick)) * syminfo.mintick)
+    _risk := math.abs(_entry - _sl)
+    float _maximumRisk = math.max(_entryAtr * tradeMaxRiskAtr, _minimumRisk)
+    bool _riskTooWide = _sl <= 0 or _risk > _maximumRisk
+    float _tp2R = math.max(tradeTp2R, tradeTp1R + tradeMinTargetGapR)
+    float _tp1Candidate = math.round_to_mintick(_direction == 1 ? _entry + _risk * tradeTp1R : _entry - _risk * tradeTp1R)
+    float _tp1 = math.round_to_mintick(_direction == 1 ? math.max(_tp1Candidate, _entry + syminfo.mintick * tradeMinTargetGapTicks) : math.min(_tp1Candidate, _entry - syminfo.mintick * tradeMinTargetGapTicks))
+    float _tp2Candidate = math.round_to_mintick(_direction == 1 ? _entry + _risk * _tp2R : _entry - _risk * _tp2R)
+    float _tp2 = math.round_to_mintick(_direction == 1 ? math.max(_tp2Candidate, _tp1 + syminfo.mintick * tradeMinTargetGapTicks) : math.min(_tp2Candidate, _tp1 - syminfo.mintick * tradeMinTargetGapTicks))
+    int _rightBar = bar_index + tradePlanRightBars
+    float _riskPercent = _entry != 0 ? _risk / math.abs(_entry) * 100.0 : na
+
+    if _riskTooWide
+        tradePlanRiskRejectedEvent := true
+        lastTradeResultText := "계획선 생략 · 위험거리 큼"
+        lastTradeResultBar := bar_index
+        lastTradeResultColor := warningColor
+        float _riskAtr = _entryAtr > 0 ? _risk / _entryAtr : na
+        string _rejectReason = _sl <= 0 ? "손절 가격 부적합" : "손절 거리 큼 · " + str.tostring(_riskAtr, "#.##") + " ATR"
+        if showTradeLabels
+            label.new(bar_index, _direction == 1 ? low : high,
+                 useEntryTiers ? "🟠 생략 · 위험 큼" : (beginnerView ? "🟠 계획선 생략\n" : "⚠ 계획 생략\n") + (beginnerView ? "중단선이 너무 멀어요" : _rejectReason),
+                 xloc = xloc.bar_index, yloc = _direction == 1 ? yloc.belowbar : yloc.abovebar,
+                 style = _direction == 1 ? label.style_label_up : label.style_label_down,
+                 color = color.new(warningColor, signalLabelTransparency), textcolor = panelColor, size = f_textSize(signalLabelSizeInput))
+    else
+        lastTradeResultText := ""
+        lastTradeResultBar := na
+        lastTradeResultColor := na
+        tradePlanState := 1
+        tradePlanDirection := _direction
+        tradePlanEntryBar := bar_index
+        tradePlanEntry := _entry
+        tradePlanSl := _sl
+        tradePlanTp1 := _tp1
+        tradePlanTp2 := _tp2
+        tradePlanRisk := _risk
+        tradePlanRiskPercent := _riskPercent
+        tradePlanTp1Reached := false
+        tradePlanLongEntryEvent := _direction == 1
+        tradePlanShortEntryEvent := _direction == -1
+
+        activeTradeEntryLine := line.new(bar_index, _entry, _rightBar, _entry, xloc = xloc.bar_index, extend = extend.none, color = tradeEntryColor, style = f_lineStyle(tradeEntryLineStyleInput), width = tradeEntryLineWidth)
+        activeTradeTp1Line := line.new(bar_index, _tp1, _rightBar, _tp1, xloc = xloc.bar_index, extend = extend.none, color = tradeTp1Color, style = f_lineStyle(tradeTp1LineStyleInput), width = tradeTp1LineWidth)
+        activeTradeTp2Line := line.new(bar_index, _tp2, _rightBar, _tp2, xloc = xloc.bar_index, extend = extend.none, color = tradeTp2Color, style = f_lineStyle(tradeTp2LineStyleInput), width = tradeTp2LineWidth)
+        activeTradeSlLine := line.new(bar_index, _sl, _rightBar, _sl, xloc = xloc.bar_index, extend = extend.none, color = tradeSlColor, style = f_lineStyle(tradeSlLineStyleInput), width = tradeSlLineWidth)
+
+        float _rewardTop = _direction == 1 ? _tp2 : _entry
+        float _rewardBottom = _direction == 1 ? _entry : _tp2
+        float _riskTop = _direction == 1 ? _entry : _sl
+        float _riskBottom = _direction == 1 ? _sl : _entry
+        activeTradeRewardBox := showTradeAreaBoxes ? box.new(bar_index, _rewardTop, _rightBar, _rewardBottom, xloc = xloc.bar_index, border_color = color.new(tradeTp2Color, tradeAreaBorderTransparency), border_width = tradeAreaBorderWidth, border_style = f_lineStyle(tradeAreaBorderStyleInput), bgcolor = color.new(tradeTp2Color, tradeRewardTransparency)) : na
+        activeTradeRiskBox := showTradeAreaBoxes ? box.new(bar_index, _riskTop, _rightBar, _riskBottom, xloc = xloc.bar_index, border_color = color.new(tradeSlColor, tradeAreaBorderTransparency), border_width = tradeAreaBorderWidth, border_style = f_lineStyle(tradeAreaBorderStyleInput), bgcolor = color.new(tradeSlColor, tradeRiskTransparency)) : na
+
+        int _tier = _direction == 1 ? longTier : shortTier
+        string _directionText = useEntryTiers ?
+             (_direction == 1 ? "🟢 롱 " : "🔴 숏 ") + str.tostring(_tier) + (showTierStars ? " " + f_stars(_tier) : "") :
+             beginnerView ? (_direction == 1 ? "🟢 상승 검토 후보" : "🔵 하락 검토 후보") : (_direction == 1 ? "▲ 상승 참고 계획" : "▼ 하락 참고 계획")
+        string _entryTagText = useEntryTiers ? _directionText :
+             beginnerView ? _directionText + "\n봉이 닫힌 뒤 확인 · 자동 주문 아님" : _directionText + "\n" + str.tostring(_entry, format.mintick) + " · 위험폭 " + str.tostring(_riskPercent, "#.##") + "%"
+        activeTradeEntryTag := showTradeLabels ? label.new(bar_index, _entry, _entryTagText, xloc = xloc.bar_index, yloc = yloc.price, style = _direction == 1 ? label.style_label_up : label.style_label_down, color = color.new(_direction == 1 ? bullColor : bearColor, signalLabelTransparency), textcolor = _direction == 1 ? panelColor : color.white, size = f_textSize(signalLabelSizeInput)) : na
+        activeTradeEntryLabel := showTradeLabels ? label.new(_rightBar, _entry, (beginnerView ? "① 보는 가격" : "진입 기준"), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(tradeEntryColor, tradeLabelTransparency), textcolor = color.white, size = f_textSize(planLabelSizeInput)) : na
+        activeTradeTp1Label := showTradeLabels ? label.new(_rightBar, _tp1, (beginnerView ? "② 첫 목표" : "목표 1"), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(tradeTp1Color, tradeLabelTransparency), textcolor = panelColor, size = f_textSize(planLabelSizeInput)) : na
+        activeTradeTp2Label := showTradeLabels ? label.new(_rightBar, _tp2, (beginnerView ? "③ 마지막 목표" : "목표 2"), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(tradeTp2Color, tradeLabelTransparency), textcolor = panelColor, size = f_textSize(planLabelSizeInput)) : na
+        activeTradeSlLabel := showTradeLabels ? label.new(_rightBar, _sl, (beginnerView ? "✋ 계획 중단선" : "손절 기준"), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(tradeSlColor, tradeLabelTransparency), textcolor = color.white, size = f_textSize(planLabelSizeInput)) : na
+
+        array.push(tradeEntryLineHistory, activeTradeEntryLine)
+        array.push(tradeTp1LineHistory, activeTradeTp1Line)
+        array.push(tradeTp2LineHistory, activeTradeTp2Line)
+        array.push(tradeSlLineHistory, activeTradeSlLine)
+        array.push(tradeRewardBoxHistory, activeTradeRewardBox)
+        array.push(tradeRiskBoxHistory, activeTradeRiskBox)
+        array.push(tradeEntryTagHistory, activeTradeEntryTag)
+        array.push(tradeEntryLabelHistory, activeTradeEntryLabel)
+        array.push(tradeTp1LabelHistory, activeTradeTp1Label)
+        array.push(tradeTp2LabelHistory, activeTradeTp2Label)
+        array.push(tradeSlLabelHistory, activeTradeSlLabel)
+
+        while array.size(tradeEntryLineHistory) > (showPastPositions ? tradePlanHistoryCount : 1)
+            line.delete(array.shift(tradeEntryLineHistory))
+            line.delete(array.shift(tradeTp1LineHistory))
+            line.delete(array.shift(tradeTp2LineHistory))
+            line.delete(array.shift(tradeSlLineHistory))
+            box.delete(array.shift(tradeRewardBoxHistory))
+            box.delete(array.shift(tradeRiskBoxHistory))
+            label.delete(array.shift(tradeEntryTagHistory))
+            label.delete(array.shift(tradeEntryLabelHistory))
+            label.delete(array.shift(tradeTp1LabelHistory))
+            label.delete(array.shift(tradeTp2LabelHistory))
+            label.delete(array.shift(tradeSlLabelHistory))
+
+// 활성 계획의 오른쪽 끝과 가격표만 이동하며 ENTRY·TP·SL 가격은 고정합니다.
+if showTradePlan and tradePlanState > 0
+    int _activeRightBar = bar_index + tradePlanRightBars
+    line.set_x2(activeTradeEntryLine, _activeRightBar)
+    line.set_x2(activeTradeTp1Line, _activeRightBar)
+    line.set_x2(activeTradeTp2Line, _activeRightBar)
+    line.set_x2(activeTradeSlLine, _activeRightBar)
+    if not na(activeTradeRewardBox)
+        box.set_right(activeTradeRewardBox, _activeRightBar)
+    if not na(activeTradeRiskBox)
+        box.set_right(activeTradeRiskBox, _activeRightBar)
+    if showTradeLabels
+        label.set_x(activeTradeEntryLabel, _activeRightBar)
+        label.set_x(activeTradeTp1Label, _activeRightBar)
+        label.set_x(activeTradeTp2Label, _activeRightBar)
+        label.set_x(activeTradeSlLabel, _activeRightBar)
+
+// 하나의 계획이 진행 중이거나 같은 봉에서 종료됐다면 새 후보는 기록만 소비하고 화면·알림에는 중복 표시하지 않습니다.
+bool longUnplannedCandidateEvent = longEntryCandidate and not tradePlanLongEntryEvent and not tradePlanRiskRejectedEvent and
+     (not showTradePlan or (tradePlanState == 0 and not tradePlanClosedThisBar))
+bool shortUnplannedCandidateEvent = shortEntryCandidate and not tradePlanShortEntryEvent and not tradePlanRiskRejectedEvent and
+     (not showTradePlan or (tradePlanState == 0 and not tradePlanClosedThisBar))
+bool longCandidateVisualEvent = tradePlanLongEntryEvent or longUnplannedCandidateEvent or (longEntryCandidate and tradePlanRiskRejectedEvent)
+bool shortCandidateVisualEvent = tradePlanShortEntryEvent or shortUnplannedCandidateEvent or (shortEntryCandidate and tradePlanRiskRejectedEvent)
+
+if tradePlanLongEntryEvent
+    alert("상승 참고 계획 시작 | " + syminfo.ticker + (useEntryTiers ? " | 롱 타점 " + str.tostring(longTier) + "/5" : "") + " | 보는 가격 " + str.tostring(tradePlanEntry, format.mintick) + " | 첫 목표 " + str.tostring(tradePlanTp1, format.mintick) + " | 마지막 목표 " + str.tostring(tradePlanTp2, format.mintick) + " | 중단선 " + str.tostring(tradePlanSl, format.mintick) + " | 자동 주문 아님", alert.freq_once_per_bar_close)
+if tradePlanShortEntryEvent
+    alert("하락 참고 계획 시작 | " + syminfo.ticker + (useEntryTiers ? " | 숏 타점 " + str.tostring(shortTier) + "/5" : "") + " | 보는 가격 " + str.tostring(tradePlanEntry, format.mintick) + " | 첫 목표 " + str.tostring(tradePlanTp1, format.mintick) + " | 마지막 목표 " + str.tostring(tradePlanTp2, format.mintick) + " | 중단선 " + str.tostring(tradePlanSl, format.mintick) + " | 자동 주문 아님", alert.freq_once_per_bar_close)
+if tradePlanTp1Event and not tradePlanTp2Event and not tradePlanSlEvent and not tradePlanAmbiguousEvent and not tradePlanTimeoutEvent
+    alert("첫 목표 기준 도달 | " + syminfo.ticker + " | " + str.tostring(tradePlanTp1, format.mintick) + " | 실제 청산 아님", alert.freq_once_per_bar_close)
+if tradePlanTp2Event
+    alert("마지막 목표 기준 도달 | " + syminfo.ticker + " | " + str.tostring(tradePlanTp2, format.mintick) + " | 계획 종료 | 실제 청산 아님", alert.freq_once_per_bar_close)
+if tradePlanSlEvent
+    alert("계획 중단선 도달 | " + syminfo.ticker + " | " + str.tostring(tradePlanSl, format.mintick) + " | 계획 종료 | 실제 주문·체결 아님", alert.freq_once_per_bar_close)
+if tradePlanAmbiguousEvent
+    alert("목표·중단선 동시 접촉 | " + syminfo.ticker + " | " + (tradePlanTp1Reached ? "첫 목표 확인 후 " : "") + "봉 내부 순서 확인 불가 | 계획 종료", alert.freq_once_per_bar_close)
+if tradePlanTimeoutEvent
+    alert("참고 계획 관찰 기간 종료 | " + syminfo.ticker + " | " + (tradePlanTp1Reached ? "첫 목표 도달 후 " : "") + "마지막 목표·중단선 미도달 | 자동 주문 아님", alert.freq_once_per_bar_close)
+if tradePlanRiskRejectedEvent
+    alert("참고 계획선 생략 | " + syminfo.ticker + " | 중단선 가격 또는 위험 범위 부적합 | 자동 주문 아님", alert.freq_once_per_bar_close)
+
+if longUnplannedCandidateEvent and showSignals
+    label.new(bar_index, low, beginnerView ? "🟢 상승 검토 후보\n봉이 닫힌 뒤 확인" : "▲ 상승 검토 후보\n" + str.tostring(longScore) + "/14 · " + entryModeText,
+         xloc = xloc.bar_index, yloc = yloc.belowbar,
+         style = label.style_label_up, color = color.new(bullColor, signalLabelTransparency),
+         textcolor = panelColor, size = f_textSize(signalLabelSizeInput))
+
+if shortUnplannedCandidateEvent and showSignals
+    label.new(bar_index, high, beginnerView ? "🔵 하락 검토 후보\n새 매수 후보 아님" : "▼ 하락 검토 후보\n" + str.tostring(shortScore) + "/14 · " + entryModeText,
+         xloc = xloc.bar_index, yloc = yloc.abovebar,
+         style = label.style_label_down, color = color.new(bearColor, signalLabelTransparency),
+         textcolor = color.white, size = f_textSize(signalLabelSizeInput))
+
+if longUnplannedCandidateEvent
+    alert("현재 차트 상승 검토 후보 | " + syminfo.ticker + " | " + entryModeText + " 선별 | 조건점수 " + str.tostring(longScore) + "/14 | 표시봉 종가 " + str.tostring(close, format.mintick) + " | 관찰용",
+         alert.freq_once_per_bar_close)
+
+if shortUnplannedCandidateEvent
+    alert("현재 차트 하락 검토 후보 | " + syminfo.ticker + " | " + entryModeText + " 선별 | 조건점수 " + str.tostring(shortScore) + "/14 | 표시봉 종가 " + str.tostring(close, format.mintick) + " | 관찰용",
+         alert.freq_once_per_bar_close)
+
+barcolor(showSignals and paintSignalBar and longCandidateVisualEvent ? color.new(bullColor, signalBarTransparency) : showSignals and paintSignalBar and shortCandidateVisualEvent ? color.new(bearColor, signalBarTransparency) : na)
+bgcolor(showSignals and paintSignalBar and longCandidateVisualEvent ? color.new(bullColor, signalBgTransparency) : showSignals and paintSignalBar and shortCandidateVisualEvent ? color.new(bearColor, signalBgTransparency) : na, title = "검토 후보 강조")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+alertcondition(longUnplannedCandidateEvent, "현재 차트 상승 검토 후보",
+     "상승 검토 후보 | {{exchange}}:{{ticker}} | 시간봉={{interval}} | 표시봉 종가={{close}} | 선별 모드는 지표 설정 따름 | 관찰용")
+
+alertcondition(shortUnplannedCandidateEvent, "현재 차트 하락 검토 후보",
+     "하락 검토 후보 | {{exchange}}:{{ticker}} | 시간봉={{interval}} | 표시봉 종가={{close}} | 선별 모드는 지표 설정 따름 | 관찰용")
+
+alertcondition(tradePlanLongEntryEvent, "상승 참고 계획 시작",
+     "상승 참고 계획 시작 | {{exchange}}:{{ticker}} | 시간봉={{interval}} | 확정봉 종가 기준 | 자동 주문 아님")
+
+alertcondition(tradePlanShortEntryEvent, "하락 참고 계획 시작",
+     "하락 참고 계획 시작 | {{exchange}}:{{ticker}} | 시간봉={{interval}} | 확정봉 종가 기준 | 자동 주문 아님")
+
+alertcondition(tradePlanTp1Event and not tradePlanTp2Event and not tradePlanSlEvent and not tradePlanAmbiguousEvent and not tradePlanTimeoutEvent, "첫 목표 기준 도달",
+     "첫 목표 기준 도달 | {{exchange}}:{{ticker}} | 실제 청산 아님")
+
+alertcondition(tradePlanTp2Event, "마지막 목표 기준 도달",
+     "마지막 목표 기준 도달 | {{exchange}}:{{ticker}} | 계획 종료 | 실제 청산 아님")
+
+alertcondition(tradePlanSlEvent, "계획 중단선 도달",
+     "계획 중단선 도달 | {{exchange}}:{{ticker}} | 계획 종료 | 실제 주문·체결 아님")
+
+alertcondition(tradePlanAmbiguousEvent, "목표·중단선 동시 접촉",
+     "목표·중단선 동시 접촉 | {{exchange}}:{{ticker}} | 봉 내부 순서 확인 불가")
+
+alertcondition(tradePlanTimeoutEvent, "참고 계획 관찰 기간 종료",
+     "참고 계획 관찰 기간 종료 | {{exchange}}:{{ticker}} | 마지막 목표·중단선 미도달 | 자동 주문 아님")
+
+alertcondition(tradePlanRiskRejectedEvent, "참고 계획 위험폭 초과",
+     "참고 계획선 생략 | {{exchange}}:{{ticker}} | 중단선 가격 또는 위험 범위 부적합 | 자동 주문 아님")
+
+alertcondition(barClosed and bullSweepEvent, "저점을 찍고 복귀",
+     "저점을 찍고 복귀 | {{exchange}}:{{ticker}} | 시간봉={{interval}}")
+
+alertcondition(barClosed and bearSweepEvent, "고점을 찍고 복귀",
+     "고점을 찍고 복귀 | {{exchange}}:{{ticker}} | 시간봉={{interval}}")
+
+alertcondition(barClosed and (bullSwingChoch or bullInternalChoch), "상승 방향 흐름 전환",
+     "상승 방향 흐름 전환 | {{exchange}}:{{ticker}} | 시간봉={{interval}}")
+
+alertcondition(barClosed and (bearSwingChoch or bearInternalChoch), "하락 방향 흐름 전환",
+     "하락 방향 흐름 전환 | {{exchange}}:{{ticker}} | 시간봉={{interval}}")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DASHBOARD
+// ─────────────────────────────────────────────────────────────────────────────
+var table dash = table.new(dashPosition, beginnerView ? 1 : 3, beginnerView ? 3 : 9,
+     bgcolor = color.new(panelColor, panelBgTransparency),
+     frame_color = color.new(panelBorderColor, panelFrameTransparency),
+     frame_width = panelFrameWidth,
+     border_color = color.new(panelBorderColor, panelGridTransparency),
+     border_width = panelGridWidth)
+
+if barstate.isfirst and not beginnerView
+    table.merge_cells(dash, 0, 0, 2, 0)
+    table.merge_cells(dash, 0, 8, 2, 8)
+
+bool useSimpleDashboard = showDashboard and beginnerView and showBeginnerGuide
+bool useDetailedDashboard = showDashboard and not beginnerView
+
+if barstate.islast and useDetailedDashboard
+    string _statusText = mtfInvalid ? "시간봉 오류" : entryModeText + " · 봉 마감"
+    color _statusColor = mtfInvalid ? tradeSlColor : bullColor
+    color _longScoreBg = color.new(color.from_gradient(longScore, 0, 14, panelAltColor, bullColor), directionCellTransparency)
+    color _shortScoreBg = color.new(color.from_gradient(shortScore, 0, 14, panelAltColor, bearColor), directionCellTransparency)
+    bool _longRejected = longEntryCandidate and tradePlanRiskRejectedEvent
+    bool _shortRejected = shortEntryCandidate and tradePlanRiskRejectedEvent
+    bool _longNewVisible = tradePlanLongEntryEvent or longUnplannedCandidateEvent
+    bool _shortNewVisible = tradePlanShortEntryEvent or shortUnplannedCandidateEvent
+    string _longState = _longRejected ? "위험폭 큼" :
+         _longNewVisible ? "새 후보" :
+         longEntryEdge and not longCooldownOk ? "재표시 대기" :
+         longEligible ? "조건 유지" :
+         usePrecisionEntry and longRaw and longScore > shortScore ? (not barClosed ? "봉 마감 대기" : longPrecisionReason) :
+         longRaw and not confirmed ? "봉 마감 대기" : longRaw ? "점수 우세 없음" : "조건 부족"
+    string _shortState = _shortRejected ? "위험폭 큼" :
+         _shortNewVisible ? "새 후보" :
+         shortEntryEdge and not shortCooldownOk ? "재표시 대기" :
+         shortEligible ? "조건 유지" :
+         usePrecisionEntry and shortRaw and shortScore > longScore ? (not barClosed ? "봉 마감 대기" : shortPrecisionReason) :
+         shortRaw and not confirmed ? "봉 마감 대기" : shortRaw ? "점수 우세 없음" : "조건 부족"
+    bool _longWaiting = longEntryEdge and not longCooldownOk or (usePrecisionEntry and longRaw and longScore > shortScore) or (longRaw and not confirmed)
+    bool _shortWaiting = shortEntryEdge and not shortCooldownOk or (usePrecisionEntry and shortRaw and shortScore > longScore) or (shortRaw and not confirmed)
+    color _longStateColor = _longRejected ? warningColor : (_longNewVisible or longEligible) ? bullColor : _longWaiting ? warningColor : panelMutedColor
+    color _shortStateColor = _shortRejected ? warningColor : (_shortNewVisible or shortEligible) ? bearColor : _shortWaiting ? warningColor : panelMutedColor
+
+    table.cell(dash, 0, 0, "현재 차트 · " + _statusText + " · " + f_tfLabel(timeframe.period),
+         text_color = panelTextColor, bgcolor = color.new(_statusColor, panelHeaderTransparency), text_size = dashTextSize)
+
+    table.cell(dash, 0, 1, "구분", text_color = panelMutedColor, bgcolor = panelAltColor, text_size = size.tiny)
+    table.cell(dash, 1, 1, "시간·점수", text_color = panelMutedColor, bgcolor = panelAltColor, text_size = size.tiny)
+    table.cell(dash, 2, 1, "상태", text_color = panelMutedColor, bgcolor = panelAltColor, text_size = size.tiny)
+
+    table.cell(dash, 0, 2, "L", text_color = panelTextColor, bgcolor = panelColor, text_size = dashTextSize)
+    table.cell(dash, 1, 2, f_tfLabel(tfTrend), text_color = trendTfBad ? tradeSlColor : panelTextColor, bgcolor = trendTfBad ? color.new(tradeSlColor, errorCellTransparency) : panelColor, text_size = dashTextSize)
+    table.cell(dash, 2, 2, trendTfBad ? "확인 불가" : f_stateText(mtfTrendState), text_color = trendTfBad ? tradeSlColor : panelTextColor, bgcolor = trendTfBad ? color.new(tradeSlColor, errorCellTransparency) : f_stateColor(mtfTrendState), text_size = dashTextSize)
+
+    table.cell(dash, 0, 3, "M", text_color = panelTextColor, bgcolor = panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 1, 3, f_tfLabel(tfStructure), text_color = structTfBad ? tradeSlColor : panelTextColor, bgcolor = structTfBad ? color.new(tradeSlColor, errorCellTransparency) : panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 2, 3, structTfBad ? "확인 불가" : f_stateText(mtfStructureState), text_color = structTfBad ? tradeSlColor : panelTextColor, bgcolor = structTfBad ? color.new(tradeSlColor, errorCellTransparency) : f_stateColor(mtfStructureState), text_size = dashTextSize)
+
+    table.cell(dash, 0, 4, "S", text_color = panelTextColor, bgcolor = panelColor, text_size = dashTextSize)
+    table.cell(dash, 1, 4, f_tfLabel(tfEntry), text_color = entryTfBad ? tradeSlColor : panelTextColor, bgcolor = entryTfBad ? color.new(tradeSlColor, errorCellTransparency) : panelColor, text_size = dashTextSize)
+    table.cell(dash, 2, 4, entryTfBad ? "확인 불가" : f_stateText(mtfEntryState), text_color = entryTfBad ? tradeSlColor : panelTextColor, bgcolor = entryTfBad ? color.new(tradeSlColor, errorCellTransparency) : f_stateColor(mtfEntryState), text_size = dashTextSize)
+
+    string _momentumText = not useShockBonus ? "사용 안 함" : shockTfBad ? "확인 불가" : (sixHourReturn >= 0 ? "+" : "") + str.tostring(sixHourReturn, "#.##") + "%"
+    color _momentumColor = not useShockBonus or shockTfBad ? panelMutedColor : sixHourReturn >= 0 ? bullColor : bearColor
+    table.cell(dash, 0, 5, str.tostring(shockLookbackBars) + "개봉", text_color = panelTextColor, bgcolor = panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 1, 5, f_tfLabel(shockCalculationTf), text_color = useShockBonus and shockTfBad ? tradeSlColor : panelTextColor, bgcolor = panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 2, 5, _momentumText, text_color = _momentumColor, bgcolor = panelAltColor, text_size = dashTextSize)
+
+    table.cell(dash, 0, 6, "▲ 상승", text_color = bullColor, bgcolor = panelColor, text_size = dashTextSize)
+    table.cell(dash, 1, 6, str.tostring(longScore) + "/14" + (useEntryTiers ? " · 타점" + str.tostring(longTier) : ""), text_color = panelTextColor, bgcolor = _longScoreBg, text_size = dashTextSize)
+    table.cell(dash, 2, 6, _longState, text_color = _longStateColor, bgcolor = panelColor, text_size = dashTextSize)
+
+    table.cell(dash, 0, 7, "▼ 하락", text_color = bearColor, bgcolor = panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 1, 7, str.tostring(shortScore) + "/14" + (useEntryTiers ? " · 타점" + str.tostring(shortTier) : ""), text_color = panelTextColor, bgcolor = _shortScoreBg, text_size = dashTextSize)
+    table.cell(dash, 2, 7, _shortState, text_color = _shortStateColor, bgcolor = panelAltColor, text_size = dashTextSize)
+
+    string _tradeFooter = not showTradePlan ? entryModeText + " 선별 · 관찰용" :
+         tradePlanState == 1 ? (tradePlanDirection == 1 ? "▲" : "▼") + " 계획 진행 · 목표 1 관찰" :
+         tradePlanState == 2 ? "목표 1 도달 · 목표 2 관찰" : "계획선 참고용 · 자동 주문 아님"
+    table.cell(dash, 0, 8, _tradeFooter,
+         text_color = panelMutedColor, bgcolor = panelColor, text_size = size.tiny)
+
+if barstate.islast and not beginnerView and not useDetailedDashboard
+    table.clear(dash, 0, 0, 2, 8)
+
+if barstate.islast and useSimpleDashboard
+    bool _activeLongPlan = tradePlanState > 0 and tradePlanDirection == 1
+    bool _activeShortPlan = tradePlanState > 0 and tradePlanDirection == -1
+    bool _recentResult = not na(lastTradeResultBar) and bar_index - lastTradeResultBar <= tradeResultDisplayBars
+    bool _newLongReview = tradePlanLongEntryEvent or longUnplannedCandidateEvent
+    bool _newShortReview = tradePlanShortEntryEvent or shortUnplannedCandidateEvent
+    bool _planOrReview = _activeLongPlan or _activeShortPlan or _newLongReview or _newShortReview
+    bool _longPrepare = not _planOrReview and longRaw and longScore > shortScore
+    bool _shortPrepare = not _planOrReview and shortRaw and shortScore > longScore
+    string _easyTitle = mtfInvalid ? "🔴 시간봉을 확인해요" :
+         _recentResult ? "계획 결과 · " + lastTradeResultText :
+         _newLongReview ? (useEntryTiers ? "🟢 롱 타점 " + str.tostring(longTier) + "/5" : "🟢 상승 검토 후보") :
+         _newShortReview ? (useEntryTiers ? "🔴 숏 타점 " + str.tostring(shortTier) + "/5" : "🔵 하락 검토 후보") :
+         _activeLongPlan ? "🟢 상승 계획 확인 중" :
+         _activeShortPlan ? "🔵 하락 계획 확인 중" :
+         _longPrepare ? "🟡 상승 조건 일부" :
+         _shortPrepare ? "🟡 하락 조건 일부" : "⚪ 현재 검토 조건이 부족해요"
+    string _easyLine2 = mtfInvalid ? "큰·중간·짧은 흐름 시간 설정을 확인해요" :
+         _recentResult ? "현재 계획은 끝났어요 · 다음 검토 후보를 새로 확인해요" :
+         _activeLongPlan or _activeShortPlan ?
+              (tradePlanState == 2 ? "② 첫 목표 도착 · ③ " + str.tostring(tradePlanTp2, format.mintick) :
+               "① 보는 가격 " + str.tostring(tradePlanEntry, format.mintick) + " · ② 첫 목표 " + str.tostring(tradePlanTp1, format.mintick)) :
+         _newLongReview ? "확정봉 종가를 보고 빨간 중단선부터 확인해요" :
+         _newShortReview ? "아래 방향 검토 조건 · 새 매수 후보가 아니에요" :
+         _longPrepare ? "상승 조건 일부만 확인됐어요" :
+         _shortPrepare ? "하락 조건 일부만 확인됐어요" : "초록 검토 후보가 나올 때까지 조건을 더 확인해요"
+    string _easyLine3 = mtfInvalid ? "지금은 검토하지 않아요" :
+         _activeLongPlan or _activeShortPlan ? "✋ 중단선 " + str.tostring(tradePlanSl, format.mintick) + " · 위험폭 " + str.tostring(tradePlanRiskPercent, "#.##") + "% · 자동 주문 아님" :
+         "봉이 끝난 뒤 확인 · 자동 주문 아님"
+    color _easyColor = mtfInvalid ? tradeSlColor : _recentResult ? lastTradeResultColor : _newLongReview or _activeLongPlan ? bullColor : _newShortReview or _activeShortPlan ? bearColor : _longPrepare or _shortPrepare ? warningColor : panelMutedColor
+    color _easyFooterColor = _activeLongPlan or _activeShortPlan ? tradeSlColor : _recentResult ? lastTradeResultColor : panelMutedColor
+    table.cell(dash, 0, 0, _easyTitle, text_color = panelTextColor, bgcolor = color.new(_easyColor, panelHeaderTransparency), text_size = dashTextSize)
+    table.cell(dash, 0, 1, _easyLine2, text_color = panelTextColor, bgcolor = panelAltColor, text_size = dashTextSize)
+    table.cell(dash, 0, 2, _easyLine3, text_color = _easyFooterColor, bgcolor = panelColor, text_size = size.tiny)
+
+if barstate.islast and beginnerView and not useSimpleDashboard
+    table.clear(dash, 0, 0, 0, 2)

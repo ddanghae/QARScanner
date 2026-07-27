@@ -10,6 +10,8 @@ import { run as noise } from "./noise.test.js";
 import { run as earlyDetect } from "./early-detect.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
+import { run as settings } from "./settings.test.js";
+import { run as tradingview } from "./tradingview.test.js";
 
 export function runAll() {
   reset();
@@ -22,6 +24,8 @@ export function runAll() {
   earlyDetect();
   repaint();
   refresh();
+  settings();
+  tradingview();
   return report();
 }
 

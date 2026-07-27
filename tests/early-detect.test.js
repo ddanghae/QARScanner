@@ -1,7 +1,7 @@
 // tests/early-detect.test.js — 조기 포착 모드 계산 검증.
 
 import { suite, test, assert, eq } from "./harness.js";
-import { CONFIG, minScoreFor } from "../js/config.js";
+import { CONFIG, minScoreFor, strictnessPreset, STRICTNESS_LEVELS } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
   classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
@@ -331,9 +331,21 @@ export function run() {
 
   test("early 는 reversal 과 최소 점수 컷을 공유하지 않는다", () => {
     // early 1 매집은 구조적으로 ~55 를 못 넘어 reversal 컷을 쓰면 항상 빈 결과가 된다
-    eq(minScoreFor({ scanMode: "early", minScore: 55 }), CONFIG.earlyMinScore, "early 는 자체 컷");
     eq(minScoreFor({ scanMode: "reversal", minScore: 55 }), 55, "reversal 은 사용자 설정 그대로");
-    assert(CONFIG.earlyMinScore < 55, "early 컷은 매집 단계를 보여줄 수 있어야 함");
+    eq(minScoreFor({ scanMode: "early", minScore: 55, strictnessLevel: 3 }),
+      strictnessPreset(3).earlyMinScore, "early 는 강도 단계별 자체 컷");
+    for (const p of STRICTNESS_LEVELS) {
+      assert(p.earlyMinScore < p.minScore,
+        `강도 ${p.level}: early 컷(${p.earlyMinScore})은 reversal 컷(${p.minScore})보다 낮아야 매집이 보인다`);
+    }
+  });
+
+  test("채점 강도가 early 컷에도 반영된다 (죽은 컨트롤 방지)", () => {
+    const cut = (lv) => minScoreFor({ scanMode: "early", strictnessLevel: lv });
+    for (let lv = 1; lv < 5; lv++) {
+      assert(cut(lv) < cut(lv + 1), `강도 ${lv} → ${lv + 1} 로 갈수록 컷이 높아져야 함`);
+    }
+    assert(cut(1) < cut(3), "1단계(널널)가 기본보다 후보를 많이 보여줘야 함");
   });
 
   test("설정된 4h 캔들 수로 EMA200 기울기가 실제로 판정된다", () => {

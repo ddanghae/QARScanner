@@ -84,7 +84,13 @@ export const CONFIG = {
     keepMax: 50,
     // 1단계 매집
     boxWidthMaxPct: 25,     // 박스 폭 이 % 이하
-    squeezePctMax: 30,      // 압축 백분위 이하
+    // 압축 백분위 상한. 30 은 두 가지 이유로 지나치게 좁았다.
+    //  (1) 3단계 돌파는 정의상 압축이 이미 풀린 상태라, 좁은 게이트가 정상 돌파 후보를 막았다
+    //      (실측: LINKUSDT 백분위 48 — 박스 상단 돌파 중인데 차단됨).
+    //  (2) 압축 점수가 25*(1-min(백분위,50)/50) 이라 백분위 50 이상은 어차피 0점이다.
+    //      게이트를 풀어도 점수가 스스로 걸러내므로 이중으로 막을 필요가 없다.
+    // 실측 스윕(표시 후보 수): 30→3, 40→3, 50→4, 60→5, 70→6, 100→6. 60 이후는 이득 없음.
+    squeezePctMax: 60,
     volDryMax: 0.8,         // 거래량 고갈 비율 이하
     // 72시간 OI 변화율 하한. 실측(134종목) 결과 "압축된 코인"과 "OI 급증 코인"은
     // 거의 배타적이었다 — 압축 통과 20종목의 OI 최대가 +1.08%(중앙 -1.76%)라
@@ -104,12 +110,6 @@ export const CONFIG = {
     oiDumpPct: -10,         // 72h OI 이 % 이하 = 포지션 이탈
     fundingMaxAbs: 0.001,   // |펀딩비| 이 값 초과 = 한쪽 과열
   },
-
-  // 조기 포착 최소 점수 — reversal 과 척도가 다르므로 컷을 공유하지 않는다.
-  // early 점수는 "얼마나 터지기 직전인가" 사다리라, 1 매집 단계는 박스 중앙(위치≈0.4)이라
-  // rangePosition 15점을 구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+).
-  // reversal 기본 컷 55 를 그대로 쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다.
-  earlyMinScore: 40,
 
   // ---- 조기 포착 채점 (합계 100) ----
   earlyScoreWeights: {
@@ -235,16 +235,20 @@ export const CONFIG = {
 
 // ---- 채점 강도 5단계 (§13 사용자 조정 — 가중치는 그대로 두고 감점 세기 + 최소 점수만 단계별로 스케일) ----
 // 3단계 = CONFIG.penalties/minListScore 원본값. 1단계로 갈수록 덜 걸러냄(코인 더 많이 나옴).
+// earlyMinScore 는 조기 포착 모드용 별도 컷 — 두 모드의 점수 척도가 다르기 때문이다.
+// early 점수는 "얼마나 터지기 직전인가" 사다리라 1 매집은 박스 중앙(위치≈0.4)이라
+// rangePosition 15점을 구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+).
+// reversal 컷(55~75)을 그대로 쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다.
 export const STRICTNESS_LEVELS = [
-  { level: 1, label: "1 · 아주 널널하게 (코인 많이)", minScore: 30,
+  { level: 1, label: "1 · 아주 널널하게 (코인 많이)", minScore: 30, earlyMinScore: 25,
     penalties: { overExtended15m: -5, farFromLowAtr: -4, strongResistanceAbove: -3, shortTargetDistance: -3, tooLowVolume: -4, strongDowntrend4h: -3, newListingThin: -2, poorRiskReward: -4 } },
-  { level: 2, label: "2 · 널널하게", minScore: 40,
+  { level: 2, label: "2 · 널널하게", minScore: 40, earlyMinScore: 32,
     penalties: { overExtended15m: -7, farFromLowAtr: -6, strongResistanceAbove: -5, shortTargetDistance: -5, tooLowVolume: -6, strongDowntrend4h: -5, newListingThin: -4, poorRiskReward: -6 } },
-  { level: 3, label: "3 · 기본 (권장)", minScore: 55,
+  { level: 3, label: "3 · 기본 (권장)", minScore: 55, earlyMinScore: 40,
     penalties: { overExtended15m: -12, farFromLowAtr: -10, strongResistanceAbove: -8, shortTargetDistance: -8, tooLowVolume: -10, strongDowntrend4h: -8, newListingThin: -6, poorRiskReward: -10 } },
-  { level: 4, label: "4 · 엄격하게", minScore: 65,
+  { level: 4, label: "4 · 엄격하게", minScore: 65, earlyMinScore: 50,
     penalties: { overExtended15m: -16, farFromLowAtr: -13, strongResistanceAbove: -10, shortTargetDistance: -10, tooLowVolume: -13, strongDowntrend4h: -10, newListingThin: -8, poorRiskReward: -13 } },
-  { level: 5, label: "5 · 아주 엄격하게 (확실한 것만)", minScore: 75,
+  { level: 5, label: "5 · 아주 엄격하게 (확실한 것만)", minScore: 75, earlyMinScore: 60,
     penalties: { overExtended15m: -19, farFromLowAtr: -16, strongResistanceAbove: -13, shortTargetDistance: -13, tooLowVolume: -16, strongDowntrend4h: -13, newListingThin: -10, poorRiskReward: -16 } },
 ];
 export function strictnessPreset(level) {
@@ -252,9 +256,12 @@ export function strictnessPreset(level) {
 }
 
 // 모드별 최소 점수. 두 모드의 점수 척도가 달라 같은 컷을 쓰면 안 된다.
-// (채점 강도 프리셋은 reversal 감점 항목만 담고 있어 early 에는 애초에 적용되지 않는다)
+// early 는 강도 프리셋의 감점 항목(reversal 전용)은 못 쓰지만 컷은 단계에 맞춰 따라간다
+// — 그래야 "채점 강도" 선택기가 early 에서도 죽은 컨트롤이 되지 않는다.
 export function minScoreFor(settings) {
-  return settings?.scanMode === "early" ? CONFIG.earlyMinScore : settings?.minScore;
+  return settings?.scanMode === "early"
+    ? strictnessPreset(settings?.strictnessLevel ?? 3).earlyMinScore
+    : settings?.minScore;
 }
 
 // 스테이블/레버리지 판별용 패턴

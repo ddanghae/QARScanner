@@ -2,7 +2,7 @@
 // localStorage 저장은 state.js 가 담당. 여기선 UI 바인딩 + 필터 적용 로직.
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
-import { CONFIG, strictnessPreset } from "../config.js";
+import { CONFIG, strictnessPreset, minScoreFor } from "../config.js";
 import { toast } from "./notifications.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
@@ -25,8 +25,9 @@ export function applyFilters(results) {
 
   // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
   if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  // 최소 점수
-  list = list.filter((r) => r.score >= s.minScore);
+  // 최소 점수 — early 는 점수 척도가 달라 별도 컷 사용
+  const cut = minScoreFor(s);
+  list = list.filter((r) => r.score >= cut);
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외

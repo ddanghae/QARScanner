@@ -2,7 +2,7 @@
 // 순서(§18): 24h 데이터 → 유동성 상위 → 1h 빠른 분석 → 후보 축소 → 4H·15M·5M 정밀.
 // 동시요청 제한은 api 계층 세마포어가 담당. 진행률/오류 이벤트 emit.
 
-import { CONFIG } from "../config.js";
+import { CONFIG, minScoreFor } from "../config.js";
 import { state, emit } from "../state.js";
 import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll } from "../api/binance.js";
 import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
@@ -120,7 +120,7 @@ export async function runScan() {
       if (earlyResults === null) return finishAborted();
       setPhase("score");
       const results = earlyResults
-        .filter((r) => !r.skipped && !r.error && r.score >= state.settings.minScore)
+        .filter((r) => !r.skipped && !r.error && r.score >= minScoreFor(state.settings))
         .sort((a, b) => b.score - a.score)
         .map((r, i) => ({ ...r, rank: i + 1 }));
       state.results = results;

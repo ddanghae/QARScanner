@@ -73,7 +73,10 @@ export const CONFIG = {
     volRecentN: 20,         // 최근 거래량 평균 구간
     volPriorN: 60,          // 비교 대상 이전 구간
     oiPeriod: "1h",         // openInterestHist period
-    oiLimit: 72,            // 72시간
+    // 72시간 "전" 값을 집으려면 72개로는 부족하다(현재 봉 포함 73개 필요).
+    // 누락 레코드 여유까지 두고 80. 줄이면 change72h 가 조용히 null 이 되어
+    // oiBuildUp 25점이 영구 0점이 된다.
+    oiLimit: 80,
     // 유니버스 (중형 중심)
     minQuoteVolume: 5_000_000,
     topByVolume: 200,
@@ -83,7 +86,12 @@ export const CONFIG = {
     boxWidthMaxPct: 25,     // 박스 폭 이 % 이하
     squeezePctMax: 30,      // 압축 백분위 이하
     volDryMax: 0.8,         // 거래량 고갈 비율 이하
-    oiChangeMinPct: 5,      // 72시간 OI 증가율 이상
+    // 72시간 OI 변화율 하한. 실측(134종목) 결과 "압축된 코인"과 "OI 급증 코인"은
+    // 거의 배타적이었다 — 압축 통과 20종목의 OI 최대가 +1.08%(중앙 -1.76%)라
+    // 기존 +5% 는 시장 상태와 무관하게 항상 0개를 만들었다.
+    // 게이트는 "포지션이 빠져나가지 않음"까지만 보고, 실제 증가폭은 채점으로 보상한다.
+    oiChangeMinPct: 0,
+    oiScoreFullPct: 10,     // 채점 만점 기준 72h OI 증가율 (전 종목 상위 20% 수준)
     // 2단계 임박
     squeezePctTight: 15,    // 압축 극단
     rangePosMin: 0.95,      // 박스 상단 근접
@@ -96,6 +104,12 @@ export const CONFIG = {
     oiDumpPct: -10,         // 72h OI 이 % 이하 = 포지션 이탈
     fundingMaxAbs: 0.001,   // |펀딩비| 이 값 초과 = 한쪽 과열
   },
+
+  // 조기 포착 최소 점수 — reversal 과 척도가 다르므로 컷을 공유하지 않는다.
+  // early 점수는 "얼마나 터지기 직전인가" 사다리라, 1 매집 단계는 박스 중앙(위치≈0.4)이라
+  // rangePosition 15점을 구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+).
+  // reversal 기본 컷 55 를 그대로 쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다.
+  earlyMinScore: 40,
 
   // ---- 조기 포착 채점 (합계 100) ----
   earlyScoreWeights: {
@@ -193,7 +207,10 @@ export const CONFIG = {
 
   // ---- 멀티타임프레임 캔들 요청 수 ----
   klinesLimit: {
-    "4h": 220,
+    // 4h 는 EMA200 기울기(200봉 시드 + 20봉 전 비교)까지 필요 → 마감 기준 최소 221개.
+    // 220 이면 유효 EMA200 이 20개뿐이라 기울기가 조용히 항상 false 가 된다.
+    // (Binance klines 가중치는 101~500 구간이 동일해 250 으로 올려도 비용 같음)
+    "4h": 250,
     "1h": 260,
     "15m": 200,
     "5m": 160,
@@ -232,6 +249,12 @@ export const STRICTNESS_LEVELS = [
 ];
 export function strictnessPreset(level) {
   return STRICTNESS_LEVELS.find((s) => s.level === level) || STRICTNESS_LEVELS[2];
+}
+
+// 모드별 최소 점수. 두 모드의 점수 척도가 달라 같은 컷을 쓰면 안 된다.
+// (채점 강도 프리셋은 reversal 감점 항목만 담고 있어 early 에는 애초에 적용되지 않는다)
+export function minScoreFor(settings) {
+  return settings?.scanMode === "early" ? CONFIG.earlyMinScore : settings?.minScore;
 }
 
 // 스테이블/레버리지 판별용 패턴

@@ -55,9 +55,34 @@
      `docs/superpowers/plans/2026-07-24-early-pump-detection.md`
    - subagent-driven 방식으로 10개 태스크 TDD 구현, 태스크마다 spec+quality 리뷰 통과.
 
+6. **early 모드 실측 기반 튜닝 + 무증상 버그 2건 수정** — "임계값이 빡세서 후보가 안 나온다"
+   고 보고 숫자를 조정하려 했으나, 실측해 보니 **계산 자체가 죽어 있었다**. 감으로 고치지 말고
+   `docs/` 아래 방식대로 먼저 측정할 것.
+   - **버그 A — OI 72시간 변화가 항상 null**: `oiLimit: 72` 로 요청하면 정확히 72개가 오는데
+     72시간 "전" 값을 집으려면 73개가 필요(현재 봉 포함). 그래서 `change72h` 가 영구 null →
+     `oiBuildUp` **25점이 영구 0점**(최고 점수가 구조적으로 75점), OI 게이트도 조용히 무력화.
+     → `oiLimit: 80`.
+   - **버그 B — EMA200 기울기가 항상 false**: 4h 캔들 220개 요청 → 마감 219개 → EMA200 은
+     200봉 시드라 유효값이 20개뿐 → 20봉 전 값(`[idx-20]`)이 null → 기울기 판정 불가.
+     추세 게이트가 `종가>EMA200` 하나로 축소돼 후보 20개 중 12개(60%) 사망. → `4h: 250`.
+     (Binance klines 가중치는 101~500 동일 구간이라 비용 변화 없음)
+   - **OI 게이트 재조정**: 버그 A 를 고치자 이번엔 `oiChangeMinPct: 5` 가 후보 20개를 전멸시킴.
+     134종목 실측 결과 **압축된 코인과 OI 급증 코인은 거의 배타적** — 압축 통과 20종목의
+     OI 72h 최대가 +1.08%(중앙 -1.76%)인 반면, 전 종목 기준으론 30%가 +5% 이상이었다.
+     즉 시장 전체로는 현실적인 수치지만 압축 코인에는 도달 불가 → 시장 상태와 무관하게 항상 0개.
+     게이트는 "포지션 이탈 없음"(`oiChangeMinPct: 0`)까지만 보고 실제 증가폭은 채점으로 보상,
+     채점 만점 기준도 도달 가능한 값(`oiScoreFullPct: 10`, 하드코딩 30 을 config 로 이동).
+   - **early 최소 점수 분리** (`earlyMinScore: 40`, `minScoreFor()`): early 점수는
+     "얼마나 터지기 직전인가" 사다리라 1 매집은 박스 중앙(위치≈0.4)이라 `rangePosition` 15점을
+     구조적으로 못 받아 상한이 ~55다(2 임박 ~85, 3 돌파 ~90+). reversal 기본 컷 55 를 그대로
+     쓰면 조기 포착의 존재 이유인 매집 단계가 전부 숨는다. 두 모드는 척도가 달라 컷을 공유하면 안 됨.
+   - 결과: early 후보 **0개 → 4개**(ADA/VIRTUAL/LIT/LDO, 46~52점 "1 매집"), reversal 회귀 없음.
+   - 회귀 테스트 3개 추가. 옛 설정값(72/220)으로 되돌리면 실제로 실패하는 것까지 확인했다
+     (통과만 하는 무의미한 테스트가 아님).
+
 ## 검증 상태
 
-- **테스트 86/86 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
+- **테스트 89/89 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
   goldenCross, noise, early, repaint, refresh 9개 스위트)
 - **라이브 Binance API로 실제 스캔 여러 번 검증** — 롱/숏/양방향 전부 확인,
   콘솔 에러 0, RR 폭발 버그도 라이브에서 재현 후 수정 확인(수정 전 1:73M → 수정 후 1:16)
@@ -70,7 +95,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (86/86 나와야 정상)
+node tests/run.js          # 테스트 확인 (89/89 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -104,10 +129,16 @@ tests/
 
 ## 앞으로 할 수 있는 것 (우선순위 순, 아무것도 확정 아님)
 
-0. **early 모드 임계값 튜닝** — `config.js`의 `earlyDetect`(박스폭·압축백분위·OI증가율 등)는
-   감으로 잡은 초기값이다. 실사용하며 후보 수를 보고 `boxWidthMaxPct`, `squeezePctMax`,
-   `oiChangeMinPct` 를 조정할 것. `earlyScoreWeights`/`earlyPenalties` 도 마찬가지.
-   TradingView 지표는 아직 reversal 로직 기준이라 early 모드 포팅도 후보.
+0. **early 남은 튜닝 대상** — OI 관련은 실측으로 맞췄고(위 6번), 아직 손 안 댄 것:
+   - `boxWidthMaxPct: 25` — 실측 분포 중앙 23.6 (통과율 53%). 후보를 늘리려면 30~40 이 여유.
+   - `squeezePctMax: 30` — 실측 중앙 62 (통과율 27.6%, **가장 빡센 게이트**). 압축이 주 논지라
+     함부로 풀면 모드 의미가 사라짐. 후보가 계속 0~4개면 여기부터.
+   - `volDryMax: 0.8` — 실측 중앙 0.82 (통과율 46%). 적정.
+   - 추세 게이트(`closeAboveEma200 || ema200SlopeOk`) — 후보 20개 중 12개를 죽인다. 설계 의도
+     (죽은 코인 배제)라 버그는 아니지만, 200선 아래 바닥 매집을 원하면 완화 대상.
+   - 임계값 만질 때 반드시 실측부터. 측정 스크립트 패턴은 위 6번 참고
+     (앱 코드를 그대로 import 하고 `globalThis.localStorage` 만 shim 하면 Node 에서 돈다).
+   - TradingView 지표는 아직 reversal 로직 기준이라 early 모드 포팅도 후보.
 1. **점수 가중치 튜닝** — 실사용하면서 `config.js`의 `scoreWeights`/`penalties`가
    실제 좋은 셋업을 잘 걸러내는지 관찰 필요. 현재는 최초 설계값 그대로.
 2. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.

@@ -123,8 +123,9 @@ export function scoreEarly(m, cfg) {
 
   // 압축: 백분위 0 → 만점, 50 이상 → 0점
   const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
-  // OI: +30% 이상이면 만점. 데이터 없으면 0점.
-  const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), 30) / 30);
+  // OI: oiScoreFullPct 이상이면 만점. 데이터 없으면 0점.
+  const oiFull = cfg.earlyDetect.oiScoreFullPct;
+  const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), oiFull) / oiFull);
   // 거래량 고갈: 낮을수록 높은 점수
   const volGot = m.volDry == null ? 0 : w.volumeProfile * (1 - Math.min(m.volDry, 1));
   // 박스 상단 근접

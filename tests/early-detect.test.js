@@ -1,7 +1,7 @@
 // tests/early-detect.test.js — 조기 포착 모드 계산 검증.
 
 import { suite, test, assert, eq } from "./harness.js";
-import { CONFIG } from "../js/config.js";
+import { CONFIG, minScoreFor } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
   classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
@@ -312,5 +312,41 @@ export function run() {
   test("early 1차 선별 — 캔들 부족하면 탈락", () => {
     const c = candlesFromCloses([1, 2, 3], { spread: 0 });
     eq(stage3EvaluateEarly({ symbol: "ZUSDT" }, c, CONFIG).pass, false);
+  });
+
+  // ---- 데이터 창이 lookback 을 못 덮으면 계산이 "조용히 null" 이 되는 계열 회귀 방지 ----
+  // 실제로 두 건 다 발생했다: oiLimit=72 → change72h 영구 null(=oiBuildUp 25점 사장),
+  // 4h limit=220 → EMA200 기울기 영구 false(=매집 후보 60% 사망).
+
+  test("설정된 oiLimit 만큼 받으면 72시간 변화가 계산된다", () => {
+    // 실제 API 가 주는 만큼(= oiLimit 개)만 있는 시계열
+    const series = Array.from({ length: CONFIG.earlyDetect.oiLimit }, (_, i) => ({
+      time: i * 3600_000, oi: 1000 + i,
+    }));
+    const r = analyzeOi(series);
+    assert(r.change72h != null,
+      `oiLimit=${CONFIG.earlyDetect.oiLimit} 로는 72시간 전 값을 못 집는다 → oiBuildUp 이 항상 0점`);
+    assert(r.change72h > 0, "증가 시계열이면 양수");
+  });
+
+  test("early 는 reversal 과 최소 점수 컷을 공유하지 않는다", () => {
+    // early 1 매집은 구조적으로 ~55 를 못 넘어 reversal 컷을 쓰면 항상 빈 결과가 된다
+    eq(minScoreFor({ scanMode: "early", minScore: 55 }), CONFIG.earlyMinScore, "early 는 자체 컷");
+    eq(minScoreFor({ scanMode: "reversal", minScore: 55 }), 55, "reversal 은 사용자 설정 그대로");
+    assert(CONFIG.earlyMinScore < 55, "early 컷은 매집 단계를 보여줄 수 있어야 함");
+  });
+
+  test("설정된 4h 캔들 수로 EMA200 기울기가 실제로 판정된다", () => {
+    const n = CONFIG.klinesLimit["4h"] - 1; // 진행 중 캔들 제외한 마감 캔들 수
+    const rising = candlesFromCloses(
+      Array.from({ length: n }, (_, i) => 100 + i * 0.5), { spread: 0.1 });
+    const up = buildEarlyMetrics(rising, [], null, {}, CONFIG);
+    assert(up, "지표 계산됨");
+    eq(up.ema200SlopeOk, true, "상승 시계열이면 EMA200 기울기가 상승이어야 함(창이 좁으면 항상 false)");
+
+    const falling = candlesFromCloses(
+      Array.from({ length: n }, (_, i) => 200 - i * 0.5), { spread: 0.1 });
+    eq(buildEarlyMetrics(falling, [], null, {}, CONFIG).ema200SlopeOk, false,
+      "하락 시계열이면 기울기 상승이 아니어야 함");
   });
 }

@@ -70,14 +70,14 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (38/38 나와야 정상)
+node tests/run.js          # 테스트 확인 (86/86 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
 
 배포는 자동 — `main`에 push하면 GitHub Pages가 재빌드함. 별도 빌드 스텝 없음.
 
-## 파일 구조 (36개 파일)
+## 파일 구조 (46개 파일)
 
 ```
 index.html, manifest.webmanifest, sw.js, README.md, PROGRESS.md(이 파일)

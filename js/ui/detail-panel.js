@@ -78,6 +78,7 @@ function renderDetail(r) {
         <tr><td>TP3 (${r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
       </table>
+      ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
     </section>
 
     <section class="detail-section">

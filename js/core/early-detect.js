@@ -165,14 +165,29 @@ function mkItem(key, label, weight, got) {
 // ---- 진입 계획 ----
 // 박스 기반. 기존 plan 필드명을 그대로 채워 UI/상세패널이 수정 없이 동작하게 한다.
 // 손절은 반드시 진입 아래로 clamp (risk-reward.js 의 RR 폭발 버그와 동일한 방어).
-export function earlyPlan(m, atrVal, price) {
+//
+// 목표가·손절은 박스가 아니라 ATR 기준이다. 박스 기준을 쓰면 값이 현실과 크게 어긋난다:
+//  - 박스 상단까지 거리 중앙값은 구간별 36~762% 인데 실제 5일 최대 상승률 중앙값은 8~22% 였다.
+//    (표본 5,929) 즉 어느 구간에서도 박스 상단은 5일 안에 닿지 않는다.
+//  - 폭락 후 바닥 종목은 박스 하단이 폭락 저점이라 손절이 -70% 같은 값이 된다.
+//  - 급등 141건 추적에서도 고점 이후 중앙 82% 를 반납했다(31%는 전량 반납).
+// 이 종목들의 ATR 은 가격의 ~6% 수준이라 ATR 배수 사다리가 실측 상승폭과 맞는다.
+export function earlyPlan(m, atrVal, price, cfg) {
   const entry = price;
-  const span = Math.max(m.boxHigh - m.boxLow, 1e-9);
-  const buffer = (atrVal || 0) * 0.5;
-  const stop = Math.min(m.boxLow, entry) - buffer;
-  const tp1 = m.boxHigh + span * 1.0;
-  const tp2 = m.boxHigh + span * 1.5;
-  const tp3 = m.boxHigh + span * 2.0;
+  const atr = atrVal > 0 ? atrVal : price * 0.03; // ATR 없으면 보수적 대체값
+  // 손절 거리 = 세 후보 중 가장 가까운 것.
+  //  (1) 박스 하단까지 — 구조적 무효화 지점
+  //  (2) 2 ATR — 노이즈보다 멀게
+  //  (3) 진입 대비 maxStopPct — 초고변동 종목에서 (1)(2) 가 둘 다 제약이 안 될 때의 안전판
+  const stopDist = Math.max(Math.min(
+    entry - m.boxLow,
+    atr * 2,
+    entry * cfg.earlyDetect.maxStopPct,
+  ), entry * 0.005); // 0 이 되지 않게 최소값
+  const stop = entry - stopDist;
+  const tp1 = entry + atr * 1.5;                       // 1차 부분 익절
+  const tp2 = entry + atr * 3;                         // 주 목표
+  const tp3 = Math.min(m.boxHigh, entry + atr * 5);    // 연장 — 박스 상단이 더 가까우면 그쪽
   const risk = Math.max(entry - stop, 1e-9);
   const reward = Math.max(tp2 - entry, 0);
   const rr = reward / risk;
@@ -182,6 +197,9 @@ export function earlyPlan(m, atrVal, price) {
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && entry > stop,
+    // 실측 근거를 UI 로 함께 내보낸다 — 목표가만 보고 끝까지 들고 가지 않도록.
+    note: "급등 141건 추적 결과 고점 이후 중앙 82% 를 반납했고(31%는 전량 반납) " +
+          "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다. 분할 익절 전제로 보세요.",
   };
 }
 
@@ -247,7 +265,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
   if (!stageInfo) return null;
 
   const scored = scoreEarly(m, cfg);
-  const plan = earlyPlan(m, m.atrVal, m.price);
+  const plan = earlyPlan(m, m.atrVal, m.price, cfg);
 
   return {
     symbol: item.symbol,

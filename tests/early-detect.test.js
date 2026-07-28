@@ -14,7 +14,7 @@ import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scann
 // 개별 테스트에서 필요한 값만 덮어쓴다.
 function baseMetrics(over = {}) {
   return {
-    boxWidthPct: 45, rangePos: 0.10, boxHigh: 145, boxLow: 100,
+    boxWidthPct: 70, rangePos: 0.10, boxHigh: 145, boxLow: 100,
     squeezePct: 60, volDry: 1.2, relVol3: 0.9,
     oi: { change72h: 10, change12h: 3, prev12h: 2 },
     funding: 0.0001, change24h: 5, quoteVolume: 50_000_000,
@@ -188,13 +188,18 @@ export function run() {
   });
 
   test("채점 — 조건 좋을수록 점수 높음(단조성)", () => {
-    const weak = scoreEarly(baseMetrics({ squeezePct: 45, oi: { change72h: 1, change12h: 0, prev12h: 0 }, volDry: 0.95, rangePos: 0.1 }), CONFIG).score;
-    const strong = scoreEarly(baseMetrics({ squeezePct: 2, oi: { change72h: 30, change12h: 10, prev12h: 3 }, volDry: 0.2, rangePos: 0.98 }), CONFIG).score;
+    // 실측 방향 기준: 넓은 박스 + 레인지 하단 + OI 증가 + 거래량 확대 가 좋은 조건
+    const weak = scoreEarly(baseMetrics({
+      boxWidthPct: 55, rangePos: 0.28, oi: { change72h: 1, change12h: 0, prev12h: 0 }, volDry: 0.85,
+    }), CONFIG).score;
+    const strong = scoreEarly(baseMetrics({
+      boxWidthPct: 95, rangePos: 0.03, oi: { change72h: 30, change12h: 10, prev12h: 3 }, volDry: 1.4,
+    }), CONFIG).score;
     assert(strong > weak, `강한 조건이 더 높아야 (${strong} > ${weak})`);
   });
 
   test("채점 — 최고 조건은 만점", () => {
-    // 실측 프랙탈 기준 만점: 아주 넓은 변동 폭 + 레인지 최하단 + OI 급증 + 거래량 확대
+    // 실측 프랙탈 기준 만점: 아주 넓은 변동 폭 + 레인지 최하단 + OI 급증 + 거래량 확대 + 큰 거래대금
     const e = CONFIG.earlyDetect;
     const r = scoreEarly(baseMetrics({
       boxWidthPct: e.boxWidthMinPct * 2,
@@ -203,6 +208,26 @@ export function run() {
       volDry: 1.5,
     }), CONFIG);
     eq(r.score, 100, "모든 항목 만점");
+  });
+
+  test("목표가·손절은 ATR 기준이라 현실 범위 안에 있다", () => {
+    const m = baseMetrics({ boxHigh: 145, boxLow: 100 });
+    const atr = 3, entry = 105;
+    const p = earlyPlan(m, atr, entry, CONFIG);
+    assert(p.tp1 > entry && p.tp1 <= entry + atr * 2, "TP1 은 진입 위 2 ATR 이내");
+    assert(p.tp2 > p.tp1 && p.tp2 <= entry + atr * 4, "TP2 는 TP1 위, 4 ATR 이내");
+    assert(p.tp3 <= entry + atr * 5 + 1e-9, "TP3 도 5 ATR 이내");
+    assert(p.note && p.note.includes("82"), "되돌림 실측 근거를 함께 전달");
+  });
+
+  test("폭락 후 바닥 종목도 손절이 진입에서 멀어지지 않는다", () => {
+    // 박스 하단이 폭락 저점(0.79)이고 진입이 2.6 이면 예전 로직은 손절 -70% 를 냈다
+    const m = baseMetrics({ boxHigh: 42.48, boxLow: 0.79, boxWidthPct: 193, rangePos: 0.06 });
+    const atr = 0.15, entry = 2.598;
+    const p = earlyPlan(m, atr, entry, CONFIG);
+    assert(p.stop > entry - atr * 3, `손절이 3 ATR 이내여야 함 (실제 ${p.stop})`);
+    assert(p.stop < entry, "손절은 진입 아래");
+    assert(p.riskReward < 10, `손익비가 비현실적이면 안 됨 (실제 ${p.rrText})`);
   });
 
   test("채점 방향 — 넓고 바닥일수록 높은 점수 (백테스트 방향 고정)", () => {
@@ -226,7 +251,7 @@ export function run() {
   });
 
   test("plan — 손절은 진입 아래, 손익비 유한", () => {
-    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110);
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110, CONFIG);
     assert(p.stop < p.entry, "손절 < 진입");
     assert(isFinite(p.riskReward) && p.riskReward > 0, `손익비 유한 (${p.riskReward})`);
     assert(p.tp2 > p.tp1, "TP2 > TP1");
@@ -234,7 +259,7 @@ export function run() {
 
   test("plan — 박스 하단이 진입 위여도 손절은 진입 아래로 clamp", () => {
     // 비정상 입력(박스 하단 > 현재가)에서도 손절이 진입 위로 가지 않아야 한다
-    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110);
+    const p = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 150 }), 2, 110, CONFIG);
     assert(p.stop < p.entry, `손절 clamp (stop ${p.stop} < entry ${p.entry})`);
     assert(isFinite(p.riskReward), "손익비 유한");
   });

@@ -10,11 +10,12 @@ import {
 import { candlesFromCloses } from "./fixtures.js";
 import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
 
-// 1단계(매집) 조건을 모두 만족하는 기본 지표. 개별 테스트에서 필요한 값만 덮어쓴다.
+// 1단계(바닥권) 조건을 모두 만족하는 기본 지표 — 넓은 박스 + 레인지 하단.
+// 개별 테스트에서 필요한 값만 덮어쓴다.
 function baseMetrics(over = {}) {
   return {
-    boxWidthPct: 20, rangePos: 0.5, boxHigh: 120, boxLow: 100,
-    squeezePct: 20, volDry: 0.7, relVol3: 0.9,
+    boxWidthPct: 45, rangePos: 0.10, boxHigh: 145, boxLow: 100,
+    squeezePct: 60, volDry: 1.2, relVol3: 0.9,
     oi: { change72h: 10, change12h: 3, prev12h: 2 },
     funding: 0.0001, change24h: 5, quoteVolume: 50_000_000,
     closeAboveEma200: true, ema200SlopeOk: true,
@@ -39,11 +40,20 @@ export function run() {
 
   test("early 임계값 존재", () => {
     const e = CONFIG.earlyDetect;
-    for (const k of ["boxLookback", "squeezeLookback", "boxWidthMaxPct", "squeezePctMax",
-      "volDryMax", "oiChangeMinPct", "squeezePctTight", "rangePosMin", "relVolMin",
+    for (const k of ["boxLookback", "squeezeLookback", "boxWidthMinPct", "boxWidthMaxPct",
+      "rangePosMax", "liftOffRangePos", "oiChangeMinPct", "oiScoreFullPct", "relVolMin",
       "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "oiDumpPct", "fundingMaxAbs"]) {
       assert(e[k] !== undefined, `earlyDetect.${k} 필요`);
     }
+  });
+
+  test("박스 폭은 상한이 아니라 하한이다 (백테스트로 방향 반증됨)", () => {
+    // "박스폭 <= 25" 게이트는 무필터 5,824 표본에서 향상도 0.27x — 기준 급등률의 1/4였다.
+    // 넓은 변동 구간을 요구하는 방향이 유지되는지 고정한다.
+    const e = CONFIG.earlyDetect;
+    assert(e.boxWidthMinPct >= 25, `변동 폭 하한이 있어야 함 (실제 ${e.boxWidthMinPct})`);
+    assert(e.boxWidthMaxPct > e.boxWidthMinPct * 2, "상한은 이상치 방어용이라 넉넉해야 함");
+    assert(e.rangePosMax <= 0.4, `레인지 하단권을 요구해야 함 (실제 ${e.rangePosMax})`);
   });
 
   test("박스 범위·폭·위치 계산", () => {
@@ -110,19 +120,21 @@ export function run() {
     eq(r.prev12h, null);
   });
 
-  test("1단계 매집 판정", () => {
+  test("1단계 바닥권 판정 — 넓은 박스 + 레인지 최하단", () => {
     const s = classifyEarlyStage(baseMetrics(), CONFIG);
-    eq(s.stage, 1, "매집 단계");
-    eq(s.key, "accumulation");
+    eq(s.stage, 1, "바닥권 단계");
+    eq(s.key, "basing");
   });
 
-  test("2단계 임박 — 압축 극단 + 상단 근접 + 거래량 회복 + OI 가속", () => {
-    const s = classifyEarlyStage(baseMetrics({
-      squeezePct: 10, rangePos: 0.97, relVol3: 1.2,
-      oi: { change72h: 10, change12h: 6, prev12h: 2 },
-    }), CONFIG);
-    eq(s.stage, 2, "임박 단계");
-    eq(s.key, "imminent");
+  test("2단계 반등 시작 — 바닥권 벗어남 + 거래량 확대", () => {
+    const s = classifyEarlyStage(baseMetrics({ rangePos: 0.25, relVol3: 1.5 }), CONFIG);
+    eq(s.stage, 2, "반등 시작 단계");
+    eq(s.key, "liftoff");
+  });
+
+  test("레인지 상단이면 단계 없음 (급등군은 하단에서 나왔다)", () => {
+    eq(classifyEarlyStage(baseMetrics({ rangePos: 0.8 }), CONFIG), null,
+      "상단 근접은 조기 포착 대상이 아님");
   });
 
   test("3단계 돌파 — 상단 종가돌파 + 거래량 급증 + ATR 상승 + 초입", () => {
@@ -140,8 +152,12 @@ export function run() {
     eq(s, null, "초입 아니면 제외");
   });
 
-  test("박스 넓으면 단계 없음", () => {
-    eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 90 }), CONFIG), null);
+  test("변동 폭이 좁으면 단계 없음 (움직일 여력이 없다)", () => {
+    eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 12 }), CONFIG), null);
+  });
+
+  test("박스 폭 이상치는 제외", () => {
+    eq(classifyEarlyStage(baseMetrics({ boxWidthPct: 900 }), CONFIG), null);
   });
 
   test("OI 없어도(null) 1단계 통과 — 후보 유지", () => {
@@ -177,12 +193,23 @@ export function run() {
     assert(strong > weak, `강한 조건이 더 높아야 (${strong} > ${weak})`);
   });
 
-  test("채점 — 최고 조건은 만점 근처", () => {
+  test("채점 — 최고 조건은 만점", () => {
+    // 실측 프랙탈 기준 만점: 아주 넓은 변동 폭 + 레인지 최하단 + OI 급증 + 거래량 확대
+    const e = CONFIG.earlyDetect;
     const r = scoreEarly(baseMetrics({
-      squeezePct: 0, oi: { change72h: 30, change12h: 10, prev12h: 3 },
-      volDry: 0, rangePos: 1, closeAboveEma200: true,
+      boxWidthPct: e.boxWidthMinPct * 2,
+      rangePos: 0,
+      oi: { change72h: e.oiScoreFullPct, change12h: 10, prev12h: 3 },
+      volDry: 1.5,
     }), CONFIG);
     eq(r.score, 100, "모든 항목 만점");
+  });
+
+  test("채점 방향 — 넓고 바닥일수록 높은 점수 (백테스트 방향 고정)", () => {
+    const wideLow = scoreEarly(baseMetrics({ boxWidthPct: 60, rangePos: 0.02 }), CONFIG).score;
+    const narrowHigh = scoreEarly(baseMetrics({ boxWidthPct: 31, rangePos: 0.29 }), CONFIG).score;
+    assert(wideLow > narrowHigh,
+      `넓은 박스+바닥(${wideLow})이 좁은 박스+상단(${narrowHigh})보다 높아야 함`);
   });
 
   test("채점 — OI 없으면 해당 항목 0점, 나머지는 살아있음", () => {
@@ -294,19 +321,29 @@ export function run() {
     eq(out[0].baseAsset, "PEPE");
   });
 
-  test("early 1차 선별 — 좁은 횡보는 통과", () => {
-    // 진폭이 점점 줄어드는 횡보 → 최근 볼린저 폭이 가장 좁아 압축 백분위가 낮게 나온다
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
-    const c = candlesFromCloses(closes, { spread: 0.05, vol: (i) => (i < 140 ? 100 : 50) });
+  test("early 1차 선별 — 크게 빠져 하단에 있으면 통과", () => {
+    // 넓게 출렁이다 마지막에 레인지 하단으로 내려온 모습 = 실측된 급등 직전 프랙탈
+    const closes = Array.from({ length: 200 }, (_, i) =>
+      i < 170 ? 100 + Math.sin(i / 5) * 30 : 68);
+    const c = candlesFromCloses(closes, { spread: 0.3 });
     const r = stage3EvaluateEarly({ symbol: "XUSDT" }, c, CONFIG);
     eq(r.pass, true, `통과해야 함 (사유: ${r.reason})`);
   });
 
-  test("early 1차 선별 — 넓게 출렁이면 탈락", () => {
-    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * 40);
-    const c = candlesFromCloses(closes, { spread: 1 });
+  test("early 1차 선별 — 좁은 횡보는 탈락 (움직일 여력 없음)", () => {
+    const closes = Array.from({ length: 200 }, (_, i) => 100 + Math.sin(i / 5) * (5 * (1 - i / 200)));
+    const c = candlesFromCloses(closes, { spread: 0.05 });
     const r = stage3EvaluateEarly({ symbol: "YUSDT" }, c, CONFIG);
-    eq(r.pass, false, "박스가 넓으면 탈락");
+    eq(r.pass, false, "변동 폭이 좁으면 탈락");
+    eq(r.reason, "변동 폭 부족");
+  });
+
+  test("early 1차 선별 — 넓어도 레인지 상단이면 탈락", () => {
+    const closes = Array.from({ length: 200 }, (_, i) =>
+      i < 170 ? 100 + Math.sin(i / 5) * 30 : 129);
+    const c = candlesFromCloses(closes, { spread: 0.3 });
+    const r = stage3EvaluateEarly({ symbol: "ZZUSDT" }, c, CONFIG);
+    eq(r.pass, false, "상단은 조기 포착 대상 아님");
   });
 
   test("early 1차 선별 — 캔들 부족하면 탈락", () => {

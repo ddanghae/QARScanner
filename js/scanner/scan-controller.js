@@ -80,7 +80,8 @@ async function runEarlyPipeline(universe, now) {
   });
   let candidates = evaluated
     .filter((x) => x.res?.pass)
-    .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
+    // 변동 폭이 큰 순 — 백테스트에서 향상도의 대부분이 박스 폭에서 나왔다
+    .sort((a, b) => (b.res.boxWidthPct ?? 0) - (a.res.boxWidthPct ?? 0))
     .slice(0, e.keepMax);
   state.candidates = candidates.map((x) => x.item);
   emit("scan:candidates", { count: candidates.length });

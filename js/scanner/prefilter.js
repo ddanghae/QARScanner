@@ -135,28 +135,35 @@ export function excludeMajors(list, majors) {
 }
 
 // ---- early 1차 선별 ----
-// 4시간봉으로 "좁은 박스 + 압축 + 거래량 고갈" 을 빠르게 확인해 정밀 분석 후보를 줄인다.
+// 4시간봉으로 "충분한 변동 폭(박스) + 레인지 하단권" 을 빠르게 확인해 정밀 분석 후보를 줄인다.
 // OI 호출 전에 걸러내는 것이 목적이므로 여기서는 OI 를 보지 않는다.
+//
+// 원래는 "좁은 박스 + 압축 + 거래량 고갈"이었으나 백테스트에서 급등 예측력이
+// 반대 방향(향상도 0.27x)으로 나와 실측 프랙탈로 교체했다. config.earlyDetect 주석 참고.
 export function stage3EvaluateEarly(item, k4h, cfg) {
   const e = cfg.earlyDetect;
   const box = boxRange(k4h, e.boxLookback);
   if (!box) return { pass: false, reason: "데이터 부족" };
 
+  // 압축·거래량 고갈은 게이트에서 빠졌지만 상세 표시·분석용으로 계속 계산해 둔다.
   const closes = k4h.map((c) => c.close);
   const widths = bollinger(closes, cfg.indicators.bb.period, cfg.indicators.bb.mult).width;
   const squeezePct = squeezePercentile(widths, e.squeezeLookback);
   const volDry = volDryRatio(k4h, e.volRecentN, e.volPriorN);
 
-  const boxOk = box.boxWidthPct <= e.boxWidthMaxPct;
-  // 압축·고갈은 계산 불가(데이터 부족)면 통과시키고 정밀 단계에서 다시 본다.
-  const squeezeOk = squeezePct == null || squeezePct <= e.squeezePctMax;
-  const volOk = volDry == null || volDry <= e.volDryMax;
-  const pass = boxOk && squeezeOk && volOk;
+  const wideEnough = box.boxWidthPct >= e.boxWidthMinPct;
+  const notOutlier = box.boxWidthPct <= e.boxWidthMaxPct;
+  const nearLow = box.rangePos <= e.rangePosMax;
+  const pass = wideEnough && notOutlier && nearLow;
 
   return {
     pass,
-    reason: pass ? "후보" : !boxOk ? "박스 넓음" : !squeezeOk ? "압축 부족" : "거래량 고갈 아님",
+    reason: pass ? "후보"
+      : !wideEnough ? "변동 폭 부족"
+      : !notOutlier ? "박스 이상치"
+      : "레인지 하단 아님",
     boxWidthPct: box.boxWidthPct,
+    rangePos: box.rangePos,
     squeezePct,
     volDry,
   };

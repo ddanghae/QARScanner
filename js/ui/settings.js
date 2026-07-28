@@ -177,7 +177,7 @@ function setChk(id, v) { const el = document.getElementById(id); if (el) el.chec
 // 단계 필터의 선택지 문구를 모드에 맞게 바꾼다(값은 그대로 1~5).
 const STAGE_LABELS = {
   reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
-  early: ["전체", "1 매집", "2 임박", "3 돌파", "—", "—"],
+  early: ["전체", "1 바닥권", "2 반등 시작", "3 돌파", "—", "—"],
 };
 function syncStageLabels(mode) {
   const el = document.getElementById("filter-stage");

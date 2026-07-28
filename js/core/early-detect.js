@@ -76,6 +76,8 @@ export function earlyExclusion(m, cfg) {
 }
 
 // 3단계 분류. 위 단계부터 판정하고, 어디에도 안 걸리면 null(결과에서 제외).
+// 기준은 백테스트로 검증된 프랙탈 — "넓은 변동 구간(박스폭)의 하단권".
+// (최초 전제였던 압축·거래량 고갈은 급등 예측력이 반대여서 판정에서 뺐다. config 주석 참고)
 export function classifyEarlyStage(m, cfg) {
   const e = cfg.earlyDetect;
 
@@ -86,28 +88,23 @@ export function classifyEarlyStage(m, cfg) {
       : null; // 이미 많이 감 → 추격 방지
   }
 
-  // 1단계 조건(매집)을 먼저 확인. OI 데이터가 없으면 OI 조건은 통과로 간주한다.
+  // 공통 조건: 움직일 변동성 여력이 있고(박스 폭), 레인지 하단권에 있어야 한다.
+  // OI 데이터가 없으면 OI 조건은 통과로 간주한다(신규 상장 등).
   const oiOk = m.oi.change72h == null || m.oi.change72h >= e.oiChangeMinPct;
-  const trendOk = m.closeAboveEma200 || m.ema200SlopeOk;
-  const accumulation =
+  const inRange =
+    m.boxWidthPct >= e.boxWidthMinPct &&
     m.boxWidthPct <= e.boxWidthMaxPct &&
-    m.squeezePct != null && m.squeezePct <= e.squeezePctMax &&
-    m.volDry != null && m.volDry <= e.volDryMax &&
-    oiOk && trendOk;
-  if (!accumulation) return null;
+    m.rangePos <= e.rangePosMax &&
+    oiOk;
+  if (!inRange) return null;
 
-  // 2단계 임박 — 압축 극단 + 박스 상단 근접 + 거래량 회복 + OI 가속
-  const oiAccel = m.oi.change12h != null && m.oi.prev12h != null && m.oi.change12h > m.oi.prev12h;
-  if (
-    m.squeezePct <= e.squeezePctTight &&
-    m.rangePos >= e.rangePosMin &&
-    m.relVol3 >= e.relVolMin &&
-    oiAccel
-  ) {
-    return stage(2, "imminent", "2 임박", "yellow");
+  // 2단계 반등 시작 — 바닥권을 막 벗어나며 거래량이 붙는 구간
+  if (m.rangePos > e.liftOffRangePos && m.relVol3 >= e.relVolMin) {
+    return stage(2, "liftoff", "2 반등 시작", "yellow");
   }
 
-  return stage(1, "accumulation", "1 매집", "blue");
+  // 1단계 바닥권 — 아직 레인지 최하단에서 조용한 상태
+  return stage(1, "basing", "1 바닥권", "blue");
 }
 
 function stage(n, key, label, badge) {
@@ -116,29 +113,31 @@ function stage(n, key, label, badge) {
 
 // ---- 채점 ----
 // 기존 scoring.js 의 breakdown/penalties 형식을 그대로 따른다(topSignals 재사용 가능).
+// 채점 항목은 백테스트에서 실제로 급등을 가려낸 것만 남겼다.
+// 반증된 항목(압축·거래량 고갈·장기선 회복)은 제거했다 — config 주석의 측정치 참고.
 export function scoreEarly(m, cfg) {
   const w = cfg.earlyScoreWeights;
   const p = cfg.earlyPenalties;
+  const e = cfg.earlyDetect;
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
-  // 압축: 백분위 0 → 만점, 50 이상 → 0점
-  const squeezeGot = m.squeezePct == null ? 0 : w.squeeze * (1 - Math.min(m.squeezePct, 50) / 50);
+  // 변동성 여력: 박스폭이 넓을수록 높은 점수. 하한에서 0, 상한(=하한의 2배)에서 만점.
+  const bwFull = e.boxWidthMinPct * 2;
+  const bwGot = w.volatilityRange *
+    clamp01((m.boxWidthPct - e.boxWidthMinPct) / (bwFull - e.boxWidthMinPct));
+  // 레인지 하단권: 위치가 낮을수록 높은 점수 (rangePosMax 에서 0, 바닥에서 만점)
+  const rangeGot = w.rangePosition * clamp01(1 - m.rangePos / e.rangePosMax);
   // OI: oiScoreFullPct 이상이면 만점. 데이터 없으면 0점.
-  const oiFull = cfg.earlyDetect.oiScoreFullPct;
+  const oiFull = e.oiScoreFullPct;
   const oiGot = m.oi.change72h == null ? 0 : w.oiBuildUp * (Math.min(Math.max(m.oi.change72h, 0), oiFull) / oiFull);
-  // 거래량 고갈: 낮을수록 높은 점수
-  const volGot = m.volDry == null ? 0 : w.volumeProfile * (1 - Math.min(m.volDry, 1));
-  // 박스 상단 근접
-  const rangeGot = w.rangePosition * clamp01(m.rangePos);
-  // 장기선 회복
-  const trendGot = m.closeAboveEma200 ? w.trendReclaim : m.ema200SlopeOk ? w.trendReclaim * 0.5 : 0;
+  // 거래량 확대: 이전 구간 대비 늘어난 만큼 (고갈이 아니라 확대가 급등 직전 특징)
+  const volGot = m.volDry == null ? 0 : w.volumeExpansion * clamp01((m.volDry - 0.8) / 0.7);
 
   const breakdown = [
-    mkItem("squeeze", "변동성 압축", w.squeeze, squeezeGot),
+    mkItem("volatilityRange", "변동성 여력(박스 폭)", w.volatilityRange, bwGot),
+    mkItem("rangePosition", "레인지 하단권", w.rangePosition, rangeGot),
     mkItem("oiBuildUp", "미결제약정 증가", w.oiBuildUp, oiGot),
-    mkItem("volumeProfile", "거래량 고갈", w.volumeProfile, volGot),
-    mkItem("rangePosition", "박스 상단 근접", w.rangePosition, rangeGot),
-    mkItem("trendReclaim", "장기선 회복", w.trendReclaim, trendGot),
+    mkItem("volumeExpansion", "거래량 확대", w.volumeExpansion, volGot),
   ];
 
   let score = breakdown.reduce((s, b) => s + b.got, 0);
@@ -147,7 +146,6 @@ export function scoreEarly(m, cfg) {
   const pen = (cond, val, key, label) => {
     if (cond) { score += val; penalties.push({ key, label, val }); }
   };
-  const e = cfg.earlyDetect;
   pen(m.change24h != null && m.change24h >= 25 && m.change24h <= e.pumpedMaxPct,
     p.alreadyPumped, "alreadyPumped", "이미 상당폭 상승");
   pen(m.oi.change72h != null && m.oi.change72h < 0, p.oiDump, "oiDump", "미결제약정 감소");

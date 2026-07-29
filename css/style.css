@@ -167,6 +167,10 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 /* 청산 경고 — 금액 대신 나오는 자리라 눈에 걸려야 한다 */
 .warn { color: var(--warn); border-left: 3px solid var(--warn); padding: 8px 10px; margin: 8px 0; font-size: 13px; line-height: 1.5; }
 .warn-inline { color: var(--warn); }
+/* 같이 움직이는 후보 — 나눠 담아도 분산이 아니라는 표시 */
+.badge-corr { background: rgba(217,138,0,.15); color: var(--warn); }
+.paper-summary { margin: 0 0 10px; }
+.paper-table td, .paper-table th { font-size: 13px; }
 
 /* 점수/등급 pill */
 .score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 3px 8px; border-radius: 8px; font-weight: 700; color: #fff; }

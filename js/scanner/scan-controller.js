@@ -8,6 +8,7 @@ import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremi
 import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
 import { buildEarlyResult } from "../core/early-detect.js";
+import { returnsFrom, correlationMap } from "../core/correlation.js";
 
 let abortToken = { aborted: false };
 
@@ -94,7 +95,19 @@ async function runEarlyPipeline(universe, now) {
     const funding = fundingMap.get(item.symbol) ?? null;
     return buildEarlyResult(item, k4h, oiSeries, funding, CONFIG);
   });
-  return analyzed.filter(Boolean);
+  const results = analyzed.filter(Boolean);
+
+  // 후보끼리 같이 움직이는지 — k4h 가 아직 손에 있을 때 여기서 계산한다.
+  // 화면에 3개가 떠도 셋이 같이 움직이면 분산이 아니라 한 종목에 3배 실은 것이다.
+  const series = [];
+  for (const { item, k4h } of candidates) {
+    if (!results.some((r) => r.symbol === item.symbol)) continue;
+    const ret = returnsFrom(k4h, CONFIG.correlation.bars);
+    if (ret) series.push({ symbol: item.symbol, returns: ret });
+  }
+  const corr = correlationMap(series, CONFIG.correlation.threshold);
+  for (const r of results) r.correlatedWith = corr.get(r.symbol) || [];
+  return results;
 }
 
 export async function runScan() {

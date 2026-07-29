@@ -7,6 +7,7 @@ import { fmtPrice, fmtPct, fmtVolume, fmtTime, fmtWon, planMoney, pctClass, esca
 import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
+import { recordTrade } from "./paper.js";
 
 let resultsEl, statusEl, progressEl;
 
@@ -83,6 +84,7 @@ function setBusy(busy) {
 export function renderResults() {
   if (!resultsEl) return;
   const view = applyFilters(state.results);
+  visibleSyms = new Set(view.map((r) => r.symbol));
   if (!view.length) {
     resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
@@ -144,6 +146,16 @@ function moneyCell(r) {
     + `<span class="down">${fmtWon(m.loss)}</span> / <span class="up">+${fmtWon(m.gain)}</span>${tail}</span>`;
 }
 
+// 지금 화면에 같이 떠 있는 후보 중 이 종목과 같이 움직이는 것. 화면 밖 종목은 알려도 소용없다.
+let visibleSyms = new Set();
+function corrBadge(r) {
+  const peers = (r.correlatedWith || []).filter((x) => visibleSyms.has(x.symbol));
+  if (!peers.length) return "";
+  const names = peers.slice(0, 2).map((x) => x.symbol.replace(/USDT$/, "")).join(", ");
+  const top = peers[0].r.toFixed(2);
+  return `<span class="badge badge-corr" title="7일 4시간봉 수익률 상관 ${top} — 나눠 담아도 사실상 같은 베팅입니다">↔ ${escapeHtml(names)}</span>`;
+}
+
 function goldenCrossBadge(r) {
   const gc = r.goldenCrossRetest;
   if (!gc?.detected) return "";
@@ -167,11 +179,11 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}</td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${oddsCell(r)}</td>
     <td>${moneyCell(r)}</td>
-    <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
+    <td><button class="btn-mini" data-detail="${r.symbol}">상세</button><button class="btn-mini" data-paper="${r.symbol}">기록</button></td>
     <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
   </tr>`;
 }
@@ -185,7 +197,7 @@ function cardHtml(r) {
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>
@@ -198,6 +210,7 @@ function cardHtml(r) {
     </div>
     <div class="rcard-actions">
       <button class="btn-mini" data-detail="${r.symbol}">상세 보기</button>
+      <button class="btn-mini" data-paper="${r.symbol}">기록</button>
       <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
     </div>
   </div>`;
@@ -209,6 +222,8 @@ function bindRows(view) {
     b.addEventListener("click", (e) => { e.stopPropagation(); const r = byId(b.dataset.detail); if (r) showDetail(r); }));
   resultsEl.querySelectorAll("[data-tv]").forEach((b) =>
     b.addEventListener("click", (e) => { e.stopPropagation(); openTradingView(b.dataset.tv); }));
+  resultsEl.querySelectorAll("[data-paper]").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); const r = byId(b.dataset.paper); if (r) recordTrade(r); }));
   resultsEl.querySelectorAll("[data-fav]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();

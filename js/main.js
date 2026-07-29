@@ -6,12 +6,14 @@ import { runScan, abortScan, startAutoRefresh, stopAutoRefresh } from "./scanner
 import { initDashboard } from "./ui/dashboard.js";
 import { initSettingsUI, applyFilters } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
+import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
 
 function boot() {
   initSettingsUI();
   initDetailPanel();
   initDashboard();
+  initPaper();
 
   // 스캔 버튼
   document.getElementById("scan-btn")?.addEventListener("click", () => {

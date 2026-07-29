@@ -367,6 +367,33 @@ export function run() {
     eq(fmtWon(398_000), "39.8만원");
   });
 
+  // 레버리지를 배수로만 곱하면 도달 불가능한 손실 금액을 보여주게 된다 — 청산이 먼저 온다.
+  test("레버리지 — 손익은 배수로 커지고, 청산이 손절보다 앞서면 알린다", () => {
+    const cost = CONFIG.tradeCostRoundTripPct;
+    const mmr = CONFIG.maintenanceMarginPct;
+    const plan = { entry: 100, invalidation: 90, tp2: 140, valid: true };  // 손절 -10%
+    const x1 = planMoney(plan, 1_000_000, cost, 1, mmr);
+    const x3 = planMoney(plan, 1_000_000, cost, 3, mmr);
+    assert(Math.abs(x3.gain - x1.gain * 3) < 1e-9, `3배면 이익도 3배 (${x1.gain} → ${x3.gain})`);
+    assert(Math.abs(x3.loss - x1.loss * 3) < 1e-9, `3배면 손실도 3배 (${x1.loss} → ${x3.loss})`);
+    eq(x1.liquidated, false, "1배는 청산 없음");
+    eq(x1.liqPrice, null, "1배는 청산가도 없음");
+    eq(x3.liquidated, false, `손절 10% < 3배 청산선 ${x3.liqDropPct}%`);
+
+    // 손절이 깊은 실제 후보(ATR×4 는 -38% 대가 흔하다) + 3배 = 청산이 먼저.
+    const deep = { entry: 100, invalidation: 62, tp2: 252, valid: true };  // 손절 -38%
+    const bad = planMoney(deep, 1_000_000, cost, 3, mmr);
+    assert(bad.liquidated, `손절 -38% 는 3배 청산선 -${bad.liqDropPct.toFixed(1)}% 보다 깊다`);
+    assert(bad.maxSafeLeverage < 3 && bad.maxSafeLeverage >= 1, `안전 상한 제시 (${bad.maxSafeLeverage}배)`);
+    eq(planMoney(deep, 1_000_000, cost, bad.maxSafeLeverage, mmr).liquidated, false,
+      "제시한 상한에서는 청산이 손절보다 뒤여야 한다");
+    // 격리 마진 — 증거금보다 더 잃을 수 없다. 배수를 그대로 곱하면 -114만원이 나온다.
+    eq(bad.loss, -1_000_000, `청산 손실은 증거금 전액에서 잘린다 (실제 ${bad.loss})`);
+    assert(bad.gain > 0, "위쪽 목표는 청산과 무관하므로 이익은 그대로 나온다");
+    // 청산 안 나는 구간은 자르지 않는다.
+    assert(x3.loss < 0 && x3.loss > -1_000_000, `2배 미만 손실은 그대로 (${x3.loss})`);
+  });
+
   test("지표 조립 — 캔들 부족하면 null", () => {
     const c = candlesFromCloses([1, 2, 3], { spread: 0 });
     eq(buildEarlyMetrics(c, [], null, { change24h: 0, quoteVolume: 1e7 }, CONFIG), null);

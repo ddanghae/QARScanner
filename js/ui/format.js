@@ -45,18 +45,39 @@ export function fmtWon(x) {
 }
 
 // 시드머니를 이 종목에 넣었을 때의 손익 금액.
-// 손절/목표는 가격이므로 거리를 비율로 바꿔 시드에 곱한다 — 레버리지 없음(현물 1배 기준).
-// 왕복 수수료+슬리피지를 양쪽에서 뺀다(백테스트와 같은 0.2%). 빼지 않으면 둘 다 과대평가된다.
-export function planMoney(plan, seed, roundTripPct) {
+// 손절/목표는 가격이므로 거리를 비율로 바꿔 포지션 크기(시드 × 레버리지)에 곱한다.
+// 왕복 수수료+슬리피지도 명목가 기준이라 같이 배가 된다(백테스트와 같은 0.2%).
+//
+// 레버리지가 1 을 넘으면 청산이 생긴다. 배수만 곱하고 끝내면 "손절 -38%, 3배면 -114만원"
+// 같은 도달 불가능한 숫자를 보여주게 된다 — 그 전에 증거금이 사라져 강제 청산된다.
+// liquidated 로 그 경우를 알린다. 배수를 곱하는 것보다 이 판정이 더 중요하다.
+export function planMoney(plan, seed, roundTripPct, leverage = 1, mmrPct = 0.5) {
   if (!plan?.valid || !(seed > 0)) return null;
-  const cost = seed * (roundTripPct / 100);
-  const lossPct = (plan.entry - plan.invalidation) / plan.entry;
-  const gainPct = (plan.tp2 - plan.entry) / plan.entry;
+  const lev = Math.max(1, Number(leverage) || 1);
+  const notional = seed * lev;
+  const cost = notional * (roundTripPct / 100);
+  const lossPct = Math.abs((plan.entry - plan.invalidation) / plan.entry) * 100;
+  const gainPct = Math.abs((plan.tp2 - plan.entry) / plan.entry) * 100;
+
+  // 증거금이 유지증거금까지 줄어드는 가격 하락폭. 1배면 청산 없음(가격이 0 이 돼야 함).
+  const liqDropPct = lev > 1 ? 100 / lev - mmrPct : 100;
+  const liquidated = lossPct >= liqDropPct;
+
+  // 격리 마진에서는 증거금보다 더 잃을 수 없다. 배수를 그대로 곱하면 청산 구간에서
+  // 도달 불가능한 손실(예: 100만원 넣고 -114만원)이 나온다 — 시드에서 자른다.
+  const rawLoss = -(notional * lossPct / 100 + cost);
+  const loss = Math.max(rawLoss, -seed);
+
   return {
-    loss: -(seed * Math.abs(lossPct) + cost),   // 손절 맞았을 때
-    gain: seed * Math.abs(gainPct) - cost,      // 주 목표(tp2) 도달했을 때
-    lossPct: Math.abs(lossPct) * 100,
-    gainPct: Math.abs(gainPct) * 100,
+    leverage: lev,
+    notional,
+    loss,                                       // 손절(또는 청산) 맞았을 때
+    gain: notional * gainPct / 100 - cost,      // 주 목표(tp2) 도달했을 때 — 위쪽은 청산과 무관
+    lossPct, gainPct,
+    liqDropPct,
+    liqPrice: lev > 1 ? plan.entry * (1 - liqDropPct / 100) : null,
+    liquidated,                                  // 손절선이 청산가보다 아래 = 청산이 먼저
+    maxSafeLeverage: Math.max(1, Math.floor(100 / (lossPct + mmrPct))),
   };
 }
 

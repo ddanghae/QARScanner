@@ -164,6 +164,9 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .result-table tbody tr:last-child td { border-bottom: none; }
 .result-table .sym { font-weight: 600; white-space: nowrap; }
 .up { color: var(--up); } .down { color: var(--down); }
+/* 청산 경고 — 금액 대신 나오는 자리라 눈에 걸려야 한다 */
+.warn { color: var(--warn); border-left: 3px solid var(--warn); padding: 8px 10px; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.warn-inline { color: var(--warn); }
 
 /* 점수/등급 pill */
 .score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 3px 8px; border-radius: 8px; font-weight: 700; color: #fff; }

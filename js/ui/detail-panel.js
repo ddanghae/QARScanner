@@ -12,15 +12,31 @@ let panelEl = null;
 // 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
 function moneySection(p) {
-  const seed = state.settings.seedMoney;
-  const m = planMoney(p, seed, CONFIG.tradeCostRoundTripPct);
+  const s = state.settings;
+  const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage, CONFIG.maintenanceMarginPct);
   if (!m) return `<p class="muted">시드머니를 입력하면 손익 금액이 표시됩니다.</p>`;
+  const levRow = m.leverage > 1
+    ? `<tr><td>레버리지</td><td>${m.leverage}배 <small>(포지션 ${fmtWon(m.notional)})</small></td></tr>
+       <tr><td>추정 청산가</td><td class="down">${fmtPrice(m.liqPrice)} <small>(-${m.liqDropPct.toFixed(1)}%)</small></td></tr>`
+    : `<tr><td>레버리지</td><td>1배 <small>(청산 없음)</small></td></tr>`;
+  // 청산이 손절보다 먼저 와도 금액은 그대로 보여준다. 다만 그 손실은 손절가에서 나온 게
+  // 아니라 증거금 전액 소멸이라 라벨과 경고로 구분한다.
+  const lossRow = m.liquidated
+    ? `<tr><td>청산되면</td><td class="down">${fmtWon(m.loss)} <small>(증거금 전액 · -${m.liqDropPct.toFixed(1)}% 에서)</small></td></tr>`
+    : `<tr><td>손절 맞으면</td><td class="down">${fmtWon(m.loss)} <small>(-${m.lossPct.toFixed(1)}%)</small></td></tr>`;
+  const warn = m.liquidated
+    ? `<p class="warn"><b>이 배수로는 손절에 닿기 전에 청산됩니다.</b> 손절이 -${m.lossPct.toFixed(1)}% 인데
+       ${m.leverage}배의 청산선은 -${m.liqDropPct.toFixed(1)}% 입니다. 위 손실은 손절가가 아니라 증거금 전액이며,
+       계획대로 가려면 ${m.maxSafeLeverage}배 이하로 낮추세요.</p>`
+    : "";
   return `<table class="plan-table money-table">
-    <tr><td>넣는 금액</td><td>${fmtWon(seed)}</td></tr>
-    <tr><td>손절 맞으면</td><td class="down">${fmtWon(m.loss)} <small>(-${m.lossPct.toFixed(1)}%)</small></td></tr>
+    <tr><td>넣는 금액</td><td>${fmtWon(s.seedMoney)}</td></tr>
+    ${levRow}
+    ${lossRow}
     <tr><td>목표(TP2) 도달하면</td><td class="up">+${fmtWon(m.gain)} <small>(+${m.gainPct.toFixed(1)}%)</small></td></tr>
   </table>
-  <p class="muted">레버리지 없음(1배) · 왕복 비용 ${CONFIG.tradeCostRoundTripPct}% 반영 · 도달 보장 아님</p>`;
+  ${warn}
+  <p class="muted">왕복 비용 ${CONFIG.tradeCostRoundTripPct}% 반영 · 도달 보장 아님${m.leverage > 1 ? ` · 청산가는 유지증거금 ${CONFIG.maintenanceMarginPct}% 가정의 근사치` : ""}</p>`;
 }
 
 export function initDetailPanel() {

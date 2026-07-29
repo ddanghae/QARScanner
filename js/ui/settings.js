@@ -92,6 +92,17 @@ export function initSettingsUI() {
     emit("filters:apply");
   });
 
+  // 레버리지 — 선택지는 config 가 갖는다. 표시 전용이라 재스캔 없이 즉시 다시 그린다.
+  const lev = document.getElementById("filter-leverage");
+  if (lev) {
+    lev.innerHTML = CONFIG.leverageOptions
+      .map((x) => `<option value="${x}">${x}배${x === 1 ? " (현물)" : ""}</option>`).join("");
+    lev.addEventListener("change", () => {
+      updateSettings({ leverage: Number(lev.value) || 1 });
+      emit("filters:apply");
+    });
+  }
+
   const applyBtn = document.getElementById("filter-apply");
   if (applyBtn) applyBtn.addEventListener("click", () => emit("filters:apply"));
 
@@ -178,6 +189,7 @@ export function syncControls() {
   for (const id of REALTIME_IDS) setChk(id, s.includeRealtimeCandle);
   setVal("filter-minvolume", s.minQuoteVolume);
   setVal("filter-seed", s.seedMoney);
+  setVal("filter-leverage", s.leverage);
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));

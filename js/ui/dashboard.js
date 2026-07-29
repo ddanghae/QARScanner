@@ -129,10 +129,19 @@ function oddsCell(r) {
 // 시드머니를 이 종목에 넣었을 때 손절 시 잃는 돈 / 목표 도달 시 버는 돈.
 // 계획대로 지켰을 때의 산수일 뿐이다 — 확률도 보장도 아니라서 옆의 급등확률과 같이 읽어야 한다.
 function moneyCell(r) {
-  const m = planMoney(r.plan, state.settings.seedMoney, CONFIG.tradeCostRoundTripPct);
+  const s = state.settings;
+  const m = planMoney(r.plan, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage, CONFIG.maintenanceMarginPct);
   if (!m) return `<span class="muted">시드머니 입력</span>`;
-  return `<span class="money" title="손절 -${m.lossPct.toFixed(1)}% · 목표 +${m.gainPct.toFixed(1)}% · 왕복비용 ${CONFIG.tradeCostRoundTripPct}% 반영">`
-    + `<span class="down">${fmtWon(m.loss)}</span> / <span class="up">+${fmtWon(m.gain)}</span></span>`;
+  // 청산이 손절보다 먼저 와도 금액은 보여준다 — 다만 그 금액은 증거금 전액이고,
+  // 손절가에 닿기 전에 끝난다는 사실을 라벨로 붙인다.
+  const tail = m.liquidated
+    ? ` <b class="warn-inline">청산</b> <span class="muted">(${m.leverage}배 · 최대 ${m.maxSafeLeverage}배)</span>`
+    : m.leverage > 1 ? ` <span class="muted">${m.leverage}배</span>` : "";
+  const title = m.liquidated
+    ? `${m.leverage}배 청산선 -${m.liqDropPct.toFixed(1)}% 가 손절 -${m.lossPct.toFixed(1)}% 보다 얕다 — 손절 전에 증거금 전액 소멸. ${m.maxSafeLeverage}배 이하 권장.`
+    : `손절 -${m.lossPct.toFixed(1)}% · 목표 +${m.gainPct.toFixed(1)}% · 왕복비용 ${CONFIG.tradeCostRoundTripPct}% 반영`;
+  return `<span class="money" title="${title}">`
+    + `<span class="down">${fmtWon(m.loss)}</span> / <span class="up">+${fmtWon(m.gain)}</span>${tail}</span>`;
 }
 
 function goldenCrossBadge(r) {

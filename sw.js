@@ -2,7 +2,7 @@
 // 앱 셸(정적 파일)만 캐시. Binance API 응답은 절대 캐시하지 않음(데이터 최신성).
 // 캐시 버전을 명확히 관리 → 최신 코드 미반영 문제 방지.
 
-const CACHE_VERSION = "qar-ict-v5";
+const CACHE_VERSION = "qar-ict-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -60,8 +60,12 @@ self.addEventListener("fetch", (e) => {
   if (url.origin !== self.location.origin) return;
 
   // 앱 셸: 네트워크 우선 → 실패 시 캐시 (최신 코드 우선, 오프라인 폴백)
+  // cache:"reload" 가 없으면 이 fetch 자체가 브라우저 HTTP 캐시에서 나온다. 그러면
+  // index.html 만 새로 받고 js/*.js 는 옛것이 섞여(새 컨트롤은 보이는데 새 표시는 안 나옴)
+  // "네트워크 우선" 이 이름뿐이 된다. reload 는 항상 서버에 물어보고(변경 없으면 304)
+  // HTTP 캐시까지 갱신해 다음 로드도 최신이 된다.
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "reload" })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE_VERSION).then((c) => c.put(e.request, copy)).catch(() => {});

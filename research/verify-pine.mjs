@@ -22,7 +22,7 @@ const PAIRS = [
   ["E_FRESH_FULL", e.freshFullDays], ["E_FRESH_ZERO", e.freshZeroDays],
   ["E_MIN_QUOTE_VOL", e.minQuoteVolume], ["E_PUMPED_MAX", e.pumpedMaxPct],
   ["E_BREAK_REL_VOL", e.breakoutRelVol], ["E_BREAK_MAX_RUN", e.breakoutMaxRunPct],
-  ["E_STOP_ATR", e.stopAtr], ["E_TARGET_R", e.targetR],
+  ["E_STOP_ATR", e.stopAtr], ["E_TARGET_R", e.targetR], ["E_PARTIAL_R", e.partialAtR],
   ["E_MIN_SCORE", CONFIG.earlyMinScore],
   ["EW_MOM", w.momentum], ["EW_CHG", w.change24h], ["EW_FRESH", w.freshness],
   ["EP_THIN", CONFIG.earlyPenalties.thinLiquidity],

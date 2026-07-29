@@ -51,7 +51,9 @@ export function fmtWon(x) {
 // 레버리지가 1 을 넘으면 청산이 생긴다. 배수만 곱하고 끝내면 "손절 -38%, 3배면 -114만원"
 // 같은 도달 불가능한 숫자를 보여주게 된다 — 그 전에 증거금이 사라져 강제 청산된다.
 // liquidated 로 그 경우를 알린다. 배수를 곱하는 것보다 이 판정이 더 중요하다.
-export function planMoney(plan, seed, roundTripPct, leverage = 1, mmrPct = 0.5) {
+// fracOverride: 부분 익절 비중을 화면에서 바꿀 수 있게 한다(0 = 목표까지 통째로 버팀).
+// 계획 자체는 안 건드린다 — 재스캔 없이 두 방식을 나란히 비교하려면 표시 단계에서 갈라야 한다.
+export function planMoney(plan, seed, roundTripPct, leverage = 1, mmrPct = 0.5, fracOverride) {
   if (!plan?.valid || !(seed > 0)) return null;
   const lev = Math.max(1, Number(leverage) || 1);
   const notional = seed * lev;
@@ -68,11 +70,25 @@ export function planMoney(plan, seed, roundTripPct, leverage = 1, mmrPct = 0.5) 
   const rawLoss = -(notional * lossPct / 100 + cost);
   const loss = Math.max(rawLoss, -seed);
 
+  // 부분 익절 전제(config.earlyDetect 주석의 MFE 측정). 결과가 셋으로 갈린다.
+  //   손절   TP1 에 닿기 전에 손절 — 위 loss
+  //   절반   TP1 에서 일부 빼고 손절을 본전으로 → 나머지는 0 으로 끝남
+  //   끝까지 TP1 일부 + 나머지가 TP2 까지
+  // ponytail: 비용은 왕복 1회분만 뺀다. 실제로는 분할 청산이라 1.5배쯤이지만
+  // 백테스트도 같은 가정이라 두 숫자를 나란히 읽을 수 있게 맞춘다.
+  const frac = fracOverride ?? plan.partialFrac ?? 0.5;
+  const atR = plan.partialAtR ?? 1;
+  const partialPct = frac * atR * lossPct;                 // 절반만 먹고 본전으로 끝났을 때
+  const fullPct = partialPct + (1 - frac) * gainPct;       // 나머지까지 목표에 닿았을 때
+
   return {
     leverage: lev,
     notional,
     loss,                                       // 손절(또는 청산) 맞았을 때
-    gain: notional * gainPct / 100 - cost,      // 주 목표(tp2) 도달했을 때 — 위쪽은 청산과 무관
+    partial: notional * partialPct / 100 - cost,
+    gain: notional * fullPct / 100 - cost,      // 위쪽은 청산과 무관하다
+    partialPct, fullPct,
+    partialFrac: frac, partialAtR: atR,
     lossPct, gainPct,
     liqDropPct,
     liqPrice: lev > 1 ? plan.entry * (1 - liqDropPct / 100) : null,

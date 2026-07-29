@@ -183,21 +183,25 @@ export function earlyPlan(m, atrVal, price, cfg) {
   if (!(stop < entry)) stop = entry * (1 - 1e-3);
 
   const risk = entry - stop;
-  // 측정된 건 tp2(= targetR) 하나뿐이다. tp1/tp3 은 그 주변 분할 참고선이다.
-  const tp1 = entry + risk * (targetR / 2);
+  const partialAtR = cfg?.earlyDetect?.partialAtR ?? 1;
+  const partialFrac = cfg?.earlyDetect?.partialFrac ?? 0.5;
+  // tp1 은 "여기서 일부 빼고 손절을 본전으로 올리는 지점" 이다 — 측정으로 정한 값(config 주석).
+  // tp2 는 나머지의 목표. tp3 은 그 위 참고선(측정 안 됨).
+  const tp1 = entry + risk * partialAtR;
   const tp2 = entry + risk * targetR;
   const tp3 = entry + risk * targetR * 1.5;
   const rr = (tp2 - entry) / risk;
   return {
     entry, stop, tp1, tp2, tp3,
     invalidation: stop,
+    partialAtR, partialFrac,
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && entry > stop,
-    // 채점 모델과 무관한 실측이라 병렬 갈래(origin/main)의 측정 결과를 그대로 가져왔다.
-    // 목표가만 보고 끝까지 들고 가지 않도록 화면에 같이 내보낸다.
+    // 되돌림 실측은 채점 모델과 무관해 병렬 갈래(origin/main)의 결과를 그대로 가져왔다.
+    // 파는 방식(부분 익절 여부)은 사용자가 고르므로 여기서 단정하지 않는다 — 상세 패널이 설명한다.
     note: "급등 141건 추적 결과 고점 이후 중앙 82% 를 반납했고(31%는 전량 반납) " +
-          "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다. 분할 익절 전제로 보세요.",
+          "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다.",
   };
 }
 

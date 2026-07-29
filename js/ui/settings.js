@@ -103,6 +103,13 @@ export function initSettingsUI() {
     });
   }
 
+  // 파는 방식 — 계획은 그대로 두고 표시만 갈린다. 재스캔 없이 즉시 다시 그린다.
+  const partial = document.getElementById("filter-partial");
+  if (partial) partial.addEventListener("change", () => {
+    updateSettings({ partialTake: partial.value === "1" });
+    emit("filters:apply");
+  });
+
   const applyBtn = document.getElementById("filter-apply");
   if (applyBtn) applyBtn.addEventListener("click", () => emit("filters:apply"));
 
@@ -190,6 +197,7 @@ export function syncControls() {
   setVal("filter-minvolume", s.minQuoteVolume);
   setVal("filter-seed", s.seedMoney);
   setVal("filter-leverage", s.leverage);
+  setVal("filter-partial", s.partialTake ? "1" : "0");
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));

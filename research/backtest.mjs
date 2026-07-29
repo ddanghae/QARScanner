@@ -22,6 +22,8 @@ const EVAL_EVERY = 6;        // evaluate once per day (4h bars)
 // 청산 규칙은 config 를 따른다 — 여기서 굳혀두면 "배포된 규칙을 테스트한다" 는 전제가 깨진다.
 const TARGET_R = CONFIG.earlyDetect.targetR;
 const TIME_STOP_BARS = CONFIG.earlyDetect.holdBars;
+const PARTIAL_R = CONFIG.earlyDetect.partialAtR;
+const FRAC = CONFIG.earlyDetect.partialFrac;
 const NOW = Date.now();
 
 const args = process.argv.slice(2);
@@ -96,21 +98,28 @@ for (const sym of symbols) {
     const fill = c[i + 1].open;
     const risk = fill - (r.plan.stop / r.plan.entry) * fill;   // scale plan to the fill price
     if (!(risk > 0)) continue;
-    const stop = fill - risk;
+    // 부분 익절 전제 — PARTIAL_R 에서 FRAC 만큼 빼고 손절을 본전으로 올린다.
+    // 나머지가 TARGET_R 을 노린다. research/mfe.mjs 의 (b) 와 같은 계산이다.
     const target = fill + risk * TARGET_R;
-
-    let exitBar = -1, exitPx = null, why = "time";
+    const R = (px) => ((px - fill) / fill - (FEE + SLIP) * 2) / (risk / fill);
+    let stop = fill - risk, taken = false;
+    let exitBar = -1, rMult = null, why = "time";
     for (let k = i + 1; k < Math.min(c.length, i + 1 + TIME_STOP_BARS); k++) {
-      if (c[k].low <= stop) { exitBar = k; exitPx = stop; why = "stop"; break; }   // stop first if both
-      if (c[k].high >= target) { exitBar = k; exitPx = target; why = "target"; break; }
+      if (c[k].low <= stop) {                                    // stop first if both
+        rMult = (taken ? FRAC * PARTIAL_R : 0) + (taken ? 1 - FRAC : 1) * R(stop);
+        exitBar = k; why = taken ? "본전" : "stop"; break;
+      }
+      if (!taken && c[k].high >= fill + risk * PARTIAL_R) { taken = true; stop = fill; }
+      if (taken && c[k].high >= target) {
+        rMult = FRAC * PARTIAL_R + (1 - FRAC) * R(target);
+        exitBar = k; why = "target"; break;
+      }
     }
     if (exitBar < 0) {
       exitBar = Math.min(c.length - 1, i + TIME_STOP_BARS);
-      exitPx = c[exitBar].close;
+      const base = R(c[exitBar].close);
+      rMult = (taken ? FRAC * PARTIAL_R : 0) + (taken ? 1 - FRAC : 1) * base;
     }
-    const gross = (exitPx - fill) / fill;
-    const cost = (FEE + SLIP) * 2;
-    const rMult = (gross - cost) / (risk / fill);
     trades.push({ sym, score: r.score, stage: r.stage.stage, why, rMult,
       bars: exitBar - i, entryTime: new Date(c[i + 1].time).toISOString().slice(0, 10) });
     cooldownUntil = exitBar;
@@ -132,12 +141,13 @@ function stats(list, label) {
     `${label.padEnd(18)} n=${String(n).padStart(4)}  승률=${(wins.length / n * 100).toFixed(0).padStart(3)}%  ` +
     `평균=${totalR / n >= 0 ? " " : ""}${(totalR / n).toFixed(3)}R  합계=${totalR.toFixed(1).padStart(7)}R  ` +
     `PF=${gl > 0 ? (gp / gl).toFixed(2) : "inf"}  MDD=${dd.toFixed(1)}R  ` +
-    `[목표 ${byWhy("target")} / 손절 ${byWhy("stop")} / 시간 ${byWhy("time")}]`
+    `[목표 ${byWhy("target")} / 본전 ${byWhy("본전")} / 손절 ${byWhy("stop")} / 시간 ${byWhy("time")}]`
   );
 }
 
 console.log(`\n평가 시점 ${evaluated}회 → 신호 ${signals}건 → 거래 ${trades.length}건`);
-console.log(`비용: 왕복 ${((FEE + SLIP) * 2 * 100).toFixed(2)}%  |  손절 ATR×${CONFIG.earlyDetect.stopAtr}  |  목표 ${TARGET_R}R  |  시간청산 ${TIME_STOP_BARS}봉\n`);
+console.log(`비용: 왕복 ${((FEE + SLIP) * 2 * 100).toFixed(2)}%  |  손절 ATR×${CONFIG.earlyDetect.stopAtr}  |  ` +
+  `${PARTIAL_R}R 에서 ${FRAC * 100}% 익절 + 본전 이동  |  목표 ${TARGET_R}R  |  시간청산 ${TIME_STOP_BARS}봉\n`);
 stats(trades, "전체");
 trades.sort((a, b) => a.score - b.score);
 for (const [lo, hi] of [[25, 40], [40, 55], [55, 70], [70, 101]]) {

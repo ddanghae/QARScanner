@@ -13,7 +13,9 @@ let panelEl = null;
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
 function moneySection(p) {
   const s = state.settings;
-  const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage, CONFIG.maintenanceMarginPct);
+  const on = s.partialTake !== false;
+  const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
+    CONFIG.maintenanceMarginPct, on ? undefined : 0);
   if (!m) return `<p class="muted">시드머니를 입력하면 손익 금액이 표시됩니다.</p>`;
   const levRow = m.leverage > 1
     ? `<tr><td>레버리지</td><td>${m.leverage}배 <small>(포지션 ${fmtWon(m.notional)})</small></td></tr>
@@ -29,14 +31,25 @@ function moneySection(p) {
        ${m.leverage}배의 청산선은 -${m.liqDropPct.toFixed(1)}% 입니다. 위 손실은 손절가가 아니라 증거금 전액이며,
        계획대로 가려면 ${m.maxSafeLeverage}배 이하로 낮추세요.</p>`
     : "";
+  const pct = Math.round((p.partialFrac ?? 0.5) * 100);
+  const midRow = on
+    ? `<tr><td>TP1 에서 ${pct}% 빼고 본전에 걸리면</td><td class="up">+${fmtWon(m.partial)} <small>(+${m.partialPct.toFixed(1)}%)</small></td></tr>`
+    : "";
+  const how = on
+    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올리는 전제입니다 —
+       평균 수익은 낮지만 아픈 구간이 절반이고 승률이 37% → 49% 입니다.`
+    : `목표까지 통째로 버티는 전제입니다 — 평균 수익이 더 높은 대신 아픈 구간이 2배이고
+       10번 중 3.7번만 이깁니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
   return `<table class="plan-table money-table">
     <tr><td>넣는 금액</td><td>${fmtWon(s.seedMoney)}</td></tr>
     ${levRow}
     ${lossRow}
-    <tr><td>목표(TP2) 도달하면</td><td class="up">+${fmtWon(m.gain)} <small>(+${m.gainPct.toFixed(1)}%)</small></td></tr>
+    ${midRow}
+    <tr><td>${on ? "나머지도 TP2 까지 가면" : "TP2 까지 가면"}</td><td class="up">+${fmtWon(m.gain)} <small>(+${m.fullPct.toFixed(1)}%)</small></td></tr>
   </table>
   ${warn}
-  <p class="muted">왕복 비용 ${CONFIG.tradeCostRoundTripPct}% 반영 · 도달 보장 아님${m.leverage > 1 ? ` · 청산가는 유지증거금 ${CONFIG.maintenanceMarginPct}% 가정의 근사치` : ""}</p>`;
+  <p class="muted">${how}
+  왕복 비용 ${CONFIG.tradeCostRoundTripPct}% 반영 · 도달 보장 아님${m.leverage > 1 ? ` · 청산가는 유지증거금 ${CONFIG.maintenanceMarginPct}% 가정의 근사치` : ""}</p>`;
 }
 
 export function initDetailPanel() {
@@ -104,7 +117,7 @@ function renderDetail(r) {
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>
         <tr><td>무효화(손절)</td><td>${fmtPrice(p.invalidation)}</td></tr>
-        <tr><td>TP1 (${r.direction === "short" ? "내부 저점" : "내부 고점"})</td><td>${fmtPrice(p.tp1)}</td></tr>
+        <tr><td>TP1 ${p.partialFrac ? `(${Math.round(p.partialFrac * 100)}% 익절 · 손절을 본전으로)` : (r.direction === "short" ? "(내부 저점)" : "(내부 고점)")}</td><td>${fmtPrice(p.tp1)}</td></tr>
         <tr><td>TP2 (${r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
         <tr><td>TP3 (${r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>

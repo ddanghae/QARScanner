@@ -138,6 +138,7 @@ E_PUMPED_MAX = 40.0     // 24h 이 % 초과 = 이미 급등, 제외
 E_MIN_SCORE = 40.0      // early 표시 하한 (config.earlyMinScore) — reversal 의 강도 문턱과 별개
 E_STOP_ATR = 4.0        // 손절 = 진입 - ATR × 이 배수 (격자 탐색 결과, 박스 기준 폐기)
 E_TARGET_R = 4.0        // 주 목표(tp2) = 리스크 × 이 배수
+E_PARTIAL_R = 1.0       // 이 배수에서 일부 익절 + 손절을 본전으로 (MFE 측정, config 주석 참고)
 
 EW_MOM = 45.0           // |14일 수익률| (U자 — 크게 오르거나 크게 빠진 쪽)
 EW_CHG = 32.0           // |24시간 변동|
@@ -810,7 +811,7 @@ eSpan = math.max(eBoxHigh - eBoxLow, 0.000000001)
 eEntry = ePrice
 eStop = nz(eAtr4) > 0 ? eEntry - eAtr4 * E_STOP_ATR : math.min(eBoxLow, eEntry) - eEntry * 0.001
 eRisk = math.max(eEntry - eStop, 0.000000001)
-eTp1 = eEntry + eRisk * (E_TARGET_R / 2.0)
+eTp1 = eEntry + eRisk * E_PARTIAL_R
 eTp2 = eEntry + eRisk * E_TARGET_R
 eRR = (eTp2 - eEntry) / eRisk
 

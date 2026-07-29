@@ -349,14 +349,28 @@ export function run() {
   });
 
   // 화면에 원 단위 금액이 뜨므로 산수가 틀리면 사용자가 바로 손해를 오해한다.
+  // 부분 익절 전제라 결과가 셋이다 — 손절 / 절반만 먹고 본전 / 끝까지.
   test("손익 금액 — 시드에 비례하고 왕복 비용이 양쪽에서 빠진다", () => {
-    const plan = { entry: 100, invalidation: 90, tp2: 140, valid: true };  // 리스크 10, 목표 4R
+    // 리스크 10(=1R), 목표 4R, TP1 1R 에서 절반 익절
+    const plan = { entry: 100, invalidation: 90, tp2: 140, valid: true, partialAtR: 1, partialFrac: 0.5 };
     const cost = CONFIG.tradeCostRoundTripPct;
+    const fee = 1_000_000 * cost / 100;
     const m = planMoney(plan, 1_000_000, cost);
     eq(m.lossPct, 10, "손절 거리 10%");
     eq(m.gainPct, 40, "목표 거리 40%");
-    eq(m.loss, -(100_000 + 1_000_000 * cost / 100), "손절 금액 = 거리 + 비용");
-    eq(m.gain, 400_000 - 1_000_000 * cost / 100, "목표 금액 = 거리 - 비용");
+    eq(m.loss, -(100_000 + fee), "손절 금액 = 거리 + 비용");
+    eq(m.partialPct, 5, "절반 × 1R = 5%");
+    eq(m.partial, 50_000 - fee, "절반만 먹고 본전이면 0.5R");
+    eq(m.fullPct, 25, "절반 1R + 절반 4R = 2.5R = 25%");
+    eq(m.gain, 250_000 - fee, "끝까지 가면 2.5R");
+    assert(m.gain > m.partial && m.partial > 0, "끝까지 > 절반 > 0");
+
+    // "파는 방식" 을 끄면(비중 0) 부분 익절 이전 규칙 그대로여야 한다 — 두 방식을 나란히 비교하는 근거.
+    const off = planMoney(plan, 1_000_000, cost, 1, CONFIG.maintenanceMarginPct, 0);
+    eq(off.partialPct, 0, "절반 익절 없음");
+    eq(off.fullPct, off.gainPct, "끝까지 = 목표 거리 그대로");
+    eq(off.gain, 400_000 - fee, "목표까지 통째로 버티면 4R");
+    eq(off.loss, m.loss, "손절 금액은 방식과 무관");
     // 시드를 바꾸면 금액도 같은 배수로 바뀐다 — 컨트롤이 실제로 먹히는지 고정.
     const dbl = planMoney(plan, 2_000_000, cost);
     assert(Math.abs(dbl.gain - m.gain * 2) < 1e-9 && Math.abs(dbl.loss - m.loss * 2) < 1e-9,

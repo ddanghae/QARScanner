@@ -27,6 +27,9 @@ const defaultSettings = {
   filterNoise: true,            // 노이즈(촙 구간·저거래량) 신호 제외
   seedMoney: 1000000,           // 한 종목에 넣을 금액(원). 손익 금액 표시에만 쓰인다 — 주문 없음
   leverage: 1,                  // 표시용 배수. 1 = 현물/1배 (청산 없음)
+  // true = TP1 에서 절반 익절 + 손절을 본전으로(덜 벌고 덜 아픔),
+  // false = 목표까지 통째로 버팀(더 벌고 더 아픔). 근거는 config.earlyDetect 주석.
+  partialTake: true,
   autoRefresh: false,           // 자동 재스캔
   refreshIntervalMs: CONFIG.refresh.intervalMs,
 };

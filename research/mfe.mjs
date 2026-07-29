@@ -87,7 +87,10 @@ function runExits(c, i, fill, risk) {
   for (const key of ["a", "b", "c", "d"]) {
     if (out[key]) continue;
     const base = R(lastPx);
-    out[key] = { r: key === "b" ? 0.5 * 1 + 0.5 * base : base, why: "time", bars: lastIdx - i };
+    // (b) 는 절반을 실제로 뺐을 때만 +0.5R 을 인정한다. halfTaken 을 안 보고 무조건 더하면
+    // 시간 만료 거래 전부에 공짜 이익이 붙어 (b) 가 실제보다 훨씬 좋아 보인다(측정 오류였음).
+    const r = key === "b" && halfTaken ? 0.5 * 1 + 0.5 * base : base;
+    out[key] = { r, why: "time", bars: lastIdx - i };
   }
   return { mfe, mae, ...out };
 }

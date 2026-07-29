@@ -194,6 +194,10 @@ export function earlyPlan(m, atrVal, price, cfg) {
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && entry > stop,
+    // 채점 모델과 무관한 실측이라 병렬 갈래(origin/main)의 측정 결과를 그대로 가져왔다.
+    // 목표가만 보고 끝까지 들고 가지 않도록 화면에 같이 내보낸다.
+    note: "급등 141건 추적 결과 고점 이후 중앙 82% 를 반납했고(31%는 전량 반납) " +
+          "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다. 분할 익절 전제로 보세요.",
   };
 }
 

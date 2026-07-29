@@ -110,6 +110,7 @@ function renderDetail(r) {
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
       </table>
       ${moneySection(p)}
+      ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
     </section>
 
     ${tfSection(r)}

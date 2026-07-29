@@ -237,6 +237,7 @@ html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
 .plan-table td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
 .plan-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .plan-table .rr td { font-weight: 700; color: var(--accent); }
+.plan-note { margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .tf-table th, .tf-table td { padding: 7px 5px; border-bottom: 1px solid var(--border); text-align: center; font-variant-numeric: tabular-nums; }
 .tf-table th { color: var(--muted); font-size: 11px; }
 .cvd-up { color: var(--up); } .cvd-down { color: var(--down); } .cvd-flat { color: var(--muted); }

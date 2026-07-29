@@ -391,13 +391,92 @@
     긴 구간으로는 공정 비교가 불가능하다. 국면이 바뀌면 다시 볼 것:
     `MAIN_WT=<워크트리> node research/compare-models.mjs oi`
 
+14. **청산 진단 · 파는 방식 선택 · 기록장 · 상관 배지 (2026-07-29)** — 12번 이후
+    "수익을 더 내려면 뭐가 필요한가" 를 실측으로 좁혔다.
+
+    ### 14-1. MFE 진단 — 그리고 측정 오류 정정
+
+    12번 백테스트 결말이 목표 124 / 손절 412 / **시간 만료 693** 이었다. 절반 이상이
+    아무것도 안 되고 끝난다. `research/mfe.mjs` 로 그 거래들이 최고 어디까지 갔었는지 쟀다.
+
+    | 결말 | MFE 중앙 | 1R+ | 4R+ |
+    |---|---|---|---|
+    | 전체 (n=1190) | 0.73R | 41% | 10% |
+    | 목표 도달 | 4.45R | 100% | 100% |
+    | 손절 | 0.35R | 22% | 0% |
+    | **시간 만료 (n=667)** | 0.79R | **41%** | **0%** |
+
+    시간 만료 거래의 41% 가 +1R 을 찍고 되돌아왔다. 4R 도달은 0%.
+
+    **⚠ 첫 측정은 틀렸다.** 시간 만료 처리에서 `halfTaken` 을 확인하지 않고 부분 익절
+    이익 +0.5R 을 무조건 얹어, (b) 가 +0.290R 로 나왔다. 시간 만료가 667건이라 그
+    공짜 이익이 측정된 우위의 거의 전부였다. 배포 코드로 재현한 `backtest.mjs` 가
+    +0.094R 로 나와 어긋나면서 드러났다. **연구 스크립트 결과는 배포 코드 재현치와
+    맞는지 반드시 대조할 것.**
+
+    수정 후 (같은 거래에 청산만 교체):
+
+    | 방식 | 평균 | 승률 | PF | MDD |
+    |---|---|---|---|---|
+    | (a) 4R 고정 | **+0.146R** | 37% | 1.32 | -37.6R |
+    | (b) 1R 절반+본전이동 | +0.089R | **49%** | 1.24 | **-19.5R** |
+    | (c) 2R 후 1R 트레일 | +0.055R | 40% | 1.13 | -30.4R |
+    | (d) 30봉 무반응 탈출 | +0.069R | 35% | 1.18 | -38.1R |
+
+    (c)·(d) 는 현행보다 나쁘다 — 트레일링과 조기 탈출은 후보에서 뺀다.
+    (a) 와 (b) 는 성격이 다르다. 낙폭 1R 당 수익은 (a) 0.0039 vs (b) 0.0046,
+    점수 70+ 구간은 (a) +0.240R/MDD -14.9R vs (b) +0.208R/MDD -6.7R.
+
+    **손절 폭은 지금이 맞다** — 이긴 거래가 역행한 깊이 중앙 0.34R · p90 0.78R.
+    0.78R 보다 좁히면 이기는 거래의 10% 이상을 손절로 잃는다.
+
+    ### 14-2. 파는 방식 선택
+
+    (a)/(b) 중 무엇이 맞는지는 감당 가능한 낙폭에 달렸다 → 고르게 했다.
+    필터 바 "파는 방식", 기본값 절반 먼저. `earlyDetect.partialAtR(1)` / `partialFrac(0.5)`.
+
+    계획(`earlyPlan`)은 안 건드리고 **표시 단계에서만 갈린다**(`planMoney` 의 `fracOverride`).
+    재스캔 없이 즉시 전환돼 두 방식을 나란히 비교할 수 있다.
+    - `tp1` 이 `targetR/2`(2R) → `partialAtR`(1R). 이제 "일부 빼고 손절을 본전으로 올리는 지점" 이다
+    - `.pine` 에 `E_PARTIAL_R` 추가, `verify-pine.mjs` 가 상수 20개 검증
+    - `backtest.mjs` 도 부분 익절을 시뮬레이션한다(결말에 "본전" 추가) — 청산도 config 를
+      따라야 "배포 규칙을 테스트한다" 는 전제가 유지된다
+    - `earlyPlan.note` 에서 "50% 를 빼는 전제" 문구를 뺐다. 사용자가 "끝까지" 를 고른
+      상태에서도 떠서 화면이 스스로 모순됐다
+
+    ### 14-3. 페이퍼 기록 (`js/ui/paper.js`)
+
+    백테스트는 과거고 이건 미래다. 결과 목록의 "기록" 버튼 → 그 시점의 계획과 시드·레버리지를
+    localStorage 에 박아둔다(나중에 설정을 바꿔도 과거 기록 금액은 안 흔들린다).
+    결말은 4시간봉 마감가로 판정, 같은 봉에서 손절·목표가 같이 닿으면 손절 우선,
+    진행 중인 봉은 제외. 같은 종목 중복 기록 차단. 실제 주문 없음.
+
+    **버그 하나** — `resolveTrade` 가 캔들 시각을 `c.time` 으로 읽었는데 `parseKlines` 는
+    `openTime`/`closeTime` 을 쓴다. 필터가 전부를 걸러내 모든 기록이 영원히 "진행 중" 이었다.
+    조용한 종류라 실제 앱 캔들 모양으로 테스트를 따로 넣었다.
+
+    ### 14-4. 후보 상관 배지 (`js/core/correlation.js`)
+
+    화면에 3개가 떠도 셋이 같이 움직이면 분산이 아니라 한 종목에 3배 실은 것이다.
+    4시간봉 42봉(7일) 수익률 피어슨 상관 ≥ 0.7 이면 배지. `k4h` 가 아직 손에 있는
+    스캔 파이프라인 안에서 계산해 **추가 API 호출이 없다**. 화면에 같이 떠 있는 후보만 알린다.
+    라이브: 후보 50건 중 8건에 상관 짝.
+
+    ### 안 한 것과 이유
+    - 트레일링·조기 탈출 — 재측정에서도 현행보다 나빴다
+    - 국면 필터(BTC 추세로 롱 신호 차단) — 후보로 남긴다. 최대 약점이 "한 국면만 봤음" 이라
+      효과가 클 수 있다
+    - 교집합 모델(13번) — 여전히 노출이 적어 보류
+
 ## 검증 상태
 
-- **테스트 110/110 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
-  goldenCross, noise, early, repaint, refresh 9개 스위트)
+- **테스트 118/118 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
+  goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트)
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
   - `node verify-port.mjs` — 배포 채점이 변형 D 와 같은지 (검증셋 상위3 = 10.71x)
-  - `node verify-pine.mjs` — .pine 상수 19개 + 등급 밴드 4개가 config 와 일치하는지
+  - `node verify-pine.mjs` — .pine 상수 20개 + 등급 밴드 4개가 config 와 일치하는지
+- **연구 스크립트는 배포 재현치와 대조할 것** — 14-1 에서 mfe.mjs 가 조용히 틀린 값을
+  냈고 `backtest.mjs` 와 어긋나면서 드러났다. 같은 규칙은 두 곳에서 같은 숫자가 나와야 한다.
 - **조기 포착 라이브 검증 (2026-07-29, 11~12번 후)** — 콘솔 에러 0.
   급등확률 컬럼 렌더, 시드 3배 → 금액 정확히 3배, 레버리지 1/2/3/10배 청산 판정,
   계획 계산이 ATR×4 · 1:4.00 인지 확인.
@@ -424,7 +503,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (110/110 나와야 정상)
+node tests/run.js          # 테스트 확인 (118/118 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -441,19 +520,22 @@ js/
   api/binance.js
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
          fvg.js order-block.js risk-reward.js scoring.js
-         golden-cross-retest.js noise-filter.js early-detect.js
+         golden-cross-retest.js noise-filter.js early-detect.js correlation.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
+       paper.js
 tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
   golden-cross.test.js noise.test.js early-detect.test.js
-  repaint.test.js refresh.test.js
+  repaint.test.js refresh.test.js paper-corr.test.js
 pine/  qar_scanner_sync_indicator.pine   (트레이딩뷰 동기화 지표. 모드 2 = early)
 docs/  펌프예측_연구정리.md               (11~12번의 원자료 정리 — 수치 출처)
        superpowers/{specs,plans}/…
 research/                               (재현 스크립트 + 원자료 CSV)
   sweep-exits.mjs    청산 규칙 격자 탐색 (--selftest 내장)
+  mfe.mjs            MFE/MAE 진단 + 청산 방식 4종 비교
+  compare-models.mjs 두 채점 모델 나란히 비교 (MAIN_WT 워크트리 필요)
   backtest.mjs       배포 규칙 워크포워드 (심볼 목록 또는 all)
   control.mjs        대조군 — 신호 없이 무조건 진입
   verify-port.mjs    배포 채점 = 변형 D 인지 assert
@@ -474,23 +556,28 @@ research/                               (재현 스크립트 + 원자료 CSV)
    압축·거래량고갈·OI 는 검증에서 살아남지 못해 채점과 1차 게이트에서 빠졌다.
    "TradingView 지표 early 포팅" 도 완료(11번).
 
-1. **early 청산 규칙 재측정** — `ATR×4 · 4R · 90봉` 은 한 국면(약 166일, 알트 강세 포함)
-   한 번의 측정값이다. 국면이 바뀌면 `research/sweep-exits.mjs` 를 다시 돌릴 것.
-   격자는 환경변수로 바꾼다. 최고점이 격자 끝단에 걸리면 밖을 다시 볼 것 — 1차에서
-   그랬고, 밖에 더 좋은 조합이 있었다.
+1. **국면 필터** — 최대 약점이 "알트 강세 한 국면(약 166일)만 봤음" 이다. BTC 가
+   200일선 아래일 때 롱 신호를 끄거나 점수를 깎는 방식. 측정도 쉽다 — 같은 백테스트를
+   BTC 강세/약세로 쪼개 보면 된다. 약세 구간이 마이너스면 그것만 꺼도 MDD 가 크게 준다.
 
-2. **reversal 모드는 아직 감값이다** — 11번의 재적합은 early 에만 했다. `scoreWeights`/
+2. **early 청산 규칙 재측정** — `ATR×4 · 4R · 90봉` 도 같은 한 국면의 값이다.
+   국면이 바뀌면 `research/sweep-exits.mjs` 를 다시 돌릴 것. 격자는 환경변수로 바꾼다.
+   최고점이 격자 끝단에 걸리면 밖을 다시 볼 것 — 1차에서 그랬고 밖에 더 좋은 조합이 있었다.
+
+3. **reversal 모드는 아직 감값이다** — 11번의 재적합은 early 에만 했다. `scoreWeights`/
    `penalties` 는 최초 설계값이고 밴드만 실측으로 맞춰뒀다(9번). 같은 방법(라벨 정의 →
    `predict-dump.mjs` 로 행 뽑기 → `refit.mjs` → `variants.mjs`)을 reversal 에 적용할 수 있다.
-3. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.
+4. **페이퍼 기록이 쌓이면 대조** — 14-3 의 기록장이 3개월쯤 모이면 백테스트 숫자와
+   실제 성적을 비교할 수 있다. 지금까지의 모든 수치는 과거 재생이고, 이건 앞으로의 실측이다.
+5. **실제 아이폰 Safari 테스트** — 이 개발 환경(에이전트)에선 실기기 테스트 불가.
    Safe Area·터치 44px·팝업 차단 대응 코드는 넣어뒀지만 실기기 검증 안 됨.
-4. **.pine 트레이딩뷰 컴파일 확인** — `verify-pine.mjs` 는 상수 일치만 본다.
+6. **.pine 트레이딩뷰 컴파일 확인** — `verify-pine.mjs` 는 상수 일치만 본다.
    문법 오류는 붙여봐야 안다.
-5. **WebSocket 실시간가 스트리밍** — 계획서 §5에 언급됐던 것. 지금은 REST 폴링만.
+7. **WebSocket 실시간가 스트리밍** — 계획서 §5에 언급됐던 것. 지금은 REST 폴링만.
    전체 재스캔 없이 최종가만 실시간 갱신하고 싶으면 이거 추가.
-6. **모바일 사이드바 드로어** — 지금은 900px 미만에서 사이드바가 CSS만으로
+8. **모바일 사이드바 드로어** — 지금은 900px 미만에서 사이드바가 CSS만으로
    가로 스크롤 탭 바로 바뀜(별도 JS 상태 없음). 진짜 슬라이드 드로어 원하면 추가 JS 필요.
-7. **톱바 검색창** — 레퍼런스 디자인엔 있었으나 의도적으로 뺌(기능 없는 장식 안 만듦).
+9. **톱바 검색창** — 레퍼런스 디자인엔 있었으나 의도적으로 뺌(기능 없는 장식 안 만듦).
    심볼 빠른 검색/필터 기능으로 실제 구현하고 싶으면 요청.
 
 ## 지켜야 할 것 (설계 원칙 — README.md에도 있음)

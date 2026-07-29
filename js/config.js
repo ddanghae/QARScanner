@@ -99,7 +99,14 @@ export const CONFIG = {
     chg24FullPct: 20,       // 이 % 이상이면 change24h 만점
     freshFullDays: 200,     // 상장 이 일수 이하 = freshness 만점 (재적합에서 300 → 200)
     freshZeroDays: 800,     // 이 일수 이상 = 0점 (800일 초과 리프트 0.30~0.51x)
-    stopMaxAtr: 3,          // 손절은 진입에서 최대 이 배수 ATR 까지 (박스 하단이 더 멀면 자름)
+    // 2026-07-29 청산 규칙 격자 탐색(research/sweep-exits.mjs, 전체 529종목 · 신호 5,111건).
+    // 박스 하단 기준 손절을 버리고 순수 ATR 배수로 바꾼 것만으로 +0.017R → +0.084R 이 됐다.
+    // 박스 손절은 둘 중 좁은 쪽이 채택돼 목표 도달 전에 먼저 맞았다.
+    // 격자 최고 효율: ATR×4 · 4R · 90봉 = 평균 +0.155R · PF 1.34 · MDD -22.8R · 승률 36%.
+    // (평균만 보면 ATR×2 · 6R 이 +0.171R 로 위지만 승률 27% 의 소수 대박 의존형이라 뺐다)
+    stopAtr: 4,             // 손절 = 진입 - ATR × 이 배수
+    targetR: 4,             // 주 목표(tp2) = 리스크 × 이 배수
+    holdBars: 90,           // 측정에 쓴 보유 상한(4시간봉). 표시용 참고값 — 자동 청산은 없다.
     // 3단계 돌파
     breakoutRelVol: 2.0,    // 돌파 시 상대거래량
     breakoutMaxRunPct: 15,  // 돌파 후 상승폭 이 % 이하만 (초입)
@@ -131,13 +138,21 @@ export const CONFIG = {
   // 25-39 2.03x / 40-54 3.35x / 55-69 4.57x / 70+ 8.25x — 경계가 리프트 계단과 맞는다.
   // reversal 밴드(85/75/65/55)를 그대로 쓰면 정상 후보가 "제외" 로 표시된다.
   // key 는 CSS(.score-*)와 맞물려 있으니 바꾸지 말 것.
+  // hitRate = 검증셋(17,597행) 실측 적중률 %. "이후 7일 안에 24시간 +40% 이상" 이 일어난 비율.
+  // 기준선 3.57% — 이 도구가 파는 건 손익비가 아니라 이 확률이므로 화면에 그대로 노출한다.
   earlyGrades: [
-    { min: 70, label: "강한 후보", key: "strong" },   // 8.25x
-    { min: 55, label: "관심 후보", key: "watch" },    // 4.57x
-    { min: 40, label: "관찰 후보", key: "observe" },  // 3.35x
-    { min: 25, label: "조건 부족", key: "weak" },     // 2.03x
-    { min: 0, label: "제외", key: "excluded" },       // 0.58x
+    { min: 70, label: "강한 후보", key: "strong", hitRate: 29 },   // 8.25x
+    { min: 55, label: "관심 후보", key: "watch", hitRate: 16 },    // 4.57x
+    { min: 40, label: "관찰 후보", key: "observe", hitRate: 12 },  // 3.35x
+    { min: 25, label: "조건 부족", key: "weak", hitRate: 7 },      // 2.03x
+    { min: 0, label: "제외", key: "excluded", hitRate: 2 },        // 0.58x
   ],
+  earlyHitBaseline: 3.57,   // 무작위 종목의 같은 기간 적중률. 확률만 보면 크기를 못 느낀다.
+  earlyHitLabel: "7일 내 24h +40%",
+
+  // 손익 금액 표시에 빼는 왕복 비용 %. 백테스트와 같은 값(테이커 0.05% + 슬리피지 0.05%, 양쪽).
+  // 빼지 않으면 화면 금액이 백테스트보다 좋게 나와 두 숫자가 서로 안 맞는다.
+  tradeCostRoundTripPct: 0.2,
   // early 목록 표시 하한. "관찰 후보"(40) 이상만 보여준다 — 조건 부족/제외는 숨김.
   // 재적합 전 밴드(50/35/25/15)를 그대로 두면 라이브 34종목 중 15개가 "강한 후보" 다.
   earlyMinScore: 40,

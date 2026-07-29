@@ -136,7 +136,8 @@ E_BREAK_REL_VOL = 2.0   // 3단계 돌파 상대거래량
 E_BREAK_MAX_RUN = 15.0  // 3단계 돌파 후 상승폭 상한 %
 E_PUMPED_MAX = 40.0     // 24h 이 % 초과 = 이미 급등, 제외
 E_MIN_SCORE = 40.0      // early 표시 하한 (config.earlyMinScore) — reversal 의 강도 문턱과 별개
-E_STOP_MAX_ATR = 3.0    // 손절은 진입에서 최대 이 배수 ATR 까지
+E_STOP_ATR = 4.0        // 손절 = 진입 - ATR × 이 배수 (격자 탐색 결과, 박스 기준 폐기)
+E_TARGET_R = 4.0        // 주 목표(tp2) = 리스크 × 이 배수
 
 EW_MOM = 45.0           // |14일 수익률| (U자 — 크게 오르거나 크게 빠진 쪽)
 EW_CHG = 32.0           // |24시간 변동|
@@ -807,11 +808,10 @@ eGrade = f_earlyGrade(eScore)
 // 박스 폭이 수백 % 라 손익비 1:24 가 찍힌다(스캐너에서 실측). ATR 배수로 상한을 건다.
 eSpan = math.max(eBoxHigh - eBoxLow, 0.000000001)
 eEntry = ePrice
-eStopRaw = math.min(eBoxLow, eEntry) - nz(eAtr4) * 0.5
-eStop = nz(eAtr4) > 0 ? math.max(eStopRaw, eEntry - eAtr4 * E_STOP_MAX_ATR) : eStopRaw
+eStop = nz(eAtr4) > 0 ? eEntry - eAtr4 * E_STOP_ATR : math.min(eBoxLow, eEntry) - eEntry * 0.001
 eRisk = math.max(eEntry - eStop, 0.000000001)
-eTp1 = eEntry + eRisk * 1.0
-eTp2 = eEntry + eRisk * 2.0
+eTp1 = eEntry + eRisk * (E_TARGET_R / 2.0)
+eTp2 = eEntry + eRisk * E_TARGET_R
 eRR = (eTp2 - eEntry) / eRisk
 
 // ---- 모드 선택 ----

@@ -10,6 +10,7 @@ import {
 import { ema } from "../js/core/indicators.js";
 import { gradeFor } from "../js/core/scoring.js";
 import { candlesFromCloses } from "./fixtures.js";
+import { planMoney, fmtWon } from "../js/ui/format.js";
 import { stage2Liquidity, excludeMajors, stage3EvaluateEarly } from "../js/scanner/prefilter.js";
 
 // 움직임 요인 1개(momentum)만 걸린 기본 지표 = 1단계. 개별 테스트에서 필요한 값만 덮어쓴다.
@@ -115,6 +116,21 @@ export function run() {
     const observeMin = eg.find((g) => g.key === "observe").min;
     assert(eg.some((g) => g.min === CONFIG.earlyMinScore), "표시 하한이 밴드 경계와 안 맞음");
     assert(CONFIG.earlyMinScore >= observeMin, `표시 하한(${CONFIG.earlyMinScore})은 관찰 후보(${observeMin}) 이상이어야 함`);
+  });
+
+  // 화면이 손익비 대신 이 확률을 보여준다. 밴드를 손대면서 확률을 안 옮기면 거짓말이 표시된다.
+  test("등급마다 실측 적중률이 붙어 있고 점수와 같은 방향이다", () => {
+    const eg = CONFIG.earlyGrades;
+    for (const g of eg) assert(typeof g.hitRate === "number" && g.hitRate > 0, `${g.label} 에 hitRate 없음`);
+    const byMin = [...eg].sort((a, b) => a.min - b.min);
+    for (let i = 1; i < byMin.length; i++) {
+      assert(byMin[i].hitRate > byMin[i - 1].hitRate,
+        `점수가 높은데 확률이 안 높다: ${byMin[i - 1].label} ${byMin[i - 1].hitRate}% → ${byMin[i].label} ${byMin[i].hitRate}%`);
+    }
+    assert(CONFIG.earlyHitBaseline > 0, "기준선 없으면 확률 크기를 못 읽는다");
+    const shown = eg.filter((g) => g.min >= CONFIG.earlyMinScore);
+    assert(shown.every((g) => g.hitRate > CONFIG.earlyHitBaseline),
+      "노출되는 등급은 전부 무작위 기준선보다 높아야 한다");
   });
 
   // 핵심 소계 하한을 없앤 근거 — 움직임 없이 신규 상장만으로는 표시 하한을 못 넘는다.
@@ -317,14 +333,38 @@ export function run() {
   });
 
   // 폭락 후 반등 후보에서 박스 폭이 수백 % 라 손익비 1:24 가 찍히던 버그.
-  test("plan — 박스가 아무리 넓어도 손절은 ATR 배수 안, 손익비는 안 부푼다", () => {
+  // 박스 폭이 수백 % 라 손익비 1:24 가 찍히던 버그. 이제 손절은 박스를 아예 안 본다 —
+  // 2026-07-29 격자 탐색에서 박스 기준(둘 중 좁은 쪽)이 목표 도달 전에 먼저 맞아 손해였다.
+  test("plan — 손절은 박스와 무관하게 정확히 ATR 배수다", () => {
     const wide = earlyPlan(baseMetrics({ boxHigh: 1000, boxLow: 1 }), 2, 110, CONFIG);
-    const tight = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 2, 110, CONFIG);
-    const maxRisk = 2 * CONFIG.earlyDetect.stopMaxAtr;
-    assert(wide.entry - wide.stop <= maxRisk + 1e-9,
-      `손절 폭 ${wide.entry - wide.stop} 는 ATR×${CONFIG.earlyDetect.stopMaxAtr}=${maxRisk} 이내여야 함`);
-    eq(wide.riskReward, tight.riskReward, "박스 폭이 손익비를 부풀리면 안 됨");
-    assert(wide.riskReward < 5, `손익비가 현실 범위 (${wide.riskReward})`);
+    const tight = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 109 }), 2, 110, CONFIG);
+    const risk = 2 * CONFIG.earlyDetect.stopAtr;
+    assert(Math.abs(wide.entry - wide.stop - risk) < 1e-9,
+      `손절 폭 ${wide.entry - wide.stop} 는 ATR×${CONFIG.earlyDetect.stopAtr}=${risk} 여야 함`);
+    eq(wide.stop, tight.stop, "박스 폭이 손절을 바꾸면 안 됨");
+    eq(wide.riskReward, CONFIG.earlyDetect.targetR, "손익비는 목표 배수 그대로");
+    // ATR 이 없을 때만 박스로 되돌아간다 — 그때도 진입 위로 가면 안 된다.
+    const noAtr = earlyPlan(baseMetrics({ boxHigh: 120, boxLow: 100 }), 0, 110, CONFIG);
+    assert(noAtr.stop < noAtr.entry && noAtr.valid, `ATR 없을 때 폴백 (stop ${noAtr.stop})`);
+  });
+
+  // 화면에 원 단위 금액이 뜨므로 산수가 틀리면 사용자가 바로 손해를 오해한다.
+  test("손익 금액 — 시드에 비례하고 왕복 비용이 양쪽에서 빠진다", () => {
+    const plan = { entry: 100, invalidation: 90, tp2: 140, valid: true };  // 리스크 10, 목표 4R
+    const cost = CONFIG.tradeCostRoundTripPct;
+    const m = planMoney(plan, 1_000_000, cost);
+    eq(m.lossPct, 10, "손절 거리 10%");
+    eq(m.gainPct, 40, "목표 거리 40%");
+    eq(m.loss, -(100_000 + 1_000_000 * cost / 100), "손절 금액 = 거리 + 비용");
+    eq(m.gain, 400_000 - 1_000_000 * cost / 100, "목표 금액 = 거리 - 비용");
+    // 시드를 바꾸면 금액도 같은 배수로 바뀐다 — 컨트롤이 실제로 먹히는지 고정.
+    const dbl = planMoney(plan, 2_000_000, cost);
+    assert(Math.abs(dbl.gain - m.gain * 2) < 1e-9 && Math.abs(dbl.loss - m.loss * 2) < 1e-9,
+      `시드 2배면 금액도 2배 (${m.gain} → ${dbl.gain})`);
+    eq(planMoney(plan, 0, cost), null, "시드 0 이면 표시할 게 없다");
+    eq(planMoney({ ...plan, valid: false }, 1e6, cost), null, "계획이 무효면 금액도 없다");
+    eq(fmtWon(-102_000), "-10.2만원");
+    eq(fmtWon(398_000), "39.8만원");
   });
 
   test("지표 조립 — 캔들 부족하면 null", () => {

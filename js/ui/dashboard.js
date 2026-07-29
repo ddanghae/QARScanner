@@ -3,7 +3,7 @@
 
 import { state, on, isFavorite, toggleFavorite } from "../state.js";
 import { CONFIG } from "../config.js";
-import { fmtPrice, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml } from "./format.js";
+import { fmtPrice, fmtPct, fmtVolume, fmtTime, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
@@ -92,7 +92,8 @@ export function renderResults() {
     <table class="result-table">
       <thead><tr>
         <th>#</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>손익비</th><th></th><th></th>
+        <th>점수</th><th>단계</th><th>방향</th><th>${isEarly() ? "급등확률" : "손익비"}</th>
+        <th>손절 / 목표 금액</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
@@ -112,6 +113,26 @@ function emptyMessage() {
     ? `조기 포착은 14일 추세·24시간 변동·최근 상장으로 채점해 ${CONFIG.earlyMinScore}점 이상만 보여줍니다.`
     : "필터를 완화하거나 채점 강도를 낮춰보세요.";
   return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
+}
+
+// 조기 포착은 목표가 R 배수 고정이라 손익비가 항상 1:2.00 — 정보가 없다.
+// 대신 그 점수대의 실측 급등 확률을 보여준다(검증셋 17,597행). 그게 이 모드가 실제로 파는 것이다.
+const isEarly = () => state.settings.scanMode === "early";
+
+function oddsCell(r) {
+  if (!isEarly()) return escapeHtml(r.plan.rrText);
+  const b = CONFIG.earlyHitBaseline;
+  const lift = (r.grade.hitRate / b).toFixed(1);
+  return `<span class="odds" title="${CONFIG.earlyHitLabel} · 무작위 ${b}% 대비 ${lift}배">${r.grade.hitRate}% <span class="muted">(${lift}x)</span></span>`;
+}
+
+// 시드머니를 이 종목에 넣었을 때 손절 시 잃는 돈 / 목표 도달 시 버는 돈.
+// 계획대로 지켰을 때의 산수일 뿐이다 — 확률도 보장도 아니라서 옆의 급등확률과 같이 읽어야 한다.
+function moneyCell(r) {
+  const m = planMoney(r.plan, state.settings.seedMoney, CONFIG.tradeCostRoundTripPct);
+  if (!m) return `<span class="muted">시드머니 입력</span>`;
+  return `<span class="money" title="손절 -${m.lossPct.toFixed(1)}% · 목표 +${m.gainPct.toFixed(1)}% · 왕복비용 ${CONFIG.tradeCostRoundTripPct}% 반영">`
+    + `<span class="down">${fmtWon(m.loss)}</span> / <span class="up">+${fmtWon(m.gain)}</span></span>`;
 }
 
 function goldenCrossBadge(r) {
@@ -139,7 +160,8 @@ function rowHtml(r) {
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
     <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
-    <td>${r.plan.rrText}</td>
+    <td>${oddsCell(r)}</td>
+    <td>${moneyCell(r)}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
     <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
   </tr>`;
@@ -162,7 +184,8 @@ function cardHtml(r) {
     <div class="rcard-plan">
       <span>진입 ${fmtPrice(p.entry)}</span>
       <span>손절 ${fmtPrice(p.invalidation)}</span>
-      <span>손익비 ${p.rrText}</span>
+      <span>${isEarly() ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
+      <span>${moneyCell(r)}</span>
     </div>
     <div class="rcard-actions">
       <button class="btn-mini" data-detail="${r.symbol}">상세 보기</button>

@@ -1,12 +1,27 @@
 // ui/detail-panel.js — 종목 상세 분석 패널 (§15 상세 보기).
 // 점수 근거, 단계, 흡수, 시간봉별 상태, 진입·손절·목표, 손익비, TradingView 버튼.
 
-import { fmtPrice, fmtPct, fmtVolume, pctClass, escapeHtml } from "./format.js";
+import { fmtPrice, fmtPct, fmtVolume, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { openTradingView, copyTvLink, tvChartUrl, binanceFuturesUrl } from "./tradingview.js";
-import { toggleFavorite, isFavorite } from "../state.js";
+import { toggleFavorite, isFavorite, state } from "../state.js";
+import { CONFIG } from "../config.js";
 import { toast } from "./notifications.js";
 
 let panelEl = null;
+
+// 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
+// "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
+function moneySection(p) {
+  const seed = state.settings.seedMoney;
+  const m = planMoney(p, seed, CONFIG.tradeCostRoundTripPct);
+  if (!m) return `<p class="muted">시드머니를 입력하면 손익 금액이 표시됩니다.</p>`;
+  return `<table class="plan-table money-table">
+    <tr><td>넣는 금액</td><td>${fmtWon(seed)}</td></tr>
+    <tr><td>손절 맞으면</td><td class="down">${fmtWon(m.loss)} <small>(-${m.lossPct.toFixed(1)}%)</small></td></tr>
+    <tr><td>목표(TP2) 도달하면</td><td class="up">+${fmtWon(m.gain)} <small>(+${m.gainPct.toFixed(1)}%)</small></td></tr>
+  </table>
+  <p class="muted">레버리지 없음(1배) · 왕복 비용 ${CONFIG.tradeCostRoundTripPct}% 반영 · 도달 보장 아님</p>`;
+}
 
 export function initDetailPanel() {
   panelEl = document.getElementById("detail-panel");
@@ -78,6 +93,7 @@ function renderDetail(r) {
         <tr><td>TP3 (${r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
       </table>
+      ${moneySection(p)}
     </section>
 
     ${tfSection(r)}

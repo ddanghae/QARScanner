@@ -85,6 +85,13 @@ export function initSettingsUI() {
     toast("다음 스캔부터 적용됩니다.", "info");
   });
 
+  // 시드머니 — 표시 전용이라 재스캔 없이 즉시 다시 그린다.
+  const seed = document.getElementById("filter-seed");
+  if (seed) seed.addEventListener("input", () => {
+    updateSettings({ seedMoney: Math.max(0, Number(seed.value) || 0) });
+    emit("filters:apply");
+  });
+
   const applyBtn = document.getElementById("filter-apply");
   if (applyBtn) applyBtn.addEventListener("click", () => emit("filters:apply"));
 
@@ -170,6 +177,7 @@ export function syncControls() {
   for (const id of AUTOREFRESH_IDS) setChk(id, s.autoRefresh);
   for (const id of REALTIME_IDS) setChk(id, s.includeRealtimeCandle);
   setVal("filter-minvolume", s.minQuoteVolume);
+  setVal("filter-seed", s.seedMoney);
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));

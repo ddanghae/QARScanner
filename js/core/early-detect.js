@@ -173,18 +173,20 @@ function mkItem(key, label, weight, got) {
 export function earlyPlan(m, atrVal, price, cfg) {
   const entry = price;
   const atr = atrVal > 0 ? atrVal : 0;
-  const maxAtr = cfg?.earlyDetect?.stopMaxAtr ?? 3;
+  const stopAtr = cfg?.earlyDetect?.stopAtr ?? 4;
+  const targetR = cfg?.earlyDetect?.targetR ?? 4;
 
-  let stop = Math.min(m.boxLow, entry) - atr * 0.5;
-  // 박스 하단이 너무 멀면 ATR 배수로 자른다.
-  if (atr > 0) stop = Math.max(stop, entry - atr * maxAtr);
+  // 순수 ATR 배수. 예전에는 박스 하단(-0.5 ATR)과 ATR 배수 중 좁은 쪽이 채택됐는데,
+  // 격자 탐색에서 그게 손해였다(위 config 주석). ATR 이 없을 때만 박스로 되돌아간다.
+  let stop = atr > 0 ? entry - atr * stopAtr : Math.min(m.boxLow, entry) - entry * 1e-3;
   // 그래도 진입 위/같음이면(비정상 입력) 최소 리스크를 준다.
   if (!(stop < entry)) stop = entry * (1 - 1e-3);
 
   const risk = entry - stop;
-  const tp1 = entry + risk * 1;
-  const tp2 = entry + risk * 2;
-  const tp3 = entry + risk * 3;
+  // 측정된 건 tp2(= targetR) 하나뿐이다. tp1/tp3 은 그 주변 분할 참고선이다.
+  const tp1 = entry + risk * (targetR / 2);
+  const tp2 = entry + risk * targetR;
+  const tp3 = entry + risk * targetR * 1.5;
   const rr = (tp2 - entry) / risk;
   return {
     entry, stop, tp1, tp2, tp3,

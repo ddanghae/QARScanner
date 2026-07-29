@@ -19,7 +19,9 @@ const { buildEarlyResult } = await import(B + "core/early-detect.js");
 const FEE = 0.0005;          // taker per side
 const SLIP = 0.0005;         // assumed slippage per side (low-cap perps)
 const EVAL_EVERY = 6;        // evaluate once per day (4h bars)
-const TIME_STOP_BARS = 60;   // 10 days
+// 청산 규칙은 config 를 따른다 — 여기서 굳혀두면 "배포된 규칙을 테스트한다" 는 전제가 깨진다.
+const TARGET_R = CONFIG.earlyDetect.targetR;
+const TIME_STOP_BARS = CONFIG.earlyDetect.holdBars;
 const NOW = Date.now();
 
 const args = process.argv.slice(2);
@@ -44,7 +46,7 @@ const info = await j("https://fapi.binance.com/fapi/v1/exchangeInfo");
 const meta = new Map(info.symbols.map((s) => [s.symbol, s]));
 const symbols = mode === "all"
   ? info.symbols.filter((s) => s.contractType === "PERPETUAL" && s.quoteAsset === "USDT" && s.status === "TRADING").map((s) => s.symbol)
-  : PUMPERS;
+  : mode.includes("USDT") ? mode.split(",") : PUMPERS;   // ponytail: comma list as the mode arg, no flag parser
 
 console.log(`mode=${mode} symbols=${symbols.length}`);
 
@@ -95,7 +97,7 @@ for (const sym of symbols) {
     const risk = fill - (r.plan.stop / r.plan.entry) * fill;   // scale plan to the fill price
     if (!(risk > 0)) continue;
     const stop = fill - risk;
-    const target = fill + risk * 2;
+    const target = fill + risk * TARGET_R;
 
     let exitBar = -1, exitPx = null, why = "time";
     for (let k = i + 1; k < Math.min(c.length, i + 1 + TIME_STOP_BARS); k++) {
@@ -135,7 +137,7 @@ function stats(list, label) {
 }
 
 console.log(`\n평가 시점 ${evaluated}회 → 신호 ${signals}건 → 거래 ${trades.length}건`);
-console.log(`비용: 왕복 ${((FEE + SLIP) * 2 * 100).toFixed(2)}%  |  손절 ATR×${CONFIG.earlyDetect.stopMaxAtr}  |  목표 2R  |  시간청산 ${TIME_STOP_BARS}봉\n`);
+console.log(`비용: 왕복 ${((FEE + SLIP) * 2 * 100).toFixed(2)}%  |  손절 ATR×${CONFIG.earlyDetect.stopAtr}  |  목표 ${TARGET_R}R  |  시간청산 ${TIME_STOP_BARS}봉\n`);
 stats(trades, "전체");
 trades.sort((a, b) => a.score - b.score);
 for (const [lo, hi] of [[25, 40], [40, 55], [55, 70], [70, 101]]) {

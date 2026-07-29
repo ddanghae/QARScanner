@@ -29,7 +29,7 @@ async function j(url) {
 const info = await j("https://fapi.binance.com/fapi/v1/exchangeInfo");
 const symbols = mode === "all"
   ? info.symbols.filter((s) => s.contractType === "PERPETUAL" && s.quoteAsset === "USDT" && s.status === "TRADING").map((s) => s.symbol)
-  : PUMPERS;
+  : mode.includes("USDT") ? mode.split(",") : PUMPERS;   // ponytail: comma list as the mode arg, no flag parser
 console.log(`control mode=${mode} symbols=${symbols.length}`);
 
 const trades = [];

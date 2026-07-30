@@ -2,7 +2,8 @@
 // Picking a variant by its test score would turn the test set into a training set.
 import { readFileSync } from "node:fs";
 
-const raw = readFileSync("predict.csv", "utf8").trim().split("\n");
+// predict-dump.mjs 가 OUT 을 받으므로 소비자도 같이 받아야 한다 — 안 그러면 소량 검증본을 못 먹인다.
+const raw = readFileSync(process.env.OUT || "predict.csv", "utf8").trim().split("\n");
 const head = raw[0].split(",");
 const rows = raw.slice(1).map((l) => {
   const p = l.split(","); const o = {};

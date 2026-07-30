@@ -6,6 +6,7 @@ import { getKlines, closedOnly } from "../api/binance.js";
 import { computeIndicators, last } from "../core/indicators.js";
 import {
   volumeDelta, cvd, cvdSlope, avgVolume, relativeVolume, candleAbsorption, volumeTrend,
+  volumeSpikes, cvdDivergence,
 } from "../core/volume-analysis.js";
 import { findPivots, structureSummary } from "../core/market-structure.js";
 import { analyzeLiquidity } from "../core/liquidity.js";
@@ -362,6 +363,16 @@ export async function deepAnalyze(item, settings) {
     near1hEma200,
     noise,
     corePct,
+    // 1시간봉 대량거래 봉 + CVD 다이버전스. **채점에는 안 들어간다.**
+    // 2026-07-30 측정(529종목·57,796건): 점수 40+ 구간에서 급증 6배+ 의 구간내 리프트가
+    // 1.01x — 추가 정보가 없다. volExpand(단독 2.00x)가 이미 같은 걸 더 강하게 잡는다.
+    // 매수/매도 비율은 방향 예측력이 없었다(매도 흡수 0.79x, 혼재 1.36x — 뒤집혀 있다).
+    // 그래서 사용자가 눈으로 검토할 때 참고하는 **사실 정보로만** 보여준다.
+    // 인자는 research/predict-dump.mjs 와 **같아야 한다**. 피봇 길이는 이 지표의 지배 변수라
+    // swingPivot(5) 을 재사용하면 측정한 것과 다른 걸 화면에 띄우게 된다 — 위 리프트 수치가
+    // 그 순간 근거를 잃는다. 3 은 predict-dump.mjs 가 쓴 값이다. 한쪽을 바꾸면 양쪽 다 바꿀 것.
+    volSpike1h: volumeSpikes(a1.candles, { period: 20, minRel: 3, lookback: 30 })[0] || null,
+    cvdDiv1h: cvdDivergence(a1.candles, 3, 40),
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {

@@ -34,8 +34,10 @@ export function resolveTrade(rec, candles) {
   const risk = rec.entry - rec.stop;
   const rOf = (px) => (risk > 0 ? (px - rec.entry) / risk : 0);
   for (const c of after) {
-    if (c.low <= rec.stop) return { status: "loss", exitPx: rec.stop, exitAt: c.time, r: rOf(rec.stop) };
-    if (c.high >= rec.tp2) return { status: "win", exitPx: rec.tp2, exitAt: c.time, r: rOf(rec.tp2) };
+    // exitAt 도 startOf 로 읽는다 — 위에서 openTime/closeTime 을 쓰는 이유와 같다.
+    // c.time 은 실제 캔들에 없어서 조용히 undefined 가 된다.
+    if (c.low <= rec.stop) return { status: "loss", exitPx: rec.stop, exitAt: startOf(c), r: rOf(rec.stop) };
+    if (c.high >= rec.tp2) return { status: "win", exitPx: rec.tp2, exitAt: startOf(c), r: rOf(rec.tp2) };
   }
   const last = after[after.length - 1];
   return { status: "open", exitPx: last ? last.close : rec.entry, exitAt: null, r: rOf(last ? last.close : rec.entry) };
@@ -61,12 +63,33 @@ export function recordTrade(result) {
     at: Date.now(),
     entry: p.entry, stop: p.invalidation, tp2: p.tp2,
     score: result.score,
+    // 어떤 신호로 잡았는지 박아둔다. 나중에 신호별 승률을 못 뽑으면 점수 가중치를 고칠 근거가 없다.
+    // 과거 기록엔 소급 못 하므로 지금부터 쌓인다.
+    signals: result.topSignals || [],
     // 기록 시점의 시드·레버리지를 박아둔다. 나중에 설정을 바꿔도 과거 기록의 금액은 안 흔들린다.
     seed: state.settings.seedMoney, leverage: state.settings.leverage,
   });
   save(list);
   toast(`${result.symbol} 기록했습니다.`, "success");
   render();
+}
+
+// 신호별 승률. 닫힌 기록만 센다 — 진행 중은 결말을 모르니 분모에 넣으면 승률이 거짓으로 낮아진다.
+// 한 기록에 신호 3개면 3개 전부에 계상한다(신호는 배타적이지 않다).
+export function signalStats(rows) {
+  const byName = new Map();
+  for (const { rec, res } of rows) {
+    if (res.status === "open") continue;
+    for (const name of rec.signals || []) {
+      const s = byName.get(name) || { name, n: 0, wins: 0, totalR: 0 };
+      s.n++;
+      if (res.status === "win") s.wins++;
+      s.totalR += res.r;
+      byName.set(name, s);
+    }
+  }
+  // 표본 많은 순 — 2건짜리 100% 승률이 맨 위에 오면 오해한다.
+  return [...byName.values()].sort((a, b) => b.n - a.n);
 }
 
 export function initPaper() {
@@ -111,8 +134,16 @@ export async function render() {
     ? `닫힘 ${closed.length}건 · 승률 ${(wins / closed.length * 100).toFixed(0)}% · 합계 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)}`
     : `닫힌 기록 없음 — 열린 ${rows.length}건`;
 
+  const sig = signalStats(rows);
+  const sigHtml = sig.length
+    ? `<p class="muted">신호별 — ${sig.map((s) =>
+        `${escapeHtml(s.name)} ${s.n}건 ${(s.wins / s.n * 100).toFixed(0)}% ${s.totalR >= 0 ? "+" : ""}${s.totalR.toFixed(1)}R`
+      ).join(" · ")}</p>`
+    : "";
+
   listEl.innerHTML = `
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
+    ${sigHtml}
     <table class="result-table paper-table">
       <thead><tr><th>종목</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
@@ -142,4 +173,4 @@ function rowHtml({ rec, res }) {
   </tr>`;
 }
 
-export default { initPaper, render, recordTrade, resolveTrade };
+export default { initPaper, render, recordTrade, resolveTrade, signalStats };

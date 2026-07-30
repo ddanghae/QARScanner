@@ -2,7 +2,7 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { returnsFrom, pearson, correlationMap } from "../js/core/correlation.js";
-import { resolveTrade } from "../js/ui/paper.js";
+import { resolveTrade, signalStats } from "../js/ui/paper.js";
 
 const bar = (o, h, l, c, t) => ({ time: t, open: o, high: h, low: l, close: c, volume: 1 });
 const fromCloses = (closes, t0 = 0) =>
@@ -83,5 +83,23 @@ export function run() {
     const win = resolveTrade(rec, [bar(100, 145, 99, 143, 1000), bar(143, 150, 80, 85, 2000)]);
     eq(win.status, "win", "목표를 먼저 친 뒤의 폭락은 이미 청산된 뒤다");
     eq(win.r, 4);
+  });
+
+  // 신호별 승률이 틀리면 점수 가중치를 엉뚱하게 고친다 — 진행 중을 분모에 넣는 게 가장 흔한 실수다.
+  test("신호별 집계 — 닫힌 기록만, 신호 3개면 3개 전부에 계상", () => {
+    const rows = [
+      { rec: { signals: ["골든크로스", "OB"] }, res: { status: "win", r: 3 } },
+      { rec: { signals: ["골든크로스"] },       res: { status: "loss", r: -1 } },
+      { rec: { signals: ["골든크로스"] },       res: { status: "open", r: 2 } },  // 분모 제외
+    ];
+    const s = signalStats(rows);
+    eq(s.length, 2, "신호 종류만큼");
+    eq(s[0].name, "골든크로스", "표본 많은 순");
+    eq(s[0].n, 2, "진행 중은 세지 않는다");
+    eq(s[0].wins, 1);
+    eq(s[0].totalR, 2, "3R + (-1R)");
+    eq(s[1].n, 1, "OB 는 1건");
+    eq(signalStats([]).length, 0, "기록 없으면 빈 배열");
+    eq(signalStats([{ rec: {}, res: { status: "win", r: 1 } }]).length, 0, "signals 없는 과거 기록은 건너뛴다");
   });
 }

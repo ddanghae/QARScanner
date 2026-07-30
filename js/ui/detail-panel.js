@@ -9,6 +9,43 @@ import { toast } from "./notifications.js";
 
 let panelEl = null;
 
+// 1시간봉 물량 흐름 — 대량거래 봉과 CVD 다이버전스.
+//
+// 점수에 반영하지 않는다(deep-scanner.js 주석의 측정 근거 참조).
+//
+// 매수 비율과 종가 위치는 **일부러 렌더하지 않는다.** 실측에서 방향 예측력이 없었고
+// (매도 흡수 0.79x · 혼재 1.36x — 가설과 뒤집힘) 경고 문구를 붙여도 "매수 75%" 같은 숫자를
+// 보면 사람은 방향으로 읽는다. 예측력 없는 숫자를 방향처럼 읽히게 두는 게 안 보여주는 것보다
+// 나쁘다. 값 자체는 volumeSpikes 가 계속 계산하고 research/predict-dump.mjs 가 열로 뽑는다
+// — 다시 재서 예측력이 나오면 그때 여기에 붙일 것.
+function volumeFlowSection(r) {
+  const sp = r.volSpike1h;
+  const dv = r.cvdDiv1h;
+  if (!sp && !(dv?.bullish || dv?.bearish)) return "";
+
+  const rows = [];
+  if (sp) {
+    const ago = sp.barsAgo === 0 ? "직전 봉" : `${sp.barsAgo}봉 전`;
+    const held = sp.pctAbove == null ? "—"
+      : `이후 종가 ${Math.round(sp.pctAbove * 100)}% 가 그 위`;
+    rows.push(`<tr><td>대량거래 봉</td><td>${sp.relVol.toFixed(1)}배 · ${ago}</td></tr>`);
+    rows.push(`<tr><td>물량대 (${fmtPrice(sp.level)})</td><td>${held}</td></tr>`);
+  }
+  if (dv?.bullish) rows.push(`<tr><td>CVD</td><td>상승 다이버전스 <small>(가격 저점↓ / CVD 저점↑)</small></td></tr>`);
+  if (dv?.bearish) rows.push(`<tr><td>CVD</td><td>하락 다이버전스 <small>(가격 고점↑ / CVD 고점↓)</small></td></tr>`);
+
+  return `
+    <section class="detail-section">
+      <h3>1시간봉 물량 흐름 <small>(점수 미반영 · 참고용)</small></h3>
+      <table class="plan-table">${rows.join("")}</table>
+      <p class="muted">529종목 57,796건(4시간봉) 측정 결과입니다.
+      <b>대량거래 봉</b>: 점수 40 이상 구간에서는 있든 없든 급등률이 같았습니다(16.2% 대 16.1%)
+      — 이미 점수에 든 거래량 확장이 같은 것을 더 잘 잡습니다.
+      <b>CVD 다이버전스</b>: 학습 1.20배 / 검증 1.15배 — 방향은 맞지만 약합니다.
+      둘 다 점수를 대체하지 못하며 위치 참고용입니다.</p>
+    </section>`;
+}
+
 // 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
 function moneySection(p) {
@@ -111,6 +148,8 @@ function renderDetail(r) {
       <ul class="signal-list">${r.topSignals.map((s) => `<li>✔ ${escapeHtml(s)}</li>`).join("")}</ul>
       <p class="absorption">흡수 추정: <b>${escapeHtml(r.absorption.label)}</b></p>
     </section>
+
+    ${volumeFlowSection(r)}
 
     <section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>

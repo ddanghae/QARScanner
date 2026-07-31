@@ -941,8 +941,13 @@ passesStrictness = useTrend ? trend3Ready : useEarly ? early2Ready : rev1Ready
 // 진입 라벨에 쓸 모드 이름 — "어떤 스캐너의 진입인지" 를 화살표 모양이 아니라 글자로 못 박는다.
 entryLabelSize = entryLabelSizeInput == "아주 작게" ? size.tiny : entryLabelSizeInput == "보통" ? size.normal : size.small
 string modeName = activeMode == 1 ? "급락반등" : activeMode == 3 ? "추세추종" : "조기포착"
-string modeTag = activeMode == 1 ? "①" : activeMode == 3 ? "③" : "②"
-color modeColor = activeMode == 1 ? color.new(#7e57c2, 0) : activeMode == 3 ? color.new(#26a69a, 0) : color.new(#ff9800, 0)
+// 모드는 숫자로 크게 박는다. ①②③ 같은 원문자는 작은 라벨에서 뭉개져 안 읽힌다.
+string modeTag = activeMode == 1 ? "1" : activeMode == 3 ? "3" : "2"
+// 진입 라벨 배경색은 **방향**으로 가른다 — 차트에서 먼저 알아야 하는 건 롱이냐 숏이냐다.
+// 모드는 라벨 첫 글자(숫자)와 화살표 모양이 알려준다. 모드까지 색으로 나누면
+// 색이 두 가지를 동시에 뜻하게 돼 둘 다 못 읽는다.
+color dirColorLong = color.new(#12995b, 8)
+color dirColorShort = color.new(#d83a3a, 8)
 // 단계 이름도 모드마다 다르다 — 같은 "2" 가 모드마다 다른 뜻이라 숫자만 보이면 오독한다.
 string stageName = activeMode == 1 ?
      (finalStage == 5 ? "추격금지" : finalStage == 4 ? "진입구간" : finalStage == 3 ? "구조전환" : finalStage == 2 ? "유동성회수" : "매집") :
@@ -1041,13 +1046,14 @@ plotshape(trendEntry, "③ 추세 추종 진입", style = shape.circle, location
 if canEnter and showEntryLabel
     string dirTxt = dirLong ? "롱" : "숏"
     string nl = "\n"
-    string txt = modeTag + " " + modeName + " " + dirTxt + nl +
-         str.tostring(finalScore, "#") + "점 " + finalGrade + nl +
-         str.tostring(finalStage) + " " + stageName + " · 손익비 1:" + str.tostring(finalRR, "#.#")
+    // 첫 줄에 [모드번호 · 방향 · 점수] — 한 줄만 읽어도 판단이 되게 한다.
+    string txt = modeTag + "  " + dirTxt + "  " + str.tostring(finalScore, "#") + "점" + nl +
+         modeName + " · " + stageName + nl +
+         finalGrade + " · 손익비 1:" + str.tostring(finalRR, "#.#")
     label.new(bar_index, dirLong ? low : high,
          text = txt,
          style = dirLong ? label.style_label_up : label.style_label_down,
-         color = color.new(modeColor, 12), textcolor = color.white,
+         color = dirLong ? dirColorLong : dirColorShort, textcolor = color.white,
          size = entryLabelSize, yloc = dirLong ? yloc.belowbar : yloc.abovebar)
 
 // 청산 표시

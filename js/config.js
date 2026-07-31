@@ -168,6 +168,37 @@ export const CONFIG = {
   earlyHitBaseline: 3.57,   // 무작위 종목의 같은 기간 적중률. 확률만 보면 크기를 못 느낀다.
   earlyHitLabel: "7일 내 24h +40%",
 
+  // ---- 추세 추종 모드 ----
+  // 조기 포착이 earlyExclusion 으로 버리는 구간(이미 오른 것)이 대상이다.
+  // 조기 포착은 mom14/chg24 의 **절대값**을 쓴다(refit 에서 방향 무관이 이겼다).
+  // 이 모드는 부호를 본다 — 하락에 점수를 주면 추세 추종이 아니다.
+  //
+  // 2026-07-30 측정 (529종목 57,796건, 검증셋 n=17,606, 기준 급등률 3.25%,
+  // 라벨은 early 와 동일한 "7일 내 24h +40%"):
+  //   상위 N/일 리프트  N=3 7.46x · N=5 8.27x · N=10 6.13x
+  //   조기 포착과 상위 5/일 겹침 43% — 추세 추종만 고른 97건이 20.62%(6.34x).
+  //   기존이 놓치는 구간을 잡으므로 별도 모드로 둔다.
+  // 가중치·경계는 격자 탐색을 하지 않은 첫 안이다. 튜닝 없이 나온 수치라
+  // 과적합 여지는 작지만, 재적합하면 더 오를 수 있다.
+  trendFollow: {
+    momMinPct: 10, momFullPct: 60,      // 14일 상승률 램프
+    chgMinPct: 3, chgFullPct: 25,       // 24시간 상승률 램프
+    runawayPct: 120, runawayPenalty: -20,
+    minQuoteVolume: 5e6, thinPenalty: -10,
+    weights: { mom: 45, chg: 35, vol: 20 },
+    // 1차 선별에서 남길 최대 후보 수(정밀 단계 API 호출을 여기서 자른다).
+    keepMax: 60,
+    prefilterMinMomPct: 5,              // 이보다 못 오른 건 1차에서 뺀다
+  },
+  // 2026-07-30 검증셋 구간별 실측. 리프트가 단조 증가한다.
+  trendGrades: [
+    { min: 70, label: "강한 추세", key: "strong", hitRate: 29 },   // n=117  8.93x
+    { min: 55, label: "관심 추세", key: "watch", hitRate: 16 },    // n=131  4.93x
+    { min: 40, label: "관찰 추세", key: "observe", hitRate: 13 },  // n=262  4.10x
+    { min: 25, label: "약한 추세", key: "weak", hitRate: 8 },      // n=439  2.45x
+    { min: 0, label: "제외", key: "excluded", hitRate: 3 },        // n=16657 0.83x
+  ],
+
   // 손익 금액 표시에 빼는 왕복 비용 %. 백테스트와 같은 값(테이커 0.05% + 슬리피지 0.05%, 양쪽).
   // 빼지 않으면 화면 금액이 백테스트보다 좋게 나와 두 숫자가 서로 안 맞는다.
   tradeCostRoundTripPct: 0.2,

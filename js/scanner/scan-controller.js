@@ -7,7 +7,9 @@ import { state, emit } from "../state.js";
 import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll } from "../api/binance.js";
 import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
-import { buildEarlyResult } from "../core/early-detect.js";
+import { buildEarlyResult, buildEarlyMetrics, earlyPlan } from "../core/early-detect.js";
+import { buildTrendResult } from "../core/strategies.js";
+import { gradeFor, topSignals } from "../core/scoring.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
 
 let abortToken = { aborted: false };
@@ -52,6 +54,63 @@ async function mapWithProgress(items, fn, onEach) {
 
 // ---- 조기 포착 모드 파이프라인 ----
 // 반환: 기존과 동일 shape 결과 배열 (rank 는 호출부에서 부여)
+// 추세 추종 파이프라인. early 와 뼈대가 같아 보이지만 1차 선별 기준이 반대다:
+// early 는 압축(squeezePct) 강한 순으로 남기고, 여기는 상승률 큰 순으로 남긴다.
+// OI 는 안 부른다 — 채점에 안 쓰이므로 후보당 1회 호출을 통째로 아낀다.
+async function runTrendPipeline(universe, now) {
+  const t = CONFIG.trendFollow;
+
+  setPhase("prefilter");
+  const tickers = await getTicker24h();
+  state.tickers = tickers;
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter,
+    minQuoteVolume: state.settings.minQuoteVolume ?? t.minQuoteVolume,
+  });
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  if (abortToken.aborted) return null;
+
+  const fundingMap = await getPremiumIndexAll();
+
+  // 1차 선별: 24시간 상승률로 자른다. 티커는 이미 손에 있으므로 API 호출이 0이다
+  // — 4시간봉을 500종목 전부에 받으면 그게 스캔 시간의 대부분이 된다.
+  setPhase("candidate");
+  const byTicker = new Map(tickers.map((x) => [x.symbol, x]));
+  const shortlist = prefiltered
+    .map((item) => ({ item, chg: +(byTicker.get(item.symbol)?.priceChangePercent ?? 0) }))
+    .filter((x) => x.chg >= t.prefilterMinMomPct)
+    .sort((a, b) => b.chg - a.chg)
+    .slice(0, t.keepMax)
+    .map((x) => x.item);
+  state.candidates = shortlist;
+  emit("scan:candidates", { count: shortlist.length });
+  if (abortToken.aborted) return null;
+
+  setPhase("deep");
+  const analyzed = await mapWithProgress(shortlist, async (item) => {
+    const k4h = await getKlines(item.symbol, "4h");
+    const closed = k4h.slice(0, state.settings.includeRealtimeCandle ? k4h.length : -1);
+    const funding = fundingMap.get(item.symbol) ?? null;
+    const res = buildTrendResult(item, closed, funding, CONFIG,
+      { buildEarlyMetrics, earlyPlan, gradeFor, topSignals });
+    return res ? { res, k4h: closed } : null;
+  });
+  const kept = analyzed.filter(Boolean);
+  const results = kept.map((x) => x.res);
+
+  // 상승장에서는 후보가 죄다 같이 오르기 쉽다 — 분산이 아니라는 걸 여기서 알려야 한다.
+  const series = [];
+  for (const { res, k4h } of kept) {
+    const ret = returnsFrom(k4h, CONFIG.correlation.bars);
+    if (ret) series.push({ symbol: res.symbol, returns: ret });
+  }
+  const corr = correlationMap(series, CONFIG.correlation.threshold);
+  for (const r of results) r.correlatedWith = corr.get(r.symbol) || [];
+  return results;
+}
+
 async function runEarlyPipeline(universe, now) {
   const e = CONFIG.earlyDetect;
 
@@ -133,6 +192,13 @@ export async function runScan() {
       const earlyResults = await runEarlyPipeline(universe, now);
       if (earlyResults === null) return finishAborted();
       return finishScan(earlyResults);
+    }
+
+    // --- 추세 추종 모드 ---
+    if (state.settings.scanMode === "trend") {
+      const trendResults = await runTrendPipeline(universe, now);
+      if (trendResults === null) return finishAborted();
+      return finishScan(trendResults);
     }
 
     // --- 2단계: 24h 유동성 필터 ---

@@ -9,7 +9,7 @@ const defaultSettings = {
   minScore: 30,              // 채점 강도 3(기본)과 같은 값 — grades 의 "관찰 후보" 경계
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
   direction: "long",         // "long" | "short" | "both"
-  scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착)
+  scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착) | "trend"(추세 추종)
   stageFilter: "all",        // 1~5 단계 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨

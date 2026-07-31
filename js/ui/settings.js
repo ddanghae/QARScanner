@@ -21,17 +21,21 @@ const REALTIME_IDS = ["set-realtime-candle"];
 export function applyFilters(results) {
   const s = state.settings;
   const early = s.scanMode === "early";
+  const trend = s.scanMode === "trend";
+  // early·trend 둘 다 상승만 본다. 숏은 따로 재본 적이 없어 만들지 않았다.
+  const longOnly = early || trend;
   let list = results.slice();
 
-  // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
-  if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
+  // 방향 — 롱 전용 모드는 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
+  if (!longOnly && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
   // 최소 점수 — early 는 점수대 자체가 달라(실측 0~61) reversal 기준의
   // minScore·채점 강도가 안 맞는다. config 의 early 전용 하한을 쓴다.
   list = list.filter((r) => r.score >= (early ? CONFIG.earlyMinScore : s.minScore));
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
-  if (s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  // 추세 추종은 단계 3(과열)이 early 의 5단계에 해당한다 — 같은 체크박스로 거른다.
+  if (s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== (trend ? 3 : 5));
   // 신규 종목 제외
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
@@ -210,17 +214,21 @@ function setChk(id, v) { const el = document.getElementById(id); if (el) el.chec
 const STAGE_LABELS = {
   reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
   early: ["전체", "1 매집", "2 임박", "3 돌파", "— (early 없음)", "— (early 없음)"],
+  trend: ["전체", "1 초기", "2 진행", "3 과열", "— (trend 없음)", "— (trend 없음)"],
 };
 function syncModeControls(mode) {
   const early = mode === "early";
+  const trend = mode === "trend";
+  // 3단계까지만 있는 모드가 둘이다. 4·5 를 고르면 조용히 빈 결과가 된다.
+  const threeStage = early || trend;
   const el = document.getElementById("filter-stage");
   if (el) {
     const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
     for (let i = 0; i < el.options.length && i < labels.length; i++) {
       el.options[i].textContent = labels[i];
-      el.options[i].disabled = early && i >= 4;
+      el.options[i].disabled = threeStage && i >= 4;
     }
-    if (early && (el.value === "4" || el.value === "5")) {
+    if (threeStage && (el.value === "4" || el.value === "5")) {
       el.value = "all";
       updateSettings({ stageFilter: "all" });
     }
@@ -229,8 +237,8 @@ function syncModeControls(mode) {
   const sortEl = document.getElementById("filter-sort");
   const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
   if (changeOpt) {
-    changeOpt.disabled = early;
-    if (early && sortEl.value === "change") {
+    changeOpt.disabled = threeStage;
+    if (threeStage && sortEl.value === "change") {
       sortEl.value = "score";
       updateSettings({ sort: "score" });
     }

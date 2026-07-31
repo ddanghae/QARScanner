@@ -27,18 +27,24 @@ export function scoreTrendFollow(m, {
   runawayPct = 120,                     // 이 이상 오른 건 과열
   runawayPenalty = -20,
   minQuoteVolume = 5e6, thinPenalty = -10,
-  w = { mom: 45, chg: 35, vol: 20 },
+  weights = { mom: 45, chg: 35, vol: 20 },
 } = {}) {
+  const w = weights;
   // 부호 있는 값만 받는다. 하락 중이면 0 점 — abs 를 쓰면 조기 포착과 같아진다.
   const mom = m.mom14 == null || m.mom14 <= 0 ? 0 : ramp(m.mom14, momMinPct, momFullPct);
   const chg = m.change24h == null || m.change24h <= 0 ? 0 : ramp(m.change24h, chgMinPct, chgFullPct);
   // 거래량 확장은 추세에 물량이 실렸는지 — 조용히 오른 건 못 믿는다.
   const vol = ramp(m.volExpand ?? 1, 1.2, 4);
 
+  // scoring.js 의 topSignals 가 { weight, got, hit } 를 읽는다 — 모양을 맞춘다.
+  const item = (key, label, weight, got) => {
+    const g = Math.round(got * 100) / 100;
+    return { key, label, weight, max: weight, got: g, hit: g > 0 };
+  };
   const breakdown = [
-    { key: "mom14", label: "14일 상승 추세", max: w.mom, got: w.mom * mom },
-    { key: "chg24", label: "24시간 상승", max: w.chg, got: w.chg * chg },
-    { key: "volExpand", label: "거래량 확장", max: w.vol, got: w.vol * vol },
+    item("mom14", "14일 상승 추세", w.mom, w.mom * mom),
+    item("chg24", "24시간 상승", w.chg, w.chg * chg),
+    item("volExpand", "거래량 확장", w.vol, w.vol * vol),
   ];
   let score = breakdown.reduce((s, b) => s + b.got, 0);
 
@@ -52,6 +58,68 @@ export function scoreTrendFollow(m, {
     penalties.push({ key: "thinLiquidity", label: "거래대금 부족", val: thinPenalty });
   }
   return { score: Math.max(0, Math.min(100, Math.round(score))), breakdown, penalties };
+}
+
+// 추세 단계. early 의 3단계(매집→임박→돌파)와 달리 여기는 "얼마나 갔나" 한 축이다.
+// 추세 추종은 어디서 들어가도 되는 대신 늦게 들어갈수록 손절폭이 커진다 — 그걸 알리는 용도.
+export function classifyTrendStage(m, cfg) {
+  const t = cfg?.trendFollow ?? {};
+  const chg = m.change24h ?? 0;
+  const mk = (stage, key, label, color) => ({ stage, key, label, color });
+  if (chg >= (t.runawayPct ?? 120)) return mk(3, "runaway", "3 과열", "purple");
+  if (chg >= (t.chgFullPct ?? 25)) return mk(2, "running", "2 진행", "yellow");
+  return mk(1, "starting", "1 초기", "blue");
+}
+
+// 추세 추종 제외 규칙. early 는 "이미 급등" 을 버리지만 여기는 그게 대상이다.
+// 대신 **오르지 않는 것**을 버린다 — 그게 이 모드의 존재 이유다.
+export function trendExclusion(m, cfg) {
+  const t = cfg?.trendFollow ?? {};
+  if (m.mom14 == null || m.mom14 <= 0) return "상승 추세 아님";
+  if (m.change24h != null && m.change24h < 0) return "24시간 하락";
+  if ((m.quoteVolume ?? 0) < (t.minQuoteVolume ?? 5e6) / 5) return "거래대금 극소";
+  return null;
+}
+
+// buildEarlyResult 와 같은 모양의 결과를 만든다 — 대시보드·상세패널·기록장이
+// 그 모양을 전제로 돌아가므로 필드를 빼면 조용히 깨진다.
+// 지표 계산(buildEarlyMetrics)과 진입 계획(earlyPlan)은 그대로 재사용한다.
+// 계획을 새로 짜지 않는 이유: earlyPlan 의 손절·목표 배수는 격자 탐색으로 정해진 값이고
+// 추세 추종용으로 다시 잰 적이 없다. 근거 있는 값을 근거 없는 값으로 바꿀 이유가 없다.
+export function buildTrendResult(item, c4, funding, cfg, deps) {
+  const { buildEarlyMetrics, earlyPlan, gradeFor, topSignals } = deps;
+  const m = buildEarlyMetrics(c4, [], funding, item, cfg);
+  if (!m) return null;
+  if (trendExclusion(m, cfg)) return null;
+
+  const scored = scoreTrendFollow(m, cfg.trendFollow);
+  const plan = earlyPlan(m, m.atrVal, m.price, cfg);
+  const stageInfo = classifyTrendStage(m, cfg);
+
+  return {
+    symbol: item.symbol,
+    baseAsset: item.baseAsset,
+    price: m.price,
+    change6h: null,
+    change24h: m.change24h ?? 0,
+    quoteVolume: item.quoteVolume,
+    newListing: item.newListing,
+    direction: "long",                 // 추세 추종은 상승만 본다(숏은 별도 측정 필요)
+    score: scored.score,
+    grade: gradeFor(scored.score, { grades: cfg.trendGrades }),
+    stage: stageInfo,
+    absorption: { level: "insufficient", label: "추세 추종 모드 — 미적용", score: 0 },
+    breakdown: scored.breakdown,
+    penalties: scored.penalties,
+    topSignals: topSignals(scored.breakdown, 3),
+    goldenCrossRetest: { detected: false, reason: "추세 추종 모드" },
+    near1hEma200: false,
+    noise: { noisy: false, ci: null, relVol: m.relVol3, reasons: [] },
+    trend: { mom14: m.mom14, volExpand: m.volExpand, ageDays: m.ageDays },
+    plan,
+    rsi1h: null,
+    timeframes: {},
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -204,4 +272,7 @@ export function pairDivergence(candlesA, candlesB, {
   };
 }
 
-export default { scoreTrendFollow, scoreNewListing, rangeGridPlan, pairDivergence };
+export default {
+  scoreTrendFollow, classifyTrendStage, trendExclusion, buildTrendResult,
+  scoreNewListing, rangeGridPlan, pairDivergence,
+};

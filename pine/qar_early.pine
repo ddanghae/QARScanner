@@ -1,0 +1,310 @@
+//@version=6
+indicator("QAR 조기 포착 (early)", shorttitle = "QAR early", overlay = true,
+     max_lines_count = 50, max_labels_count = 50, max_boxes_count = 20)
+
+// ============================================================================
+// QARScanner 조기 포착 모드(scanMode = "early") 단일 심볼 이식.
+// 스캐너에서 코인을 클릭해 들어왔을 때 같은 점수·단계·진입/손절/목표를 이 차트에서
+// 그대로 확인하기 위한 지표. 급락 반등 모드는 별도 파일(qar_reversal.pine).
+//
+// 채점은 2026-07-26 재적합(변형 D). 57,720행을 시간순 70/30 으로 나눠 학습셋에서만
+// 변형을 고르고 검증셋에서 한 번 확인했다. 라벨 = 이후 7일 내 24시간 +40% 이상.
+//   momentum   |14일 수익률|  45점  ramp(15% → 60%)
+//   change24h  |24시간 변동|  32점  ramp(5% → 20%)
+//   freshness  상장 경과일    23점  200일 이하 만점 → 800일 0점
+//   thinLiquidity            -10점  24시간 거래대금 5M 미만
+// 검증셋 상위3 리프트 10.71x (기존 5요인 6.04x).
+//
+// 뺀 것: 변동성 압축·거래량 고갈·미결제약정·펀딩비·박스 내 위치·장기선 회복.
+// 전부 다변량에서 기여가 0 이었다. 펀딩·OI 는 TradingView 에서 읽기 어려운 항목이었는데
+// 채점에서 빠지면서 **이 지표는 스캐너와 계산이 완전히 같아졌다**(근사·생략 없음).
+// 단 하나 예외 — 상장 경과일은 일봉 개수로 세므로 차트 이력이 800일 미만이면 실제보다
+// 짧게 나와 freshness 가 과대평가된다. 800일이 만점 소멸 지점이라 그 이상 이력이면 무관.
+//
+// 4시간봉 고정. 차트 시간봉과 무관하게 스캐너와 같은 값을 쓴다.
+// 원자료·재현 스크립트: QARScanner/research/
+// ============================================================================
+
+// ---- 입력 ----
+grpDisp = "표시"
+showPlan = input.bool(true, "진입/손절/목표 라인 표시", group = grpDisp)
+showZones = input.bool(true, "박스(4h·60봉) 표시", group = grpDisp)
+showTable = input.bool(true, "요약 표 표시", group = grpDisp)
+tablePosInput = input.string("왼쪽 위", "요약표 위치",
+     options = ["왼쪽 위", "왼쪽 가운데", "왼쪽 아래", "오른쪽 위", "오른쪽 가운데", "오른쪽 아래", "가운데 위", "가운데 아래"], group = grpDisp)
+tableSizeInput = input.string("작게", "요약표 크기", options = ["아주 작게", "작게", "보통", "크게"], group = grpDisp)
+
+grpQuality = "진입 품질 필터"
+minScoreInput = input.int(40, "최소 점수 (스캐너 기본 40)", minval = 0, maxval = 100,
+     tooltip = "config.earlyMinScore 와 같은 값. 등급 경계(70/55/40/25)에 맞춰야 표시가 잘리지 않는다.", group = grpQuality)
+minStageInput = input.int(1, "최소 단계 (1 관찰 / 2 임박 / 3 돌파)", minval = 1, maxval = 3,
+     tooltip = "이 모드의 단계는 급락 반등과 뜻이 다르다. 1 관찰도 정상 후보다.", group = grpQuality)
+cooldownBars = input.int(3, "손절 후 대기 봉수", minval = 0, maxval = 50, group = grpQuality)
+minEntryGap = input.int(0, "최소 진입 간격 (봉수, 0=제한 없음)", minval = 0, maxval = 200, group = grpQuality)
+// 재적합에서 장기선 회복은 채점에서 빠졌다(기여 0). 그래서 기본값은 끔 —
+// 켜면 스캐너보다 엄격해져 두 화면의 후보가 갈라진다.
+useTrendFilter = input.bool(false, "4h 200선 위에서만 진입 (스캐너에 없는 추가 필터)",
+     tooltip = "재적합에서 장기선은 채점에서 빠졌다. 켜면 이 지표가 스캐너보다 엄격해진다.", group = grpQuality)
+
+grpExit = "파는 방식 (스캐너 필터 바와 동일)"
+usePartial = input.bool(true, "TP1 에서 절반 익절 + 손절을 본전으로",
+     tooltip = "실측: 절반 익절은 평균 +0.089R·승률 49%·MDD -19.5R, 끝까지 버티기는 +0.146R·승률 37%·MDD -37.6R. 덜 벌고 덜 아픈 쪽이 기본값이다.", group = grpExit)
+
+// ---- 상수 (config.earlyDetect / earlyScoreWeights) ----
+E_BOX_LOOKBACK = 60     // 박스 판정 봉 수 (4h × 60 ≈ 10일) — 채점 아님, 구간 표시용
+E_MOM_BARS = 84         // 14일 = 4시간봉 84봉
+E_DEAD_ZONE = 15.0      // |14일 수익률| 이 % 미만 = momentum 0점
+E_MOM_FULL = 60.0       // 이 % 이상이면 momentum 만점
+E_CHG_MIN = 5.0         // |24시간 변동| 이 % 이상부터 가점
+E_CHG_FULL = 20.0       // 이 % 이상이면 change24h 만점
+E_FRESH_FULL = 200.0    // 상장 이 일수 이하 = freshness 만점
+E_FRESH_ZERO = 800.0    // 이 일수 이상 = 0점
+E_AGE_UNKNOWN = 400.0   // 상장일 미상 대체값 (재적합에서 쓴 값)
+E_MIN_QUOTE_VOL = 5000000.0  // 24h 거래대금 이 값 미만이면 감점
+E_BREAK_REL_VOL = 2.0   // 3단계 돌파 상대거래량
+E_BREAK_MAX_RUN = 15.0  // 돌파 후 상승폭 상한 % (초입만)
+E_PUMPED_MAX = 40.0     // 24h 이 % 초과 상승 = 이미 감, 제외
+E_MIN_SCORE = 40.0      // config.earlyMinScore
+// 2026-07-29 격자 탐색(research/sweep-exits.mjs) — 박스 기반 손절을 버리고 순수 ATR 배수로.
+// 박스 손절은 둘 중 좁은 쪽이 채택돼 목표 도달 전에 먼저 맞았다(+0.017R → +0.084R).
+E_STOP_ATR = 4.0        // 손절 = 진입 - ATR × 이 배수
+E_TARGET_R = 4.0        // 주 목표(tp2) = 리스크 × 이 배수
+// 2026-07-29 MFE 진단(research/mfe.mjs) — 시간 만료 667건 중 41% 가 +1R 을 찍고 되돌아왔다.
+E_PARTIAL_R = 1.0       // 이 배수에서 일부 익절 + 손절을 본전으로
+E_PARTIAL_FRAC = 0.5    // 그때 청산하는 비중
+
+EW_MOM = 45.0
+EW_CHG = 32.0
+EW_FRESH = 23.0
+EP_THIN = -10.0
+
+C_MODE2 = color.rgb(245, 158, 11)
+
+// ============================================================================
+// 4시간봉 계산 — core/early-detect.js buildEarlyMetrics 포팅
+// ============================================================================
+f_early4h() =>
+    float boxHigh = ta.highest(high, E_BOX_LOOKBACK)
+    float boxLow = ta.lowest(low, E_BOX_LOOKBACK)
+
+    // 14일 추세 강도. 부호가 아니라 크기가 신호라 절대값을 쓴다(상승·하락 양쪽 다 선행).
+    float mom14 = not na(close[E_MOM_BARS]) and close[E_MOM_BARS] != 0 ?
+         (close - close[E_MOM_BARS]) / close[E_MOM_BARS] * 100 : na
+    float change24h = not na(close[6]) and close[6] != 0 ? (close - close[6]) / close[6] * 100 : na
+    // 24시간 거래대금 근사 — 4h 6봉의 (거래량 × 종가) 합. 스캐너는 티커 quoteVolume 을 쓴다.
+    float quoteVol24 = math.sum(volume * close, 6)
+
+    float avgVol = ta.sma(volume, 20)
+    float relVol = not na(avgVol) and avgVol > 0 ? volume / avgVol : na
+    float relVol3 = ta.sma(relVol, 3)
+
+    // 돌파 = 직전 봉까지의 박스 상단을 현재 종가가 넘었는가
+    float prevBoxHigh = ta.highest(high, E_BOX_LOOKBACK)[1]
+    bool breakoutClose = not na(prevBoxHigh) and close > prevBoxHigh
+    float runFromBreak = not na(prevBoxHigh) and prevBoxHigh > 0 ? (close - prevBoxHigh) / prevBoxHigh * 100 : 0.0
+
+    float atrVal = ta.atr(14)
+    bool atrRising = not na(atrVal) and not na(atrVal[5]) and atrVal > atrVal[5]
+    float ema200v = ta.ema(close, 200)
+
+    [close, boxHigh, boxLow, mom14, change24h, quoteVol24, relVol3,
+     breakoutClose, runFromBreak, atrRising, atrVal, ema200v]
+
+// 단계 (classifyEarlyStage 포팅). 0 = 어디에도 안 걸림 = 후보 아님.
+// 매집(압축+거래량 고갈) 게이트는 제거했다 — 표본 외 리프트가 0.64~1.72x 로 흩어졌다.
+// 움직임 요인 2개(14일 추세·24시간 변동)의 히트 수로 나눈다.
+f_earlyStage(mom14, change24h, breakoutClose, relVol3, atrRising, runFromBreak) =>
+    int hits = (not na(mom14) and math.abs(mom14) >= E_DEAD_ZONE ? 1 : 0) +
+         (not na(change24h) and math.abs(change24h) >= E_CHG_MIN ? 1 : 0)
+    int st = hits >= 2 ? 2 : hits >= 1 ? 1 : 0
+    if breakoutClose and not na(relVol3) and relVol3 >= E_BREAK_REL_VOL and atrRising
+        st := runFromBreak <= E_BREAK_MAX_RUN ? 3 : 0
+    st
+
+// 채점 (scoreEarly 포팅 — 변형 D 3요인).
+// 핵심 소계 하한은 없다. 3요인 전부 검증된 요인이라 보조 항목으로 총점을 부풀릴 구멍이
+// 없고, 단독 최대인 freshness 23점은 표시 하한 40 을 못 넘는다.
+f_earlyScore(mom14, change24h, ageDays, quoteVol24) =>
+    float momGot = na(mom14) ? 0.0 :
+         EW_MOM * math.max(0.0, math.min(1.0, (math.abs(mom14) - E_DEAD_ZONE) / (E_MOM_FULL - E_DEAD_ZONE)))
+    float chgGot = na(change24h) ? 0.0 :
+         EW_CHG * math.max(0.0, math.min(1.0, (math.abs(change24h) - E_CHG_MIN) / (E_CHG_FULL - E_CHG_MIN)))
+    float age = na(ageDays) ? E_AGE_UNKNOWN : ageDays
+    float freshGot = EW_FRESH * (1 - math.max(0.0, math.min(1.0, (age - E_FRESH_FULL) / (E_FRESH_ZERO - E_FRESH_FULL))))
+    float s = momGot + chgGot + freshGot
+    s += na(quoteVol24) or quoteVol24 < E_MIN_QUOTE_VOL ? EP_THIN : 0.0
+    math.max(0.0, math.min(100.0, math.round(s)))
+
+// 등급 (config.earlyGrades) — 검증셋 리프트 계단 8.25x / 4.57x / 3.35x / 2.03x 에 맞춘 경계
+f_earlyGrade(score) =>
+    score >= 70 ? "강한 후보" : score >= 55 ? "관심 후보" : score >= 40 ? "관찰 후보" : score >= 25 ? "조건 부족" : "제외"
+
+// 점수 구간별 실측 적중률 — "이후 7일 내 24시간 +40% 이상" (검증셋 17,597행, 기준선 3.57%)
+f_hitRate(score) =>
+    score >= 70 ? "29%" : score >= 55 ? "16%" : score >= 40 ? "12%" : score >= 25 ? "7%" : "2%"
+
+// ============================================================================
+// 데이터 — 차트 시간봉과 무관하게 4h 고정
+// ============================================================================
+[ePrice, eBoxHigh, eBoxLow, eMom14, eChange24h, eQuoteVol24, eRelVol3,
+ eBreakout, eRunFromBreak, eAtrRising, eAtr4, eEma200] =
+     request.security(syminfo.tickerid, "240", f_early4h(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// 상장 경과일 — 일봉 개수로 센다(암호화폐는 휴장이 없어 봉 수 ≈ 경과일).
+eAgeDays = request.security(syminfo.tickerid, "1D", ta.cum(1), barmerge.gaps_off, barmerge.lookahead_off)
+
+// ============================================================================
+// 조립 — buildEarlyResult 순서 그대로
+// ============================================================================
+// 제외 사유 (earlyExclusion). 펀딩 과열 제외는 재적합에서 삭제됐다.
+bool eExcluded = not na(eChange24h) and eChange24h > E_PUMPED_MAX
+eStage = f_earlyStage(eMom14, eChange24h, eBreakout, eRelVol3, eAtrRising, eRunFromBreak)
+eScoreRaw = f_earlyScore(eMom14, eChange24h, eAgeDays, eQuoteVol24)
+// 단계에 안 걸리거나 제외면 후보가 아니다 → 점수 0 으로 눌러 진입 조건에서 자동 탈락
+eScore = (eExcluded or eStage == 0) ? 0.0 : eScoreRaw
+eGrade = f_earlyGrade(eScore)
+
+// 진입 계획 (earlyPlan) — 순수 ATR 배수 손절 + R 배수 목표.
+eSpan = math.max(eBoxHigh - eBoxLow, 0.000000001)
+eEntry = ePrice
+eStop = nz(eAtr4) > 0 ? eEntry - eAtr4 * E_STOP_ATR : math.min(eBoxLow, eEntry) - eEntry * 0.001
+eRisk = math.max(eEntry - eStop, 0.000000001)
+eTp1 = eEntry + eRisk * E_PARTIAL_R
+eTp2 = eEntry + eRisk * E_TARGET_R
+eRR = (eTp2 - eEntry) / eRisk
+
+// ============================================================================
+// 트레이드 상태 기계 — 진입 시점에 표시, 목표2/손절 도달 전까지 라인 유지
+// (마감 확정봉 기준. 진입봉 자체는 청산 판정에서 제외)
+// ============================================================================
+var bool inTrade = false
+var float tEntry = na
+var float tStop = na
+var float tTp1 = na
+var float tTp2 = na
+var bool tPartial = false   // TP1 에서 절반 뺐는가 (손절이 본전으로 올라갔는가)
+var int tResult = 0         // 0=진행/없음, 1=목표 도달, 2=본전 청산, -1=손절
+var int lastStopBar = na
+var int lastEntryBar = na
+
+bool trendOk = not useTrendFilter or (not na(eEma200) and ePrice > eEma200)
+bool stageOk = eStage >= minStageInput
+bool scoreOk = eScore >= minScoreInput
+bool cooldownOk = na(lastStopBar) or (bar_index - lastStopBar) > cooldownBars
+bool gapOk = minEntryGap <= 0 or na(lastEntryBar) or (bar_index - lastEntryBar) >= minEntryGap
+// 노이즈 필터는 쓰지 않는다 — 스캐너 ui/settings.applyFilters 도 early 모드에선 건너뛴다.
+
+bool canEnter = showPlan and barstate.isconfirmed and scoreOk and stageOk and trendOk and cooldownOk and gapOk and not inTrade
+bool justEntered = canEnter
+if canEnter
+    lastEntryBar := bar_index
+    inTrade := true
+    tEntry := eEntry
+    tStop := eStop
+    tTp1 := eTp1
+    tTp2 := eTp2
+    tPartial := false
+    tResult := 0
+
+// 청산 판정 — 롱 전용. 손절을 목표보다 먼저 본다(봉 내부 순서를 알 수 없다).
+var bool partialEvent = false
+partialEvent := false
+if inTrade and not justEntered and barstate.isconfirmed
+    if low <= tStop
+        inTrade := false
+        tResult := tPartial ? 2 : -1
+        // 본전 청산은 손실이 아니므로 쿨다운을 걸지 않는다.
+        if not tPartial
+            lastStopBar := bar_index
+    else
+        if usePartial and not tPartial and high >= tTp1
+            tPartial := true
+            tStop := tEntry          // 손절을 본전으로
+            partialEvent := true
+        if high >= tTp2
+            inTrade := false
+            tResult := 1
+
+bool exitEvent = not inTrade and inTrade[1]
+
+// ---- 표시 ----
+plotshape(canEnter, "진입", style = shape.diamond, location = location.belowbar,
+     color = C_MODE2, size = size.small, text = "조기")
+plotshape(partialEvent, "TP1 절반 익절", style = shape.circle, location = location.abovebar,
+     color = color.rgb(34, 211, 238), size = size.tiny, text = "절반")
+plotshape(exitEvent and tResult == 1, "익절", style = shape.xcross, location = location.abovebar,
+     color = color.rgb(34, 197, 94), size = size.tiny, text = "익절")
+plotshape(exitEvent and tResult == 2, "본전 청산", style = shape.xcross, location = location.belowbar,
+     color = color.rgb(150, 150, 150), size = size.tiny, text = "본전")
+plotshape(exitEvent and tResult == -1, "손절 청산", style = shape.xcross, location = location.belowbar,
+     color = color.rgb(255, 77, 109), size = size.tiny, text = "손절")
+
+plot(inTrade ? tEntry : na, "진입가", color = C_MODE2, style = plot.style_linebr, linewidth = 2)
+plot(inTrade ? tStop : na, "손절선", color = color.rgb(255, 77, 109), style = plot.style_linebr, linewidth = 2)
+plot(inTrade ? tTp1 : na, "TP1 (절반)", color = color.rgb(34, 211, 238), style = plot.style_linebr, linewidth = 1)
+plot(inTrade ? tTp2 : na, "TP2 (목표)", color = color.rgb(34, 197, 94), style = plot.style_linebr, linewidth = 1)
+
+// ---- 박스 (4h·60봉) + 돌파 밴드 ----
+var box zoneBox = na
+var box zoneBreak = na
+var label zoneLbl = na
+
+if barstate.islast
+    box.delete(zoneBox)
+    box.delete(zoneBreak)
+    label.delete(zoneLbl)
+    int rightX = bar_index + 12
+    // 차트 초반엔 bar_index 가 작아 왼쪽 좌표가 음수가 되면 런타임 오류가 난다
+    int leftX = math.max(bar_index - 150, 0)
+    if showZones and not na(eBoxHigh) and not na(eBoxLow)
+        zoneBox := box.new(leftX, eBoxHigh, rightX, eBoxLow,
+             border_color = C_MODE2, border_width = 1, border_style = line.style_dashed,
+             bgcolor = color.new(C_MODE2, 94))
+        // 돌파 밴드 — 박스 상단에서 박스 폭 10% 까지. 여기를 종가로 넘으면 3단계 돌파.
+        zoneBreak := box.new(leftX, eBoxHigh + eSpan * 0.1, rightX, eBoxHigh,
+             border_color = C_MODE2, border_width = 2, border_style = line.style_solid,
+             bgcolor = color.new(C_MODE2, 80))
+        zoneLbl := label.new(rightX, eBoxLow, "조기 포착 박스 (4h·60봉) · 상단 = 돌파",
+             style = label.style_label_left, color = color.new(C_MODE2, 20),
+             textcolor = color.white, size = size.small)
+
+// ---- 요약 표 ----
+f_tablePos(s) =>
+    s == "왼쪽 위" ? position.top_left : s == "왼쪽 가운데" ? position.middle_left : s == "왼쪽 아래" ? position.bottom_left : s == "오른쪽 위" ? position.top_right : s == "오른쪽 가운데" ? position.middle_right : s == "오른쪽 아래" ? position.bottom_right : s == "가운데 위" ? position.top_center : position.bottom_center
+f_tableSize(s) =>
+    s == "아주 작게" ? size.tiny : s == "작게" ? size.small : s == "크게" ? size.large : size.normal
+dashSz = f_tableSize(tableSizeInput)
+f_stageLabel(st) =>
+    st == 3 ? "3 돌파" : st == 2 ? "2 임박" : st == 1 ? "1 관찰" : "해당 없음"
+
+var table t = table.new(f_tablePos(tablePosInput), 2, 10, bgcolor = color.new(color.rgb(14, 19, 29), 10), border_width = 1)
+if showTable and barstate.islast
+    table.cell(t, 0, 0, "모드", text_color = color.white, bgcolor = color.rgb(30, 34, 45), text_size = dashSz)
+    table.cell(t, 1, 0, "조기 포착 (early)", text_color = C_MODE2, bgcolor = color.rgb(30, 34, 45), text_size = dashSz)
+    table.cell(t, 0, 1, "점수", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 1, str.tostring(eScore) + " (" + eGrade + ")",
+         text_color = scoreOk ? color.rgb(18, 153, 91) : color.rgb(150, 150, 150), text_size = dashSz)
+    table.cell(t, 0, 2, "급등확률 (7일 내 24h +40%)", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 2, f_hitRate(eScore) + " (무작위 3.57%)", text_color = color.white, text_size = dashSz)
+    table.cell(t, 0, 3, "단계", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 3, f_stageLabel(eStage) + (eExcluded ? " · 이미 급등(제외)" : ""),
+         text_color = eExcluded ? color.rgb(255, 179, 71) : color.white, text_size = dashSz)
+    table.cell(t, 0, 4, "14일 · 24h · 상장", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 4, (na(eMom14) ? "-" : str.tostring(eMom14, "#.#") + "%") + " · " +
+         (na(eChange24h) ? "-" : str.tostring(eChange24h, "#.#") + "%") + " · " +
+         (na(eAgeDays) ? "-" : str.tostring(eAgeDays, "#") + "일"),
+         text_color = na(eMom14) ? color.rgb(255, 179, 71) : color.white, text_size = dashSz)
+    table.cell(t, 0, 5, inTrade ? "진입(보유중)" : "진입", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 5, str.tostring(inTrade ? tEntry : eEntry, "#.########"), text_color = C_MODE2, text_size = dashSz)
+    table.cell(t, 0, 6, tPartial ? "손절(본전으로 이동)" : "손절", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 6, str.tostring(inTrade ? tStop : eStop, "#.########"),
+         text_color = tPartial ? color.gray : color.rgb(255, 77, 109), text_size = dashSz)
+    table.cell(t, 0, 7, "TP1 (절반 익절)", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 7, str.tostring(inTrade ? tTp1 : eTp1, "#.########") + (usePartial ? "" : " (미사용)"),
+         text_color = usePartial ? color.rgb(34, 211, 238) : color.gray, text_size = dashSz)
+    table.cell(t, 0, 8, "TP2 (목표) · 손익비", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 8, str.tostring(inTrade ? tTp2 : eTp2, "#.########") + " · 1:" + str.tostring(eRR, "#.##"),
+         text_color = color.white, text_size = dashSz)
+    table.cell(t, 0, 9, "비고", text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 9, "스캐너와 계산 동일 · 상장일만 차트 이력 의존",
+         text_color = color.gray, text_size = dashSz)

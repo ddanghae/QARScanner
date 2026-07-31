@@ -1,39 +1,30 @@
-//@version=6
-indicator("QAR·ICT Scanner 연동 지표", shorttitle = "QAR·ICT Sync", overlay = true,
-     max_lines_count = 50, max_labels_count = 300, max_boxes_count = 20)
+﻿//@version=6
+indicator("QAR 급락 반등 (reversal)", shorttitle = "QAR reversal", overlay = true,
+     max_lines_count = 50, max_labels_count = 50, max_boxes_count = 20)
 
 // ============================================================================
-// QARScanner(js/core/*, js/scanner/deep-scanner.js, js/config.js) 채점 로직을
-// 그대로 옮긴 단일 심볼용 지표. 코인신호기에서 코인 클릭 → 트레이딩뷰 이동 시
-// 같은 점수·단계·진입/손절/목표를 이 차트에서 그대로 확인하기 위함.
+// QARScanner 급락 반등 모드(scanMode = "reversal") 단일 심볼 이식.
+// 스캐너에서 코인을 클릭해 들어왔을 때 같은 점수·단계·진입/손절/목표를 이 차트에서
+// 그대로 확인하기 위한 지표. 조기 포착 모드는 별도 파일(qar_early.pine).
 //
-// 스캐너의 두 모드를 모두 포팅하고, 진입 구간을 서로 다르게 그린다.
-//   모드 1 급락 반등(reversal) — 1h·15m·5m 구조/유동성 스윕 기반.
-//     진입 구간 = 15분봉 FVG·오더블록 구간(보라 실선 박스), 진입 표시 = 삼각형.
-//   모드 2 조기 포착(early) — 4h 기준 |14일 수익률|·|24시간 변동|·상장 경과일 3요인.
-//     진입 구간 = 4h 박스(주황 점선 박스) + 박스 상단 돌파 밴드, 진입 표시 = 다이아몬드.
+// 1h·15m·5m 구조(BOS/CHoCH)·유동성 스윕·FVG·오더블록 기반.
+// 진입 구간 = 15분봉 FVG·오더블록 구간(보라 실선 박스), 진입 표시 = 삼각형.
 // 시간봉은 차트와 무관하게 QARScanner 와 동일하게 4h·1h·15m·5m 고정 사용.
 //
 // [데이터 한계] Binance taker buy/sell 체결량 분리는 TradingView 일반 심볼에서
 // 얻을 수 없음. CVD·거래량Delta·흡수 추정은 캔들 내 종가 위치 기반 근사치이며
 // 원본(QARScanner, 실제 taker 데이터) 과 값이 다를 수 있음 — 구조/유동성/FVG/OB/
 // 리스크리워드/점수공식/골든크로스리테스트는 동일 공식 그대로 포팅됨.
-// 모드 2 는 2026-07-26 재적합(변형 D) 이후 펀딩·미결제약정을 쓰지 않는다. 둘 다
-// TradingView 에서 읽기 어려웠던 항목인데 다변량에서 기여가 0 으로 나와 스캐너에서도
-// 빠졌다 — 이제 모드 2 는 스캐너와 계산이 완전히 같다(근사·생략 없음).
-// 단, 상장 경과일만 일봉 개수로 세므로 차트 이력이 800일 미만이면 값이 짧게 나온다.
+//
+// [주의] 이 모드의 가중치·감점은 아직 재적합 전이다. early 모드처럼 데이터로 뽑은 값이
+// 아니라 최초 설계값이고, 등급 밴드만 실측으로 맞춰뒀다(PROGRESS 9번).
 // ============================================================================
 
 // ---- 입력 ----
-grpMode = "스캔 모드 (QARScanner 필터 바와 동일)"
-modeInput = input.string("전부", "모드", options = ["1 급락 반등", "2 조기 포착", "3 추세 추종", "전부"],
-     tooltip = "1 급락 반등 = 스캐너 reversal 모드(1h·15m·5m 구조/스윕). 2 조기 포착 = early 모드(4h |14일 수익률|·|24시간 변동|·상장 경과일). 진입 구간이 서로 다른 색·모양으로 그려진다. '둘 다' 는 두 구간을 함께 표시하고, 진입 표시는 먼저 조건이 맞는 쪽 하나만 잡는다(모드 1 우선).", group = grpMode)
+grpMode = "표시 대상"
 showZones = input.bool(true, "진입 구간 박스 표시", group = grpMode)
-showEntryLabel = input.bool(true, "진입 라벨 표시 (어느 스캐너인지)", group = grpMode,
-     tooltip = "진입 시점에 [모드 · 점수 · 등급 · 단계 · 손익비] 를 글자로 붙입니다. 화살표 모양만으로는 어느 모드인지 외워야 알 수 있어, 그 자리에서 바로 판단할 수 있게 합니다.")
-entryLabelSizeInput = input.string("작게", "진입 라벨 크기", options = ["아주 작게", "작게", "보통"], group = grpMode)
 useCoreGate = input.bool(true, "핵심 신호 소계 하한 적용 (스캐너와 동일)",
-     tooltip = "모드 1 전용. 스윕·스윕회수·1h구조전환·FVG/OB 합 50점 중 40% 이상을 요구해, 쉬운 보조 항목만으로 총점이 올라 진입이 잡히는 것을 막는다. 끄면 총점만 본다. 모드 2 는 채점 3요인이 전부 검증 요인이라 소계 하한이 없다.", group = grpMode)
+     tooltip = "스윕·스윕회수·1h구조전환·FVG/OB 합 50점 중 40% 이상을 요구해, 쉬운 보조 항목만으로 총점이 올라 진입이 잡히는 것을 막는다. 끄면 총점만 본다.", group = grpMode)
 
 grpDir = "방향"
 dirInput = input.string("자동(높은 점수)", "방향", options = ["자동(높은 점수)", "롱만", "숏만"], group = grpDir)
@@ -120,66 +111,6 @@ MIN_STOP_PCT = 0.5
 
 // 핵심 소계 하한 (config.reversalCoreMinPct / earlyCoreMinPct — 둘 다 40)
 CORE_MIN_PCT = 40.0
-
-// ---- 조기 포착(모드 2) 상수 — config.earlyDetect / earlyScoreWeights ----
-// 2026-07-26 재적합(변형 D). 57,720행 시간순 70/30 분할, 학습셋에서만 변형 선택.
-// 검증셋 상위3 리프트 10.71x (기존 5요인 6.04x). 원자료·재현: QARScanner/research/
-// 압축·거래량 고갈·미결제약정·박스 위치·장기선은 전부 뺐다 — 다변량에서 기여가 0 이었다.
-E_BOX_LOOKBACK = 60     // 박스 판정 봉 수 (4h × 60 ≈ 10일) — 채점 아님, 구간 표시용
-E_MOM_BARS = 84         // 14일 = 4시간봉 84봉
-E_DEAD_ZONE = 15.0      // |14일 수익률| 이 % 미만 = momentum 0점
-E_MOM_FULL = 60.0       // 이 % 이상이면 momentum 만점
-E_CHG_MIN = 5.0         // |24시간 변동| 이 % 이상부터 가점
-E_CHG_FULL = 20.0       // 이 % 이상이면 change24h 만점
-E_FRESH_FULL = 200.0    // 상장 이 일수 이하 = freshness 만점
-E_FRESH_ZERO = 800.0    // 이 일수 이상 = 0점
-E_AGE_UNKNOWN = 400.0   // 상장일 미상 대체값 (재적합에서 쓴 값)
-E_MIN_QUOTE_VOL = 5000000.0  // 24h 거래대금 이 값 미만이면 감점
-E_BREAK_REL_VOL = 2.0   // 3단계 돌파 상대거래량
-E_BREAK_MAX_RUN = 15.0  // 3단계 돌파 후 상승폭 상한 %
-E_PUMPED_MAX = 40.0     // 24h 이 % 초과 = 이미 급등, 제외
-E_MIN_SCORE = 40.0      // early 표시 하한 (config.earlyMinScore) — reversal 의 강도 문턱과 별개
-E_STOP_ATR = 4.0        // 손절 = 진입 - ATR × 이 배수 (격자 탐색 결과, 박스 기준 폐기)
-E_TARGET_R = 4.0        // 주 목표(tp2) = 리스크 × 이 배수
-E_PARTIAL_R = 1.0       // 이 배수에서 일부 익절 + 손절을 본전으로 (MFE 측정, config 주석 참고)
-
-EW_MOM = 45.0           // |14일 수익률| (U자 — 크게 오르거나 크게 빠진 쪽)
-EW_CHG = 32.0           // |24시간 변동|
-EW_FRESH = 23.0         // 신규 상장일수록 가점
-EP_THIN = -10.0         // 거래대금 부족
-
-// ---- 추세 추종(모드 3) 상수 — config.trendFollow / trendGrades ----
-// 2026-07-30 측정. 529종목 57,796건, 시간순 70/30, 검증셋 n=17,606 (기준 급등률 3.25%).
-// 상위 N/일 리프트: N=3 7.46x · N=5 8.27x · N=10 6.13x.
-// 조기 포착과 상위 5/일 겹침이 43% 뿐이라 별도 모드로 둔다 — 같은 것을 두 번 세는 게 아니다.
-//
-// 모드 2 와 결정적으로 다른 점: 모드 2 는 |14일 수익률| 처럼 **절대값**을 쓴다(방향 무관,
-// 재적합에서 그게 이겼다). 여기는 부호를 본다. 내려가는 것에 점수를 주면 추세 추종이 아니다.
-T_MOM_MIN = 10.0        // 14일 **상승률** 이 % 부터 가점 (음수면 0점)
-T_MOM_FULL = 60.0       // 이 % 이상이면 만점
-T_CHG_MIN = 3.0         // 24시간 **상승률** 이 % 부터 가점
-T_CHG_FULL = 25.0       // 이 % 이상이면 만점
-T_VOL_RECENT_N = 20     // 최근 거래량 평균 구간 (config.earlyDetect.volRecentN)
-T_VOL_PRIOR_N = 60      // 비교 대상 이전 구간 (config.earlyDetect.volPriorN)
-T_VOL_MIN = 1.2         // 거래량 확장 배수 하한
-T_VOL_FULL = 4.0        // 이 배수 이상이면 만점
-T_RUNAWAY = 120.0       // 24h 이 % 이상 = 과열(3단계). 감점 대상
-T_RUNAWAY_PEN = -20.0
-T_MIN_QUOTE_VOL = 5000000.0
-T_THIN_PEN = -10.0
-// 2026-07-30 청산 스윕(research/trend-exits.mjs, 54조합 1,887신호):
-// 고정 4R 이 트레일링을 이겼다. 평균 0.119R·PF 1.21 vs 순수 트레일 0.037R·PF 1.06.
-// 급등이 매끄러운 추세가 아니라 스파이크라 트레일이 늘 늦게 잡힌다. 그래서 모드 2 와 같은 값을 쓴다.
-T_STOP_ATR = 4.0
-T_TARGET_R = 4.0
-T_PARTIAL_R = 1.0
-// 같은 스윕의 점수 구간별: 40-54 는 평균 -0.009R(본전), 55-69 +0.103R, 70+ +0.282R.
-// 그래서 표시 하한이 모드 2(40)보다 높다 — 40점대는 벌지 못한다.
-T_MIN_SCORE = 55.0
-
-TW_MOM = 45.0           // 14일 상승 추세
-TW_CHG = 35.0           // 24시간 상승
-TW_VOL = 20.0           // 거래량 확장
 
 // ---- 배열 유틸 ----
 f_nearestAbove(arr, price) =>
@@ -552,91 +483,6 @@ f_shortPlan(price, fvgMid, obMid, vwap1h, ema20_15v, internalLow, majorLow1h, se
     [entry, stop, tp1, tp2, tp3, rr]
 
 // ============================================================================
-// 조기 포착(모드 2) — core/early-detect.js 포팅. 4시간봉 고정.
-// ============================================================================
-// 14일 추세·24시간 변동·거래대금·박스·돌파 판정을 한 번에 반환.
-f_early4h() =>
-    float boxHigh = ta.highest(high, E_BOX_LOOKBACK)
-    float boxLow = ta.lowest(low, E_BOX_LOOKBACK)
-
-    // 14일 추세 강도. 부호가 아니라 크기가 신호라 절대값을 쓴다(상승·하락 양쪽 다 선행).
-    float mom14 = not na(close[E_MOM_BARS]) and close[E_MOM_BARS] != 0 ?
-         (close - close[E_MOM_BARS]) / close[E_MOM_BARS] * 100 : na
-    float change24h = not na(close[6]) and close[6] != 0 ? (close - close[6]) / close[6] * 100 : na
-    // 24시간 거래대금 근사 — 4h 6봉의 (거래량 × 종가) 합. 스캐너는 티커 quoteVolume 을 쓴다.
-    float quoteVol24 = math.sum(volume * close, 6)
-
-    float avgVol = ta.sma(volume, 20)
-    float relVol = not na(avgVol) and avgVol > 0 ? volume / avgVol : na
-    float relVol3 = ta.sma(relVol, 3)
-
-    // 돌파 = 직전 봉까지의 박스 상단을 현재 종가가 넘었는가
-    float prevBoxHigh = ta.highest(high, E_BOX_LOOKBACK)[1]
-    bool breakoutClose = not na(prevBoxHigh) and close > prevBoxHigh
-    float runFromBreak = not na(prevBoxHigh) and prevBoxHigh > 0 ? (close - prevBoxHigh) / prevBoxHigh * 100 : 0.0
-
-    float atrVal = ta.atr(14)
-    bool atrRising = not na(atrVal) and not na(atrVal[5]) and atrVal > atrVal[5]
-
-    [close, boxHigh, boxLow, mom14, change24h, quoteVol24, relVol3,
-     breakoutClose, runFromBreak, atrRising, atrVal]
-
-// 단계 (early-detect.js classifyEarlyStage 포팅). 0 = 어디에도 안 걸림 = 후보 아님.
-// 매집(압축+거래량 고갈) 게이트는 제거했다 — 표본 외 리프트가 0.64~1.72x 로 흩어졌다.
-// 움직임 요인 2개(14일 추세·24시간 변동)의 히트 수로 나눈다.
-f_earlyStage(mom14, change24h, breakoutClose, relVol3, atrRising, runFromBreak) =>
-    int hits = (not na(mom14) and math.abs(mom14) >= E_DEAD_ZONE ? 1 : 0) +
-         (not na(change24h) and math.abs(change24h) >= E_CHG_MIN ? 1 : 0)
-    int st = hits >= 2 ? 2 : hits >= 1 ? 1 : 0
-    if breakoutClose and not na(relVol3) and relVol3 >= E_BREAK_REL_VOL and atrRising
-        st := runFromBreak <= E_BREAK_MAX_RUN ? 3 : 0
-    st
-
-// 채점 (early-detect.js scoreEarly 포팅 — 변형 D 3요인).
-// 핵심 소계 하한은 없앴다. 3요인 전부 검증된 요인이라 보조 항목으로 총점을 부풀릴 구멍이
-// 없고, 단독 최대인 freshness 23점은 표시 하한 40 을 못 넘는다.
-f_earlyScore(mom14, change24h, ageDays, quoteVol24) =>
-    float momGot = na(mom14) ? 0.0 :
-         EW_MOM * math.max(0.0, math.min(1.0, (math.abs(mom14) - E_DEAD_ZONE) / (E_MOM_FULL - E_DEAD_ZONE)))
-    float chgGot = na(change24h) ? 0.0 :
-         EW_CHG * math.max(0.0, math.min(1.0, (math.abs(change24h) - E_CHG_MIN) / (E_CHG_FULL - E_CHG_MIN)))
-    float age = na(ageDays) ? E_AGE_UNKNOWN : ageDays
-    float freshGot = EW_FRESH * (1 - math.max(0.0, math.min(1.0, (age - E_FRESH_FULL) / (E_FRESH_ZERO - E_FRESH_FULL))))
-    float s = momGot + chgGot + freshGot
-    s += na(quoteVol24) or quoteVol24 < E_MIN_QUOTE_VOL ? EP_THIN : 0.0
-    math.max(0.0, math.min(100.0, math.round(s)))
-
-// 등급 (config.earlyGrades — 검증셋 리프트 계단 8.25x / 4.57x / 3.35x / 2.03x 에 맞춘 경계)
-f_earlyGrade(score) =>
-    score >= 70 ? "강한 후보" : score >= 55 ? "관심 후보" : score >= 40 ? "관찰 후보" : score >= 25 ? "조건 부족" : "제외"
-
-// 추세 추종(모드 3) 채점 — strategies.js scoreTrendFollow 포팅.
-// abs() 가 없는 것이 핵심이다. mom14/change24h 가 음수면 그 항목은 0점이다.
-f_trendScore(mom14, change24h, volExpand, quoteVol24) =>
-    float momGot = na(mom14) or mom14 <= 0 ? 0.0 :
-         TW_MOM * math.max(0.0, math.min(1.0, (mom14 - T_MOM_MIN) / (T_MOM_FULL - T_MOM_MIN)))
-    float chgGot = na(change24h) or change24h <= 0 ? 0.0 :
-         TW_CHG * math.max(0.0, math.min(1.0, (change24h - T_CHG_MIN) / (T_CHG_FULL - T_CHG_MIN)))
-    float ve = na(volExpand) ? 1.0 : volExpand
-    float volGot = TW_VOL * math.max(0.0, math.min(1.0, (ve - T_VOL_MIN) / (T_VOL_FULL - T_VOL_MIN)))
-    float s = momGot + chgGot + volGot
-    s += not na(change24h) and change24h >= T_RUNAWAY ? T_RUNAWAY_PEN : 0.0
-    s += na(quoteVol24) or quoteVol24 < T_MIN_QUOTE_VOL ? T_THIN_PEN : 0.0
-    math.max(0.0, math.min(100.0, math.round(s)))
-
-f_trendGrade(score) =>
-    score >= 70 ? "강한 추세" : score >= 55 ? "관심 추세" : score >= 40 ? "관찰 추세" : score >= 25 ? "약한 추세" : "제외"
-
-// 추세 단계 — 얼마나 갔나 한 축. 늦게 들어갈수록 손절폭이 커진다는 것을 알리는 용도.
-f_trendStage(change24h) =>
-    na(change24h) ? 0 : change24h >= T_RUNAWAY ? 3 : change24h >= T_CHG_FULL ? 2 : 1
-
-// 추세 제외 — 모드 2 는 "이미 급등" 을 버리지만 여기는 그게 대상이다.
-// 대신 오르지 않는 것을 버린다. 그게 이 모드의 존재 이유다.
-f_trendExcluded(mom14, change24h) =>
-    na(mom14) or mom14 <= 0 or (not na(change24h) and change24h < 0)
-
-// ============================================================================
 // 멀티타임프레임 데이터 요청 — QARScanner 와 동일하게 차트 시간봉과 무관하게 고정
 // ============================================================================
 [c1, atr1, avgVol1, relVol1, rsi1, ema20_1, vwap1, bullShift1, choch1, firstHH1, firstHL1,
@@ -663,26 +509,6 @@ f_trendExcluded(mom14, change24h) =>
 
 [c4, ema50_4, ema200_4, rsi4, gcDetected, gcHasRejection] =
      request.security(syminfo.tickerid, "240", f_trend4h(), barmerge.gaps_off, barmerge.lookahead_off)
-
-// ---- 모드 2 (조기 포착) 데이터 ----
-[ePrice, eBoxHigh, eBoxLow, eMom14, eChange24h, eQuoteVol24, eRelVol3,
- eBreakout, eRunFromBreak, eAtrRising, eAtr4] =
-     request.security(syminfo.tickerid, "240", f_early4h(), barmerge.gaps_off, barmerge.lookahead_off)
-
-// 상장 경과일 — 일봉 개수로 센다(암호화폐는 휴장이 없어 봉 수 ≈ 경과일).
-// 차트 이력이 잘리면 실제보다 짧게 나와 freshness 가 과대평가된다. 800일이 만점 소멸
-// 지점이라 그 이상 이력만 있으면 결과는 같다.
-eAgeDays = request.security(syminfo.tickerid, "1D", ta.cum(1), barmerge.gaps_off, barmerge.lookahead_off)
-
-// ---- 모드 3 (추세 추종) 데이터 ----
-// volExpand = 최근 20봉 평균 거래량 / 그 이전 60봉 평균 (early-detect.js volDryRatio 포팅).
-// 모드 2 채점에서 빠진 값이라 f_early4h 튜플에 없다. 그 함수를 건드리면 검증된 모드 2 경로를
-// 흔들게 되므로 별도 호출로 가져온다 — 같은 4시간봉이라 결과는 동일하다.
-f_volExpand4h() =>
-    float recent = ta.sma(volume, T_VOL_RECENT_N)
-    float prior = ta.sma(volume[T_VOL_RECENT_N], T_VOL_PRIOR_N)
-    prior > 0 ? recent / prior : na
-trVolExpand = request.security(syminfo.tickerid, "240", f_volExpand4h(), barmerge.gaps_off, barmerge.lookahead_off)
 
 price = c15
 
@@ -865,104 +691,31 @@ revCorePct = useLong ? corePctL : corePctS
 f_grade(score) =>
     score >= 55 ? "강한 후보" : score >= 40 ? "관심 후보" : score >= 30 ? "관찰 후보" : score >= 20 ? "조건 부족" : "제외"
 
-// ============================================================================
-// 모드 2 (조기 포착) 조립 — early-detect.js buildEarlyResult 순서 그대로
-// ============================================================================
-// 제외 사유 (earlyExclusion). 펀딩비는 TradingView 에서 못 읽지만, 재적합에서 펀딩이
-// 채점·제외 양쪽에서 빠졌으므로 이제 스캐너와 조건이 완전히 같다.
-bool eExcluded = not na(eChange24h) and eChange24h > E_PUMPED_MAX
-eStage = f_earlyStage(eMom14, eChange24h, eBreakout, eRelVol3, eAtrRising, eRunFromBreak)
-eScoreRaw = f_earlyScore(eMom14, eChange24h, eAgeDays, eQuoteVol24)
-// 단계에 안 걸리거나 제외면 후보가 아니다 → 점수 0 으로 눌러 진입 조건에서 자동 탈락
-eScore = (eExcluded or eStage == 0) ? 0.0 : eScoreRaw
-eGrade = f_earlyGrade(eScore)
+// ---- 진입 가능 판정 ----
+// 문턱은 강도 기준(f_minScore) 또는 직접 지정값. 핵심 소계 하한은 쉬운 보조 항목만으로
+// 총점이 올라 진입이 잡히는 것을 막는다(config.reversalCoreKeys / reversalCoreMinPct).
+bool revReady = revScore >= minScoreThresh and (not useCoreGate or revCorePct >= CORE_MIN_PCT)
 
-// 진입 계획 (earlyPlan) — R 배수 기반. 박스 하단을 손절로 쓰면 폭락 후 반등 후보에서
-// 박스 폭이 수백 % 라 손익비 1:24 가 찍힌다(스캐너에서 실측). ATR 배수로 상한을 건다.
-eSpan = math.max(eBoxHigh - eBoxLow, 0.000000001)
-eEntry = ePrice
-eStop = nz(eAtr4) > 0 ? eEntry - eAtr4 * E_STOP_ATR : math.min(eBoxLow, eEntry) - eEntry * 0.001
-eRisk = math.max(eEntry - eStop, 0.000000001)
-eTp1 = eEntry + eRisk * E_PARTIAL_R
-eTp2 = eEntry + eRisk * E_TARGET_R
-eRR = (eTp2 - eEntry) / eRisk
-
-// ============================================================================
-// 모드 3 (추세 추종) 조립 — strategies.js buildTrendResult 순서 그대로
-// ============================================================================
-// 진입 계획은 모드 2 와 같은 값을 쓴다. 청산 스윕(trend-exits.mjs)에서 고정 4R 이
-// 트레일링을 이겼고, 그 최적 조합이 ATR×4 · 4R · 90봉 — 모드 2 와 같은 값이었다.
-bool trExcluded = f_trendExcluded(eMom14, eChange24h)
-trStage = f_trendStage(eChange24h)
-trScoreRaw = f_trendScore(eMom14, eChange24h, trVolExpand, eQuoteVol24)
-trScore = trExcluded ? 0.0 : trScoreRaw
-trGrade = f_trendGrade(trScore)
-
-trEntry = ePrice
-trStop = nz(eAtr4) > 0 ? trEntry - eAtr4 * T_STOP_ATR : trEntry * 0.97
-trRisk = math.max(trEntry - trStop, 0.000000001)
-trTp1 = trEntry + trRisk * T_PARTIAL_R
-trTp2 = trEntry + trRisk * T_TARGET_R
-trRR = (trTp2 - trEntry) / trRisk
-
-// ---- 모드 선택 ----
-bool mode1On = modeInput == "1 급락 반등" or modeInput == "전부"
-bool mode2On = modeInput == "2 조기 포착" or modeInput == "전부"
-bool mode3On = modeInput == "3 추세 추종" or modeInput == "전부"
-// 각 모드의 자체 문턱: 모드 1 = 강도 기준, 모드 2 = config.earlyMinScore(40) 고정.
-// early 는 점수대가 달라 reversal 의 minScore·강도를 그대로 쓸 수 없다.
-// 모드 2 는 핵심 소계 하한이 없다(3요인 전부 검증 요인) — useCoreGate 는 모드 1 전용.
-// 모드 3 은 표시 하한이 55 다 — 청산 스윕에서 40점대가 평균 -0.009R(본전)이었다.
-bool rev1Ready = mode1On and revScore >= minScoreThresh and (not useCoreGate or revCorePct >= CORE_MIN_PCT)
-bool early2Ready = mode2On and eScore >= E_MIN_SCORE
-bool trend3Ready = mode3On and trScore >= T_MIN_SCORE
-
-// 표시용 대표값. 우선순위 1 → 3 → 2:
-//   모드 1 이 먼저인 이유는 구조(스윕·CHoCH)까지 확인된 신호라 근거가 가장 두껍기 때문.
-//   모드 3 이 2 보다 먼저인 이유는 검증셋 상위 5/일 리프트가 8.27x 로 40점대 early 보다 높고,
-//   둘이 동시에 뜨면 "지금 오르는 중" 이라는 사실이 더 구체적인 정보이기 때문이다.
-// 켜진 모드가 하나뿐이면 조건 미달이어도 그 모드 값을 보여준다 — 다른 모드 숫자가 뜨면 오해한다.
-int activeMode = rev1Ready ? 1 : trend3Ready ? 3 : early2Ready ? 2 :
-     mode1On ? 1 : mode3On ? 3 : 2
-bool useEarly = activeMode == 2
-bool useTrend = activeMode == 3
-
-finalScore = useTrend ? trScore : useEarly ? eScore : revScore
-finalStage = useTrend ? trStage : useEarly ? eStage : revStage
-finalDir = (useTrend or useEarly) ? "LONG" : revDir      // early·trend 는 롱 전용
-finalEntry = useTrend ? trEntry : useEarly ? eEntry : revEntry
-finalStop = useTrend ? trStop : useEarly ? eStop : revStop
-finalTp1 = useTrend ? trTp1 : useEarly ? eTp1 : revTp1
-finalTp2 = useTrend ? trTp2 : useEarly ? eTp2 : revTp2
-finalRR = useTrend ? trRR : useEarly ? eRR : revRR
-finalGrade = useTrend ? trGrade : useEarly ? eGrade : f_grade(revScore)
-passesStrictness = useTrend ? trend3Ready : useEarly ? early2Ready : rev1Ready
-
-// 진입 라벨에 쓸 모드 이름 — "어떤 스캐너의 진입인지" 를 화살표 모양이 아니라 글자로 못 박는다.
-entryLabelSize = entryLabelSizeInput == "아주 작게" ? size.tiny : entryLabelSizeInput == "보통" ? size.normal : size.small
-string modeName = activeMode == 1 ? "급락반등" : activeMode == 3 ? "추세추종" : "조기포착"
-string modeTag = activeMode == 1 ? "①" : activeMode == 3 ? "③" : "②"
-color modeColor = activeMode == 1 ? color.new(#7e57c2, 0) : activeMode == 3 ? color.new(#26a69a, 0) : color.new(#ff9800, 0)
-// 단계 이름도 모드마다 다르다 — 같은 "2" 가 모드마다 다른 뜻이라 숫자만 보이면 오독한다.
-string stageName = activeMode == 1 ?
-     (finalStage == 5 ? "추격금지" : finalStage == 4 ? "진입구간" : finalStage == 3 ? "구조전환" : finalStage == 2 ? "유동성회수" : "매집") :
-     activeMode == 3 ?
-     (finalStage == 3 ? "과열" : finalStage == 2 ? "진행" : "초기") :
-     (finalStage == 3 ? "돌파" : finalStage == 2 ? "임박" : "관찰")
+finalScore = revScore
+finalStage = revStage
+finalDir = revDir
+finalEntry = revEntry
+finalStop = revStop
+finalTp1 = revTp1
+finalTp2 = revTp2
+finalRR = revRR
+finalGrade = f_grade(revScore)
+passesStrictness = revReady
 
 // ============================================================================
 // 트레이드 상태 기계 — 진입 시점에 화살표, 목표2/손절 도달 전까지 라인 유지
 // (마감 확정봉 기준. 진입봉 자체는 청산 판정에서 제외 — QARScanner 리스크리워드와 동일 철학)
 // ============================================================================
-// 모드별 색 — 모드 1 은 방향색(초록/빨강), 모드 2 는 주황 계열로 통일해 한눈에 구분된다.
-C_MODE2 = color.rgb(245, 158, 11)
-C_MODE3 = color.rgb(38, 166, 154)   // 모드 3 추세 추종 — 청록
-bool dirLong = useEarly or useTrend or useLong
-plotColor = useEarly ? C_MODE2 : useLong ? color.rgb(18, 153, 91) : color.rgb(216, 58, 58)
+bool dirLong = useLong
+plotColor = useLong ? color.rgb(18, 153, 91) : color.rgb(216, 58, 58)
 
 var bool inTrade = false
 var int tDir = 0            // 1=롱, -1=숏
-var int tMode = 0           // 1=급락 반등, 2=조기 포착 (청산 표시·라벨 구분용)
 var float tEntry = na
 var float tStop = na
 var float tTp1 = na
@@ -973,17 +726,13 @@ var int lastEntryBar = na   // 마지막 진입 봉 (진입 간격 계산용)
 
 // ---- 진입 품질 필터 ----
 bool trendOk = not useTrendFilter or (dirLong ? (not na(ema200_4) and c4 > ema200_4) : (not na(ema200_4) and c4 < ema200_4))
-// 단계 필터는 모드 1 전용. 모드 2 의 단계는 1 관찰·2 임박·3 돌파로 의미가 달라
-// reversal 의 "3=구조전환 확인 후" 문턱을 그대로 대면 관찰·임박 구간이 전부 잘린다.
-bool stageOk = useEarly ? finalStage >= 1 : (finalStage >= minStageInput and finalStage != 5)
+bool stageOk = finalStage >= minStageInput and finalStage != 5
 bool rrGateOk = finalRR >= minRRInput
 bool cooldownOk = na(lastStopBar) or (bar_index - lastStopBar) > cooldownBars
 // 진입 간격: 마지막 진입 이후 minEntryGap 봉 지나야 다음 진입 허용 (표시 간격 조절)
 bool gapOk = minEntryGap <= 0 or na(lastEntryBar) or (bar_index - lastEntryBar) >= minEntryGap
 // 노이즈 필터 (스캐너 core/noise-filter.js 와 동일): 촙 구간·저거래량이면 진입 제외.
-// 모드 2 는 적용하지 않는다 — 스캐너 ui/settings.applyFilters 도 early 모드에선
-// 이 필터를 건너뛴다. 켜고 끄는 기준을 한쪽만 바꾸면 두 화면의 후보가 갈라진다.
-bool noisy = not useEarly and useNoiseFilter and ((not na(chopIndex15) and chopIndex15 > noiseChopMax) or (not na(volTrend15) and volTrend15 < noiseMinRelVol))
+bool noisy = useNoiseFilter and ((not na(chopIndex15) and chopIndex15 > noiseChopMax) or (not na(volTrend15) and volTrend15 < noiseMinRelVol))
 bool noiseOk = not noisy
 
 // 진입 조건: 표시 켬 + 마감 확정봉 + 점수 통과 + 품질필터 통과 + 간격 통과 + 노이즈 아님 + 미보유
@@ -991,15 +740,12 @@ bool canEnter = showPlan and barstate.isconfirmed and passesStrictness and stage
 bool justEntered = canEnter
 if canEnter
     lastEntryBar := bar_index
-bool longEntry = canEnter and activeMode == 1 and useLong
-bool shortEntry = canEnter and activeMode == 1 and not useLong
-bool earlyEntry = canEnter and activeMode == 2
-bool trendEntry = canEnter and activeMode == 3
+bool longEntry = canEnter and useLong
+bool shortEntry = canEnter and not useLong
 
 if canEnter
     inTrade := true
     tDir := dirLong ? 1 : -1
-    tMode := activeMode
     tEntry := finalEntry
     tStop := finalStop
     tTp1 := finalTp1
@@ -1027,49 +773,28 @@ if inTrade and not justEntered and barstate.isconfirmed
 
 bool exitEvent = not inTrade and inTrade[1]
 
-// 진입 화살표 — 모드 1 삼각형(방향색) · 모드 2 다이아몬드(주황) · 모드 3 원(청록).
-// 모양·색만으로는 모드를 외워야 알 수 있어, 아래 라벨로 이름을 글자로 못 박는다.
-plotshape(longEntry, "① 롱 진입", style = shape.triangleup, location = location.belowbar, color = color.rgb(18, 153, 91), size = size.small, text = "①롱")
-plotshape(shortEntry, "① 숏 진입", style = shape.triangledown, location = location.abovebar, color = color.rgb(216, 58, 58), size = size.small, text = "①숏")
-plotshape(earlyEntry, "② 조기 포착 진입", style = shape.diamond, location = location.belowbar, color = C_MODE2, size = size.small, text = "②조기")
-plotshape(trendEntry, "③ 추세 추종 진입", style = shape.circle, location = location.belowbar, color = C_MODE3, size = size.small, text = "③추세")
-
-// ---- 진입 라벨 — 어느 스캐너의 진입인지 글자로 ----
-// 화살표 모양만으로는 "이게 어느 모드였지" 를 매번 떠올려야 한다. 진입 시점에
-// [모드 · 단계 · 점수 · 등급 · 손익비] 를 한 줄로 붙여 그 자리에서 판단할 수 있게 한다.
-// 라벨 개수 상한은 지표 헤더의 max_labels_count 가 관리한다.
-if canEnter and showEntryLabel
-    string dirTxt = dirLong ? "롱" : "숏"
-    string nl = "\n"
-    string txt = modeTag + " " + modeName + " " + dirTxt + nl +
-         str.tostring(finalScore, "#") + "점 " + finalGrade + nl +
-         str.tostring(finalStage) + " " + stageName + " · 손익비 1:" + str.tostring(finalRR, "#.#")
-    label.new(bar_index, dirLong ? low : high,
-         text = txt,
-         style = dirLong ? label.style_label_up : label.style_label_down,
-         color = color.new(modeColor, 12), textcolor = color.white,
-         size = entryLabelSize, yloc = dirLong ? yloc.belowbar : yloc.abovebar)
+// 진입 화살표 — 방향색 삼각형
+plotshape(longEntry, "롱 진입", style = shape.triangleup, location = location.belowbar, color = color.rgb(18, 153, 91), size = size.small, text = "롱")
+plotshape(shortEntry, "숏 진입", style = shape.triangledown, location = location.abovebar, color = color.rgb(216, 58, 58), size = size.small, text = "숏")
 
 // 청산 표시
 plotshape(exitEvent and tResult == 1, "익절", style = shape.xcross, location = location.abovebar, color = color.rgb(34, 197, 94), size = size.tiny, text = "익절")
 plotshape(exitEvent and tResult == -1, "손절 청산", style = shape.xcross, location = location.belowbar, color = color.rgb(255, 77, 109), size = size.tiny, text = "손절")
 
 // 보유 중에만 라인 유지 (linebr 로 청산 시 끊김) — 값 고정이라 수평선.
-// 진입가 선 색으로도 어느 모드의 트레이드인지 보인다.
-entryLineCol = tMode == 2 ? C_MODE2 : color.rgb(124, 92, 252)
+entryLineCol = color.rgb(124, 92, 252)
 plot(inTrade ? tEntry : na, "진입가", color = entryLineCol, style = plot.style_linebr, linewidth = 2)
 plot(inTrade ? tStop : na, "손절선", color = color.rgb(255, 77, 109), style = plot.style_linebr, linewidth = 2)
 plot(inTrade ? tTp1 : na, "목표1", color = color.rgb(34, 211, 238), style = plot.style_linebr, linewidth = 1)
 plot(inTrade ? tTp2 : na, "목표2", color = color.rgb(34, 197, 94), style = plot.style_linebr, linewidth = 1)
 
 // ============================================================================
-// 진입 구간 박스 — 두 모드를 서로 다른 색·선으로 표시
-//   모드 1: 15분봉 FVG·오더블록 구간 (보라 실선). 되돌림을 기다리는 지지/저항 구간.
-//   모드 2: 4시간봉 박스 (주황 점선) + 박스 상단 돌파 밴드 (주황 실선).
+// 진입 구간 박스 — 15분봉 FVG·오더블록 구간 (보라 실선).
+// 되돌림을 기다리는 지지/저항 구간이다.
 // ============================================================================
 C_MODE1 = color.rgb(124, 92, 252)
 
-// 모드 1 구간 = 방향에 맞는 FVG·OB. 둘이 겹치면 교집합(= 스캐너의 fvgObOverlap), 아니면 FVG.
+// 방향에 맞는 FVG·OB. 둘이 겹치면 교집합(= 스캐너의 fvgObOverlap), 아니면 FVG.
 f_zone1(isLong, fbL, fbH, obL, obH, fsL, fsH, osL, osH) =>
     float fLow = isLong ? fbL : fsL
     float fHigh = isLong ? fbH : fsH
@@ -1095,39 +820,20 @@ f_zone1(isLong, fbL, fbH, obL, obH, fsL, fsH, osL, osH) =>
      fvgBearLow, fvgBearHigh, obBearLow, obBearHigh)
 
 var box zone1 = na
-var box zone2 = na
-var box zone2b = na
 var label zone1Lbl = na
-var label zone2Lbl = na
 
 if barstate.islast
     box.delete(zone1)
-    box.delete(zone2)
-    box.delete(zone2b)
     label.delete(zone1Lbl)
-    label.delete(zone2Lbl)
     int rightX = bar_index + 12
     // 차트 초반엔 bar_index 가 작아 왼쪽 좌표가 음수가 되면 런타임 오류가 난다
     int left1 = math.max(bar_index - 40, 0)
-    int left2 = math.max(bar_index - 150, 0)
-    if showZones and mode1On and not na(z1Low)
+    if showZones and not na(z1Low)
         zone1 := box.new(left1, z1High, rightX, z1Low,
              border_color = C_MODE1, border_width = 2, border_style = line.style_solid,
              bgcolor = color.new(C_MODE1, 88))
-        zone1Lbl := label.new(rightX, z1High, "① 급락 반등 진입 구간 (15m FVG·OB)",
+        zone1Lbl := label.new(rightX, z1High, "급락 반등 진입 구간 (15m FVG·OB)",
              style = label.style_label_left, color = color.new(C_MODE1, 20),
-             textcolor = color.white, size = size.small)
-    if showZones and mode2On and not na(eBoxHigh) and not na(eBoxLow)
-        // 최근 60봉(4h) 고저 박스 — 점선. 채점에는 안 쓰고 위치 파악용으로만 그린다.
-        zone2 := box.new(left2, eBoxHigh, rightX, eBoxLow,
-             border_color = C_MODE2, border_width = 1, border_style = line.style_dashed,
-             bgcolor = color.new(C_MODE2, 94))
-        // 돌파 밴드 — 박스 상단에서 박스 폭 10% 까지. 여기를 종가로 넘으면 3단계 돌파.
-        zone2b := box.new(left2, eBoxHigh + eSpan * 0.1, rightX, eBoxHigh,
-             border_color = C_MODE2, border_width = 2, border_style = line.style_solid,
-             bgcolor = color.new(C_MODE2, 80))
-        zone2Lbl := label.new(rightX, eBoxLow, "② 조기 포착 박스 (4h·60봉) · 상단 = 돌파 진입",
-             style = label.style_label_left, color = color.new(C_MODE2, 20),
              textcolor = color.white, size = size.small)
 
 f_tablePos(s) =>
@@ -1135,28 +841,24 @@ f_tablePos(s) =>
 f_tableSize(s) =>
     s == "아주 작게" ? size.tiny : s == "작게" ? size.small : s == "크게" ? size.large : size.normal
 dashSz = f_tableSize(tableSizeInput)
-// 단계 라벨 — 두 모드의 단계는 뜻이 다르다(모드 2 는 매집·임박·돌파 3단계뿐).
-f_stageLabel(md, st) =>
-    md == 2 ? (st == 3 ? "3 돌파" : st == 2 ? "2 임박" : st == 1 ? "1 관찰" : "해당 없음") :
-     st == 5 ? "5 추격 금지" : st == 4 ? "4 진입 구간" : st == 3 ? "3 구조전환" : st == 2 ? "2 유동성 회수" : "1 관찰 초기"
+f_stageLabel(st) =>
+    st == 5 ? "5 추격 금지" : st == 4 ? "4 진입 구간" : st == 3 ? "3 구조전환" : st == 2 ? "2 유동성 회수" : "1 관찰 초기"
 
-var table t = table.new(f_tablePos(tablePosInput), 2, 12, bgcolor = color.new(color.rgb(14, 19, 29), 10), border_width = 1)
+var table t = table.new(f_tablePos(tablePosInput), 2, 11, bgcolor = color.new(color.rgb(14, 19, 29), 10), border_width = 1)
 if showTable and barstate.islast
     table.cell(t, 0, 0, "모드", text_color = color.white, bgcolor = color.rgb(30, 34, 45), text_size = dashSz)
-    table.cell(t, 1, 0, activeMode == 2 ? "② 조기 포착" : "① 급락 반등", text_color = activeMode == 2 ? C_MODE2 : C_MODE1, bgcolor = color.rgb(30, 34, 45), text_size = dashSz)
+    table.cell(t, 1, 0, "급락 반등 (reversal)", text_color = C_MODE1, bgcolor = color.rgb(30, 34, 45), text_size = dashSz)
     table.cell(t, 0, 1, "방향", text_color = color.white, text_size = dashSz)
     table.cell(t, 1, 1, finalDir, text_color = plotColor, text_size = dashSz)
     table.cell(t, 0, 2, "점수", text_color = color.white, text_size = dashSz)
     table.cell(t, 1, 2, str.tostring(finalScore) + " (" + finalGrade + ")", text_color = passesStrictness ? color.rgb(18, 153, 91) : color.rgb(150, 150, 150), text_size = dashSz)
     table.cell(t, 0, 3, "단계", text_color = color.white, text_size = dashSz)
-    table.cell(t, 1, 3, f_stageLabel(activeMode, finalStage), text_color = color.white, text_size = dashSz)
+    table.cell(t, 1, 3, f_stageLabel(finalStage), text_color = color.white, text_size = dashSz)
     table.cell(t, 0, 4, "핵심 소계", text_color = color.white, text_size = dashSz)
-    table.cell(t, 1, 4, activeMode == 2 ? "미적용 (3요인 채점)" :
-         str.tostring(revCorePct, "#.#") + "% / " + str.tostring(CORE_MIN_PCT, "#") + "%" + (useCoreGate ? "" : " (미적용)"),
-         text_color = activeMode == 2 or not useCoreGate ? color.gray : revCorePct >= CORE_MIN_PCT ? color.rgb(18, 153, 91) : color.rgb(255, 179, 71), text_size = dashSz)
+    table.cell(t, 1, 4, str.tostring(revCorePct, "#.#") + "% / " + str.tostring(CORE_MIN_PCT, "#") + "%" + (useCoreGate ? "" : " (미적용)"),
+         text_color = not useCoreGate ? color.gray : revCorePct >= CORE_MIN_PCT ? color.rgb(18, 153, 91) : color.rgb(255, 179, 71), text_size = dashSz)
     table.cell(t, 0, 5, "진입 문턱", text_color = color.white, text_size = dashSz)
-    table.cell(t, 1, 5, activeMode == 2 ? "최소 " + str.tostring(E_MIN_SCORE, "#") + "점 (early 고정)" :
-         "최소 " + str.tostring(minScoreThresh) + "점" + (entryScoreMin > 0 ? " (직접)" : " (강도 " + str.tostring(strictLevel) + ")") + (minEntryGap > 0 ? " · 간격 " + str.tostring(minEntryGap) + "봉" : ""),
+    table.cell(t, 1, 5, "최소 " + str.tostring(minScoreThresh) + "점" + (entryScoreMin > 0 ? " (직접)" : " (강도 " + str.tostring(strictLevel) + ")") + (minEntryGap > 0 ? " · 간격 " + str.tostring(minEntryGap) + "봉" : ""),
          text_color = color.white, text_size = dashSz)
     table.cell(t, 0, 6, inTrade ? "진입(보유중)" : "진입", text_color = color.white, text_size = dashSz)
     table.cell(t, 1, 6, str.tostring(inTrade ? tEntry : finalEntry, "#.########"), text_color = inTrade ? entryLineCol : color.white, text_size = dashSz)
@@ -1166,12 +868,7 @@ if showTable and barstate.islast
     table.cell(t, 1, 8, "1:" + str.tostring(finalRR, "#.##"), text_color = color.white, text_size = dashSz)
     table.cell(t, 0, 9, "골든크로스 리테스트(4h)", text_color = color.white, text_size = dashSz)
     table.cell(t, 1, 9, gcDetected ? (gcHasRejection ? "확정" : "대기") : "-", text_color = gcHasRejection ? color.rgb(111, 224, 242) : color.gray, text_size = dashSz)
-    table.cell(t, 0, 10, "② 14일 · 24h · 상장", text_color = color.white, text_size = dashSz)
-    table.cell(t, 1, 10, (na(eMom14) ? "-" : str.tostring(eMom14, "#.#") + "%") + " · " +
-         (na(eChange24h) ? "-" : str.tostring(eChange24h, "#.#") + "%") + " · " +
-         (na(eAgeDays) ? "-" : str.tostring(eAgeDays, "#") + "일"),
-         text_color = na(eMom14) ? color.rgb(255, 179, 71) : color.white, text_size = dashSz)
-    table.cell(t, 0, 11, "비고", text_color = color.white, text_size = dashSz)
+    table.cell(t, 0, 10, "비고", text_color = color.white, text_size = dashSz)
     bool tfOk = timeframe.period == "15"
-    table.cell(t, 1, 11, tfOk ? "taker 데이터 근사(정밀도 제한)" : "⚠ 15분 차트 권장 (현재 " + timeframe.period + ")",
+    table.cell(t, 1, 10, tfOk ? "taker 데이터 근사(정밀도 제한)" : "⚠ 15분 차트 권장 (현재 " + timeframe.period + ")",
          text_color = tfOk ? color.gray : color.rgb(255, 179, 71), text_size = dashSz)

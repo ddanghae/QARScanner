@@ -11,6 +11,7 @@ import { run as earlyDetect } from "./early-detect.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
+import { run as strategies } from "./strategies.test.js";
 
 export function runAll() {
   reset();
@@ -24,6 +25,7 @@ export function runAll() {
   repaint();
   refresh();
   paperCorr();
+  strategies();
   return report();
 }
 

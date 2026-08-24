@@ -40,7 +40,7 @@ export const CONFIG = {
   // 대신 늘어난 노이즈는 아래 noiseFilter(촙 구간·저거래량)에서 걸러냄.
   candidateFilter: {
     drop6hMax: -1.5,        // 최근 6시간 하락률 이 값보다 낮으면(더 큰 하락) 후보 (완화 -3→-1.5)
-    drop24hMax: 8,          // 24시간 급등한 종목 컷 (완화 5→8)
+    move24hMinAbs: 8,       // 24시간 기준 선택 시 방향별 최소 변동폭 (LONG -8% / SHORT +8%)
     surge24hExclude: 45,    // 24시간 이 % 초과 = 이미 급등, 제외 (완화 35→45)
     rsiOversold: 40,        // RSI 과매도 기준(회복 포함 위해 다소 완화)
     rsiLongMax: 60,         // 롱 후보 RSI 상한 (완화 55→60, prefilter stage3)

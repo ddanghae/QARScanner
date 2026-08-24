@@ -74,6 +74,17 @@ export function scoreControlModel(settings) {
   };
 }
 
+export function modeFilterModel(settings) {
+  const early = settings?.scanMode === "early";
+  const reversal = !early && settings?.scanMode !== "pump_fade";
+  return {
+    early,
+    minVolumeVisible: !early,
+    earlyFixedVolumeVisible: early,
+    reversalOnlyVisible: reversal,
+  };
+}
+
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
   // 모드 전환은 점수 컨트롤과 단계 선택지를 즉시 다시 그려야 한다.
@@ -82,7 +93,6 @@ export function initSettingsUI() {
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-dropbasis", "dropBasis");
-  bindSelect("filter-timeframe", "timeframeFocus");
   bindSelect("filter-stage", "stageFilter");
   bindSelect("filter-sort", "sort");
 
@@ -179,10 +189,10 @@ export function syncControls() {
   setVal("filter-scanmode", s.scanMode);
   syncStageOptions(s.scanMode);
   syncDirectionControl(s);
+  syncModeFilters(s);
   setVal("filter-minscore", s.minScore);
   syncScoreControls(s);
   setVal("filter-dropbasis", s.dropBasis);
-  setVal("filter-timeframe", s.timeframeFocus);
   setVal("filter-sort", s.sort);
   for (const { key, ids } of CHECK_BINDINGS) for (const id of ids) setChk(id, s[key]);
   for (const id of AUTOREFRESH_IDS) setChk(id, s.autoRefresh);
@@ -191,6 +201,30 @@ export function syncControls() {
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));
+}
+
+function syncModeFilters(settings) {
+  const model = modeFilterModel(settings);
+  const visibility = [
+    ["filter-minvolume-wrap", model.minVolumeVisible],
+    ["filter-early-volume", model.earlyFixedVolumeVisible],
+    ["filter-dropbasis-wrap", model.reversalOnlyVisible],
+    ["filter-golden-cross-wrap", model.reversalOnlyVisible],
+    ["filter-near-ema200-wrap", model.reversalOnlyVisible],
+    ["set-golden-cross-wrap", model.reversalOnlyVisible],
+    ["set-near-ema200-wrap", model.reversalOnlyVisible],
+    ["set-ema200-ratio-wrap", model.reversalOnlyVisible],
+  ];
+  for (const [id, visible] of visibility) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !visible;
+  }
+  for (const id of ["filter-dropbasis", "filter-golden-cross", "filter-near-ema200", "set-golden-cross", "set-near-ema200", "set-ema200-ratio"]) {
+    const element = document.getElementById(id);
+    if (element) element.disabled = !model.reversalOnlyVisible;
+  }
+  const minVolume = document.getElementById("filter-minvolume");
+  if (minVolume) minVolume.disabled = !model.minVolumeVisible;
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
@@ -272,4 +306,4 @@ export function applyDarkMode() {
   document.documentElement.classList.toggle("dark", !!state.settings.darkMode);
 }
 
-export default { applyFilters, initSettingsUI, syncControls, applyDarkMode };
+export default { applyFilters, initSettingsUI, syncControls, applyDarkMode, modeFilterModel };

@@ -462,6 +462,8 @@ export function historyRangeEnd(event, now = Date.now()) {
 
 function csvCell(value) {
   if (value == null) return "\"\"";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "\"\"";
+  if (typeof value === "boolean") return value ? "true" : "false";
   let text = String(value);
   if (/^[=+\-@]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;

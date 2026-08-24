@@ -77,7 +77,19 @@ export function stage2Liquidity(universe, tickers, nowMs, pfOverride) {
 // ---- Stage 3: 급락/급등 초기 후보 필터 (1h 캔들 사용) ----
 // item + 1h 캔들(마감) + direction("long"|"short"|"both") → 통과 여부 + 빠른 지표.
 // 롱=급락·과매도 admit, 숏=급등·과매수 admit.
-export function stage3Evaluate(item, klines1h, direction = "long") {
+export function directionalMovePass(change6h, change24h, direction, dropBasis, cf = CONFIG.candidateFilter) {
+  const use24h = dropBasis === "24h";
+  if (direction === "long") {
+    return use24h
+      ? change24h <= -Math.abs(cf.move24hMinAbs)
+      : change6h <= cf.drop6hMax;
+  }
+  return use24h
+    ? change24h >= Math.abs(cf.move24hMinAbs)
+    : change6h >= cf.surge6hMin;
+}
+
+export function stage3Evaluate(item, klines1h, direction = "long", dropBasis = "6h") {
   const cf = CONFIG.candidateFilter;
   const n = klines1h.length;
   if (n < 30) return { pass: false, reason: "데이터 부족" };
@@ -99,15 +111,18 @@ export function stage3Evaluate(item, klines1h, direction = "long") {
 
   const wantLong = direction === "long" || direction === "both";
   const wantShort = direction === "short" || direction === "both";
+  const use24h = dropBasis === "24h";
+  const longDirectionalMove = directionalMovePass(change6h, change24h, "long", dropBasis, cf);
+  const shortDirectionalMove = directionalMovePass(change6h, change24h, "short", dropBasis, cf);
 
   // 롱 후보: (급락 OR 저점 근접) AND RSI 과매도권. 단 이미 급등이면 제외.
   const longCand = wantLong && change24h <= cf.surge24hExclude &&
-    ((change6h <= cf.drop6hMax || change24h <= cf.drop24hMax || nearLowPct <= cf.nearLowPct)
+    ((longDirectionalMove || nearLowPct <= cf.nearLowPct)
       && rsiNow != null && rsiNow <= cf.rsiLongMax);
 
   // 숏 후보: (급등 OR 고점 근접) AND RSI 과매수권. 단 이미 폭락이면 제외.
   const shortCand = wantShort && change24h >= cf.crash24hExclude &&
-    ((change6h >= cf.surge6hMin || nearHighPct <= cf.nearHighPct)
+    ((shortDirectionalMove || nearHighPct <= cf.nearHighPct)
       && rsiNow != null && rsiNow >= cf.rsiShortMin);
 
   const pass = longCand || shortCand;
@@ -118,7 +133,9 @@ export function stage3Evaluate(item, klines1h, direction = "long") {
     pass,
     reason: pass ? "후보" : "조건 미달",
     dirHint,
-    change6h, change24h, rsiNow, relVolNow, nearLowPct, nearHighPct, recentLow, recentHigh, price,
+    change6h, change24h, basisChange: use24h ? change24h : change6h,
+    dropBasis: use24h ? "24h" : "6h",
+    rsiNow, relVolNow, nearLowPct, nearHighPct, recentLow, recentHigh, price,
   };
 }
 

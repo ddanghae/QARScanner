@@ -42,12 +42,12 @@ function analyzeTf(candlesRaw, includeRealtime, tf) {
 }
 
 // 멀티타임프레임 데이터 요청
-async function fetchAll(symbol) {
+async function fetchAll(symbol, signal) {
   const [k4h, k1h, k15m, k5m] = await Promise.all([
-    getKlines(symbol, "4h"),
-    getKlines(symbol, "1h"),
-    getKlines(symbol, "15m"),
-    getKlines(symbol, "5m"),
+    getKlines(symbol, "4h", undefined, signal),
+    getKlines(symbol, "1h", undefined, signal),
+    getKlines(symbol, "15m", undefined, signal),
+    getKlines(symbol, "5m", undefined, signal),
   ]);
   return { k4h, k1h, k15m, k5m };
 }
@@ -303,9 +303,9 @@ function lowerHigh(a5) {
 }
 
 // 최종: 종목 하나 정밀 분석
-export async function deepAnalyze(item, settings) {
+export async function deepAnalyze(item, settings, signal) {
   const includeRt = settings.includeRealtimeCandle;
-  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol);
+  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol, signal);
   const a4 = analyzeTf(k4h, includeRt, "4h");
   const a1 = analyzeTf(k1h, includeRt, "1h");
   const a15 = analyzeTf(k15m, includeRt, "15m");

@@ -7,6 +7,7 @@ import {
   evaluateHistoryEvent,
   filterHistoryEvents,
   historyEventStatus,
+  historyToCsv,
   mergeScanResults,
   nextFiveMinuteBoundary,
   outcomeRefreshDue,
@@ -212,5 +213,19 @@ export function run() {
     const path = buildKlineRangePath("btcusdt", "5m", 1_000, 2_000, 9_999);
     assert(path.includes("symbol=BTCUSDT"), "심볼 정규화");
     assert(path.includes("startTime=1000&endTime=2000&limit=1500"), "범위와 API 상한");
+  });
+
+  test("CSV는 음수 포함 유한 숫자를 숫자 셀로 보존하고 문자열 수식만 이스케이프", () => {
+    const event = createHistoryEvent(scanResult("CSVUSDT"), 12_345);
+    event.paper.entryPrice = 100;
+    event.paper.checkpoints["1h"] = { status: "COMPLETE", returnPct: -2.5 };
+    event.paper.mfePct = 3.25;
+    event.paper.maePct = -1.75;
+    const csv = historyToCsv([event]);
+    const row = csv.split("\r\n")[1];
+    assert(row.includes(",100,"), "진입 가격 숫자 셀");
+    assert(row.includes(",-2.5,"), "음수 수익률 숫자 셀");
+    assert(row.includes(",3.25,-1.75,"), "MFE/MAE 숫자 셀");
+    assert(!row.includes("'-2.5"), "음수 숫자에 수식 이스케이프 없음");
   });
 }

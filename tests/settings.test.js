@@ -2,7 +2,9 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { state } from "../js/state.js";
-import { applyFilters, initSettingsUI, scoreControlModel } from "../js/ui/settings.js";
+import { applyFilters, initSettingsUI, modeFilterModel, scoreControlModel } from "../js/ui/settings.js";
+import { directionalMovePass } from "../js/scanner/prefilter.js";
+import { mapWithConcurrency } from "../js/scanner/scan-controller.js";
 
 function result(symbol, stage) {
   return {
@@ -45,6 +47,42 @@ function withSettings(patch, fn) {
 
 export function run() {
   suite("settings filters");
+
+  test("모드별 필터 노출은 실제 적용 경로와 일치", () => {
+    const reversal = modeFilterModel({ scanMode: "reversal" });
+    eq(reversal.minVolumeVisible, true, "reversal 거래대금 선택 표시");
+    eq(reversal.reversalOnlyVisible, true, "reversal 전용 조건 표시");
+    const early = modeFilterModel({ scanMode: "early" });
+    eq(early.minVolumeVisible, false, "early 공유 거래대금 숨김");
+    eq(early.earlyFixedVolumeVisible, true, "early 5M 고정값 표시");
+    const pump = modeFilterModel({ scanMode: "pump_fade" });
+    eq(pump.minVolumeVisible, true, "pump 거래대금 선택 표시");
+    eq(pump.reversalOnlyVisible, false, "pump reversal 조건 숨김");
+  });
+
+  test("6h/24h 방향 변동 기준은 LONG과 SHORT에 대칭 적용", () => {
+    eq(directionalMovePass(-1.5, 0, "long", "6h"), true, "6h LONG 경계");
+    eq(directionalMovePass(1.5, 0, "short", "6h"), true, "6h SHORT 경계");
+    eq(directionalMovePass(0, -8, "long", "24h"), true, "24h LONG 경계");
+    eq(directionalMovePass(0, 8, "short", "24h"), true, "24h SHORT 경계");
+    eq(directionalMovePass(-10, -7.99, "long", "24h"), false, "24h 선택 시 6h 하락 무시");
+    eq(directionalMovePass(10, 7.99, "short", "24h"), false, "24h 선택 시 6h 상승 무시");
+  });
+
+  test("스캔 작업 큐는 설정한 동시성만 시작하고 중단 신호를 전파", () => {
+    const controller = new AbortController();
+    let started = 0;
+    const pending = mapWithConcurrency([1, 2, 3, 4, 5], () => {
+      started++;
+      return new Promise((_, reject) => {
+        controller.signal.addEventListener("abort", () => reject(new DOMException("stop", "AbortError")), { once: true });
+      });
+    }, { concurrency: 2, signal: controller.signal });
+    pending.catch(() => {});
+    eq(started, 2, "eager Promise.all 대신 worker 2개만 시작");
+    controller.abort();
+    eq(controller.signal.aborted, true, "중단 신호 전달");
+  });
 
   test("5단계는 기본 목록에서 숨김", () => {
     withSettings({}, () => {

@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0b1220" />
   <meta name="description" content="Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너" />
   <title>QAR ICT Early Scanner</title>
-  <link rel="stylesheet" href="./css/style.css" />
+  <link rel="stylesheet" href="./css/style.css?v=9" />
   <link rel="manifest" href="./manifest.webmanifest" />
 </head>
 <body>
@@ -126,7 +126,7 @@
               <output id="filter-mode-cut-value">40+</output>
               <small id="filter-mode-cut-help">설정의 채점 강도에서 조정</small>
             </div>
-            <label>최소 거래대금
+            <label id="filter-minvolume-wrap">최소 거래대금
               <select id="filter-minvolume">
                 <option value="10000000">10M</option>
                 <option value="20000000">20M</option>
@@ -134,17 +134,15 @@
                 <option value="100000000">100M</option>
               </select>
             </label>
-            <label>급락 기준
+            <div id="filter-early-volume" class="mode-cut" hidden>
+              <span>최소 거래대금</span>
+              <output>5M</output>
+              <small>조기 포착 고정값</small>
+            </div>
+            <label id="filter-dropbasis-wrap">방향 변동 기준
               <select id="filter-dropbasis">
                 <option value="6h">6시간</option>
                 <option value="24h">24시간</option>
-              </select>
-            </label>
-            <label>시간봉
-              <select id="filter-timeframe">
-                <option value="15m">15분</option>
-                <option value="5m">5분</option>
-                <option value="1h">1시간</option>
               </select>
             </label>
             <label>진행 단계
@@ -169,10 +167,10 @@
           <div class="filter-checks">
             <label><input type="checkbox" id="filter-favorites-only" /> 관심 종목만</label>
             <label><input type="checkbox" id="filter-exclude-new" /> 신규 종목 제외</label>
-            <label title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
+            <label id="filter-golden-cross-wrap" title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
               <input type="checkbox" id="filter-golden-cross" /> 골든크로스 리테스트만
             </label>
-            <label title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
+            <label id="filter-near-ema200-wrap" title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
               <input type="checkbox" id="filter-near-ema200" /> 1h 200선 밀착만
             </label>
             <label title="일정 주기로 자동 재스캔"><input type="checkbox" id="filter-autorefresh" /> 자동 갱신</label>
@@ -284,21 +282,21 @@
         <section class="card settings-group">
           <div class="card-head"><h2>특별 조건 켜기 / 끄기</h2></div>
 
-          <div class="set-row">
+          <div class="set-row" id="set-golden-cross-wrap">
             <div class="set-control">
               <label class="switch-label"><input type="checkbox" id="set-golden-cross" /> 골든크로스 리테스트만 보기</label>
             </div>
             <p class="set-help">4시간봉에서 <b>50일선이 200일선을 위로 뚫은 뒤</b>, 되돌림에서 그 선을 다시 밟고 <b>위로 찔렀다 꺾이는 거부 캔들</b>이 나온 자리만 보여줍니다. 상승 추세 초입을 노릴 때 켜세요. (조건이 까다로워 매우 적게 나옵니다.)</p>
           </div>
 
-          <div class="set-row">
+          <div class="set-row" id="set-near-ema200-wrap">
             <div class="set-control">
               <label class="switch-label"><input type="checkbox" id="set-near-ema200" /> 1시간봉 200일선 밀착만 보기</label>
             </div>
             <p class="set-help">1시간봉 가격이 <b>200일선에 딱 붙어있는</b> 코인만 보여줍니다. 200일선에서 튕기는 지지·저항 반응을 노릴 때 켜세요.</p>
           </div>
 
-          <div class="set-row">
+          <div class="set-row" id="set-ema200-ratio-wrap">
             <div class="set-control">
               <label for="set-ema200-ratio">200선 밀착 민감도</label>
               <input type="number" id="set-ema200-ratio" min="0.1" max="3" step="0.1" />

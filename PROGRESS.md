@@ -468,10 +468,27 @@
       효과가 클 수 있다
     - 교집합 모델(13번) — 여전히 노출이 적어 보류
 
+15. **pump_fade SHORT 전용 모드 main 통합 (2026-08-24)** — 최신 `main`의 early 재적합,
+    표시용 레버리지, 페이퍼 기록과 상관 배지를 보존한 채 급등 후 하락 전환 엔진만 선택
+    이식했다. 오래된 통합 브랜치 전체는 병합하지 않았다.
+    - 1시간 마감봉에서 6시간 +12% 또는 24시간 +25% 급등을 확인한다.
+    - 15분 거래량 클라이맥스·윗꼬리·고점 sweep 실패·Taker Buy 소진·EMA20/VWAP 이탈과
+      신호 시각 이하의 5분 구조 붕괴를 계산한다.
+    - `1 과열 감시 → 2 고점 거절 → 3 급락 확인`, 고정 45점 실험 컷, 단계 우선 상위 5개다.
+    - SHORT 손절은 진입 위, TP1/2/3은 아래이며 손절 거리 8% 이상은 계획 무효다.
+    - 기본은 진행 중 봉을 제외하며 opt-in 결과만 provisional로 표시한다. 미래 5분봉과
+      시각 없는 입력, 0 거래량, 자료 부족은 실패-폐쇄한다.
+    - pump_fade에서는 시드·레버리지·금액 컨트롤을 잠가 실험 신호와 계좌성 표시를 분리했다.
+    - 사후 연구 라벨은 운영 코어에서 분리했고 동일 봉 목표/손절은 `AMBIGUOUS`, 누락 구간은
+      `INCOMPLETE`로 처리한다. 승인 PRD는
+      `docs/superpowers/specs/2026-08-24-pump-fade-mode-prd.md`다.
+
 ## 검증 상태
 
-- **테스트 118/118 통과** — `node tests/run.js` (indicators, structure, liquidity, scoring,
-  goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트)
+- **현재 테스트 157/157 통과** — `node tests/run.js`. pump_fade 계산·연구·UI 39개와
+  기존 main 회귀 118개가 함께 통과한다.
+- **통합 전 기준선 118/118 통과** — indicators, structure, liquidity, scoring,
+  goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트.
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
   - `node verify-port.mjs` — 배포 채점이 변형 D 와 같은지 (검증셋 상위3 = 10.71x)
   - `node verify-pine.mjs` — .pine 상수 20개 + 등급 밴드 4개가 config 와 일치하는지
@@ -503,7 +520,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (118/118 나와야 정상)
+node tests/run.js          # 테스트 확인 (157/157 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -520,7 +537,7 @@ js/
   api/binance.js
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
          fvg.js order-block.js risk-reward.js scoring.js
-         golden-cross-retest.js noise-filter.js early-detect.js correlation.js
+         golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js correlation.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
        paper.js
@@ -542,6 +559,7 @@ research/                               (재현 스크립트 + 원자료 CSV)
   verify-pine.mjs    .pine 상수 = config 인지 assert
   refit.mjs variants.mjs predict-dump.mjs predict-eval.mjs
   predict.csv(5.8MB) gainers.csv gainers_0726.csv pumpers_0729.txt …
+  pump-fade-backtest.mjs pump-fade-research-core.mjs
 ```
 
 핵심 진입점: [config.js](js/config.js)(모든 가중치·필터·TTL 조정 지점),

@@ -2,7 +2,7 @@
 // localStorage 저장은 state.js 가 담당. 여기선 UI 바인딩 + 필터 적용 로직.
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
-import { CONFIG, strictnessPreset } from "../config.js";
+import { CONFIG, minScoreFor, strictnessPreset } from "../config.js";
 import { toast } from "./notifications.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
@@ -20,46 +20,67 @@ const REALTIME_IDS = ["set-realtime-candle"];
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
-  const early = s.scanMode === "early";
+  const mode = s.scanMode || "reversal";
+  const reversal = mode === "reversal";
+  const early = mode === "early";
+  const pumpFade = mode === "pump_fade";
   let list = results.slice();
 
-  // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
-  if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  // 최소 점수 — early 는 점수대 자체가 달라(실측 0~61) reversal 기준의
-  // minScore·채점 강도가 안 맞는다. config 의 early 전용 하한을 쓴다.
-  list = list.filter((r) => r.score >= (early ? CONFIG.earlyMinScore : s.minScore));
+  // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
+  if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
+  list = list.filter((r) => r.score >= minScoreFor(s));
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
-  if (s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  if (reversal && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
   // 신규 종목 제외
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
-  if (s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
+  if (reversal && s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
   // 1시간봉 200일선 밀착만
-  if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
+  if (reversal && s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
   // 노이즈(촙 구간·저거래량) 제외
   // early 모드의 매집 구간은 정의상 횡보(=촙)라 이 필터를 적용하면 후보가 전멸한다.
-  if (!early && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
+  if (reversal && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
   if (s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
 
   const sortFns = {
-    score: (a, b) => b.score - a.score,
-    change: (a, b) => a.change6h - b.change6h,
+    score: pumpFade
+      ? (a, b) => b.stage.stage - a.stage.stage || b.score - a.score
+      : (a, b) => b.score - a.score,
+    change: pumpFade ? (a, b) => b.change6h - a.change6h : (a, b) => a.change6h - b.change6h,
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
   // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다 — 반드시 점수 기준으로,
   // 사용자 정렬보다 먼저. 정렬 뒤에 자르면 "거래대금" 정렬이 순서가 아니라 보이는
   // 집합 자체를 바꿔(점수 최하위 5개만 남음) 정렬이 필터로 변한다.
   list.sort(sortFns.score);
-  list = list.slice(0, early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop);
+  const keepMax = pumpFade ? CONFIG.pumpFade.keepMax : early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop;
+  list = list.slice(0, keepMax);
 
   // 정렬
   list.sort(sortFns[s.sort] || sortFns.score);
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
+// 모드 UI가 실제 필터 계약과 같은지 테스트 가능한 순수 모델.
+export function modeControlModel(settings) {
+  const mode = settings?.scanMode || "reversal";
+  const early = mode === "early";
+  const pumpFade = mode === "pump_fade";
+  return {
+    mode,
+    early,
+    pumpFade,
+    dedicated: early || pumpFade,
+    direction: pumpFade ? "short" : early ? "long" : String(settings?.direction || "long"),
+    effectiveCut: minScoreFor(settings),
+    strictnessEnabled: !early && !pumpFade,
+    moneyControlsEnabled: !pumpFade,
+  };
 }
 
 // 필터 바 + 설정 탭 초기화
@@ -186,7 +207,6 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
-  syncModeControls(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
   setVal("filter-stage", s.stageFilter);
@@ -201,52 +221,92 @@ export function syncControls() {
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));
+  syncModeControls(s);
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
 
-// 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계 라벨/사용가능 단계, 정렬, 최소 점수.
-// early 는 3단계까지만 있으므로 4·5 는 비활성화한다(고르면 조용히 빈 결과가 됐다).
-const STAGE_LABELS = {
-  reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
-  early: ["전체", "1 매집", "2 임박", "3 돌파", "— (early 없음)", "— (early 없음)"],
+// 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계, 방향, 정렬, 점수/강도, 금액 표시.
+const STAGE_OPTIONS = {
+  reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
+  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 임박"], ["3", "3 돌파"]],
+  pump_fade: [["all", "전체"], ["1", "1 과열 감시"], ["2", "2 고점 거절"], ["3", "3 급락 확인"]],
 };
-function syncModeControls(mode) {
-  const early = mode === "early";
-  const el = document.getElementById("filter-stage");
-  if (el) {
-    const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
-    for (let i = 0; i < el.options.length && i < labels.length; i++) {
-      el.options[i].textContent = labels[i];
-      el.options[i].disabled = early && i >= 4;
-    }
-    if (early && (el.value === "4" || el.value === "5")) {
-      el.value = "all";
-      updateSettings({ stageFilter: "all" });
-    }
+function syncModeControls(settings) {
+  const model = modeControlModel(settings);
+  const stageEl = document.getElementById("filter-stage");
+  if (stageEl) {
+    const options = STAGE_OPTIONS[model.mode] || STAGE_OPTIONS.reversal;
+    stageEl.innerHTML = options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+    const wanted = options.some(([value]) => value === String(settings.stageFilter))
+      ? String(settings.stageFilter) : "all";
+    stageEl.value = wanted;
+    if (wanted !== String(settings.stageFilter)) updateSettings({ stageFilter: "all" });
   }
-  // early 결과는 change6h 를 계산하지 않아(0 고정) "하락률" 정렬이 무동작이었다.
+
+  const direction = document.getElementById("filter-direction");
+  if (direction) {
+    direction.disabled = model.dedicated;
+    direction.value = model.direction;
+    direction.title = model.pumpFade ? "급등 후 급락은 SHORT 전용입니다."
+      : model.early ? "조기 포착은 LONG 전용입니다." : "";
+  }
+  const directionNote = document.getElementById("filter-direction-note");
+  if (directionNote) {
+    directionNote.hidden = !model.dedicated;
+    directionNote.textContent = model.pumpFade ? "SHORT 전용" : "LONG 전용";
+  }
+
   const sortEl = document.getElementById("filter-sort");
   const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
   if (changeOpt) {
-    changeOpt.disabled = early;
-    if (early && sortEl.value === "change") {
+    changeOpt.disabled = model.early;
+    changeOpt.textContent = model.pumpFade ? "급등률" : "하락률";
+    if (model.early && sortEl.value === "change") {
       sortEl.value = "score";
       updateSettings({ sort: "score" });
     }
   }
-  // 최소 점수는 reversal 점수대(0~100 중 55 가 기본) 기준이라 early 에 그대로 못 쓴다.
-  // early 는 config.earlyMinScore 를 하한으로 쓰므로 컨트롤을 잠그고 이유를 보여준다.
+
   const msEl = document.getElementById("filter-minscore");
   if (msEl) {
-    msEl.disabled = early;
-    msEl.title = early
-      ? `조기 포착 모드는 점수대가 달라 전용 하한(${CONFIG.earlyMinScore}점)을 씁니다.`
-      : "";
+    msEl.disabled = model.dedicated;
+    msEl.title = model.dedicated ? `${model.mode} 전용 하한 ${model.effectiveCut}점을 씁니다.` : "";
   }
   const msLabel = msEl?.closest("label");
   if (msLabel) {
-    msLabel.childNodes[0].nodeValue = early ? `최소 점수 (early ${CONFIG.earlyMinScore} 고정)` : "최소 점수";
+    msLabel.childNodes[0].nodeValue = model.dedicated
+      ? `최소 점수 (${model.effectiveCut} 고정)` : "최소 점수";
+  }
+
+  const strictness = document.getElementById("filter-strictness");
+  if (strictness) {
+    strictness.disabled = !model.strictnessEnabled;
+    strictness.title = model.strictnessEnabled ? "" : `${model.mode}는 검증된 고정 컷을 사용합니다.`;
+  }
+  const strictnessNote = document.getElementById("filter-strictness-note");
+  if (strictnessNote) {
+    strictnessNote.hidden = model.strictnessEnabled;
+    strictnessNote.textContent = model.pumpFade
+      ? "급등 후 급락은 실험 컷 45점을 고정 사용합니다."
+      : "조기 포착은 검증 컷 40점을 고정 사용합니다.";
+  }
+
+  for (const id of ["filter-seed", "filter-leverage", "filter-partial"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.disabled = !model.moneyControlsEnabled;
+    el.title = model.moneyControlsEnabled ? "" : "pump_fade는 실험 신호만 제공하며 금액·레버리지 계산을 사용하지 않습니다.";
+  }
+
+  for (const id of [
+    "filter-exclude-chase", "filter-golden-cross", "filter-near-ema200",
+    "set-exclude-chase", "set-golden-cross", "set-near-ema200", "set-filter-noise",
+  ]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.disabled = model.dedicated;
+    el.title = model.dedicated ? "급락 반등 전용 조건입니다." : "";
   }
 }
 

@@ -113,13 +113,16 @@ function emptyMessage() {
     + ` → ${state.candidates.length} → ${state.results.length}`;
   const why = state.settings.scanMode === "early"
     ? `조기 포착은 14일 추세·24시간 변동·최근 상장으로 채점해 ${CONFIG.earlyMinScore}점 이상만 보여줍니다.`
-    : "필터를 완화하거나 채점 강도를 낮춰보세요.";
+    : state.settings.scanMode === "pump_fade"
+      ? `급등 후 급락은 1h 급등 뒤 거절·소진·구조 붕괴 근거가 ${CONFIG.pumpFade.minScore}점 이상인 SHORT 후보만 보여줍니다.`
+      : "필터를 완화하거나 채점 강도를 낮춰보세요.";
   return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
 }
 
 // 조기 포착은 목표가 R 배수 고정이라 손익비가 항상 1:2.00 — 정보가 없다.
 // 대신 그 점수대의 실측 급등 확률을 보여준다(검증셋 17,597행). 그게 이 모드가 실제로 파는 것이다.
 const isEarly = () => state.settings.scanMode === "early";
+const isPumpFade = (r) => r?.scanMode === "pump_fade";
 
 function oddsCell(r) {
   if (!isEarly()) return escapeHtml(r.plan.rrText);
@@ -133,6 +136,7 @@ function oddsCell(r) {
 const partialOn = () => state.settings.partialTake !== false;
 
 function moneyCell(r) {
+  if (isPumpFade(r)) return `<span class="muted">실험 신호 · 금액 계산 안 함</span>`;
   const s = state.settings;
   const m = planMoney(r.plan, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, partialOn() ? undefined : 0);

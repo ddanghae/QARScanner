@@ -168,6 +168,52 @@ export const CONFIG = {
   earlyHitBaseline: 3.57,   // 무작위 종목의 같은 기간 적중률. 확률만 보면 크기를 못 느낀다.
   earlyHitLabel: "7일 내 24h +40%",
 
+  // ---- 급등 후 급락 모드 (pump_fade, SHORT 전용) ----
+  // 아래 임계값과 가중치는 검증 완료값이 아닌 초기 연구값이다.
+  // 점수는 규칙 근거의 합이며 성공 확률이나 기대수익률을 뜻하지 않는다.
+  pumpFade: {
+    pump6hMinPct: 12,
+    pump24hMinPct: 25,
+    volumeClimaxRatio: 2.5,
+    volumeBaselineBars: 20,
+    rejectionLookback15m: 6,
+    priorHighLookback15m: 20,
+    upperWickMinRatio: 0.35,
+    rejectionClosePositionMax: 0.5,
+    takerExhaustionBars: 3,
+    takerBuyRatioMax: 0.48,
+    recentHighLookback15m: 96,
+    microBreakdownBars5m: 4,
+    drawdownConfirmPct: 1.5,
+    lateDrawdownPct: 12,
+    lateDrawdownPenalty: -25,
+    rejectionEvidenceMin: 2,
+    atrStopBuffer: 0.5,
+    maxStopDistancePct: 8,
+    minScore: 45,
+    keepMax: 5,
+  },
+
+  // 합계 100. 초기 실험 가중치이며 백테스트 결과로 자동 재적합하지 않는다.
+  pumpFadeScoreWeights: {
+    pumpStrength: 20,
+    volumeClimax: 15,
+    upperWick: 15,
+    highSweepFailure: 15,
+    takerBuyExhaustion: 10,
+    ema20Loss: 10,
+    vwapLoss: 5,
+    microBreakdown: 10,
+  },
+
+  // 진행 단계와 독립적인 중립 등급. 성공 확률을 뜻하지 않는다.
+  pumpFadeGrades: [
+    { min: 75, label: "근거 많음", key: "strong" },
+    { min: 60, label: "근거 양호", key: "watch" },
+    { min: 45, label: "관찰 후보", key: "observe" },
+    { min: 0, label: "제외", key: "excluded" },
+  ],
+
   // 손익 금액 표시에 빼는 왕복 비용 %. 백테스트와 같은 값(테이커 0.05% + 슬리피지 0.05%, 양쪽).
   // 빼지 않으면 화면 금액이 백테스트보다 좋게 나와 두 숫자가 서로 안 맞는다.
   tradeCostRoundTripPct: 0.2,
@@ -342,6 +388,13 @@ export const STRICTNESS_LEVELS = [
 ];
 export function strictnessPreset(level) {
   return STRICTNESS_LEVELS.find((s) => s.level === level) || STRICTNESS_LEVELS[2];
+}
+
+// 모드별 점수 척도가 다르므로 표시 하한을 한 곳에서 결정한다.
+export function minScoreFor(settings) {
+  if (settings?.scanMode === "early") return CONFIG.earlyMinScore;
+  if (settings?.scanMode === "pump_fade") return CONFIG.pumpFade.minScore;
+  return Number.isFinite(settings?.minScore) ? settings.minScore : strictnessPreset(3).minScore;
 }
 
 // 스테이블/레버리지 판별용 패턴

@@ -84,7 +84,9 @@ export function showDetail(r) {
 
 function renderDetail(r) {
   const p = r.plan;
-  const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${r.stage.label}</span>`;
+  const isPumpFade = r.scanMode === "pump_fade";
+  const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
+  const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
 
   return `
@@ -94,7 +96,7 @@ function renderDetail(r) {
       <div class="detail-title">
         <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
         <h2>${escapeHtml(r.symbol)}</h2>
-        <span class="score-pill score-${r.grade.key}">${r.score}</span>
+        <span class="score-pill score-${r.grade.key}">${isPumpFade ? "실험 점수 " : ""}${r.score}</span>
         ${dirBadge}
       </div>
       <div class="detail-sub">
@@ -103,6 +105,7 @@ function renderDetail(r) {
         <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
         <span>거래대금 ${fmtVolume(r.quoteVolume)}</span>
         ${r.newListing ? '<span class="badge badge-blue">신규</span>' : ""}
+        ${r.provisional ? '<span class="badge badge-yellow">진행 중 캔들 포함 · 변경 가능</span>' : ""}
       </div>
     </header>
 
@@ -117,13 +120,15 @@ function renderDetail(r) {
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>
         <tr><td>무효화(손절)</td><td>${fmtPrice(p.invalidation)}</td></tr>
-        <tr><td>TP1 ${p.partialFrac ? `(${Math.round(p.partialFrac * 100)}% 익절 · 손절을 본전으로)` : (r.direction === "short" ? "(내부 저점)" : "(내부 고점)")}</td><td>${fmtPrice(p.tp1)}</td></tr>
-        <tr><td>TP2 (${r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
-        <tr><td>TP3 (${r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
+        <tr><td>TP1 ${isPumpFade ? "(1R)" : p.partialFrac ? `(${Math.round(p.partialFrac * 100)}% 익절 · 손절을 본전으로)` : (r.direction === "short" ? "(내부 저점)" : "(내부 고점)")}</td><td>${fmtPrice(p.tp1)}</td></tr>
+        <tr><td>TP2 (${isPumpFade ? "2R" : r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
+        <tr><td>TP3 (${isPumpFade ? "3R" : r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
+        ${p.warning ? `<tr><td>위험 경고</td><td>${escapeHtml(p.warning)}</td></tr>` : ""}
       </table>
-      ${moneySection(p)}
+      ${isPumpFade ? '<p class="muted">pump_fade는 공개 데이터 기반 실험 신호만 제공하며 금액·레버리지·청산 계산을 적용하지 않습니다.</p>' : moneySection(p)}
       ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
+      ${isPumpFade ? '<p class="plan-note">초기 임계값과 가중치이며 성공 확률이나 기대수익률로 해석할 수 없습니다.</p>' : ""}
     </section>
 
     ${tfSection(r)}

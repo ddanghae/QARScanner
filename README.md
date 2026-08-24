@@ -1,6 +1,6 @@
 # QAR ICT Early Scanner
 
-Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너.
+Binance USDⓈ-M Futures에서 급락 반등, 조기 포착, 급등 후 하락 전환 후보를 좁히는 스캐너.
 GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백엔드·개인 API 키가 필요 없습니다.
 
 > ⚠️ 기술적 참고용 도구입니다. 자동 주문 기능이 없으며, 표시되는 진입/손절/목표가는
@@ -24,7 +24,7 @@ GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백�
 숏은 롱의 대칭 — 고점 유동성 스윕·하락 구조전환·bearish FVG/OB·매수 흡수로 평가합니다.
 양방향은 종목별로 롱/숏 중 높은 점수 쪽을 표시합니다.
 
-### 스캔 모드 2종
+### 스캔 모드 3종
 
 - **급락 반등**(기본) — 위 파이프라인. 크게 떨어진 것의 되돌림을 노립니다.
 - **조기 포착** — 크게 오르기 전 구간을 노립니다. 4시간봉에서 **14일 추세 강도 +
@@ -49,6 +49,14 @@ GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백�
   > 유의미한 방향이었음) 실제 채점에 넣었을 때 효과가 노이즈 수준이라 넣지 않았습니다.
   > 표시되는 목표가는 분할 익절을 전제로 보세요.
 
+- **급등 후 급락** (`pump_fade`, SHORT 전용) — 1시간 마감봉 기준 6시간 +12% 또는
+  24시간 +25% 급등을 먼저 확인합니다. 이후 15분 거래량 클라이맥스·긴 윗꼬리·고점
+  sweep 실패·Taker Buy 소진·EMA20/VWAP 하향 이탈과 5분 구조 붕괴를 평가해
+  **1 과열 감시 → 2 고점 거절 → 3 급락 확인**으로 분류합니다. 고점 대비 12% 이상
+  하락한 후보는 늦은 숏 위험으로 감점하고, 손절 거리가 8% 이상이면 계획을 무효화합니다.
+  점수와 임계값은 실제 데이터 검증 전 **EXPERIMENTAL**이며 급락 확률이 아닙니다.
+  이 모드에서는 시드·레버리지·금액 계산을 사용하지 않습니다.
+
 ## 사용법
 
 1. 상단 **스캔 시작** 버튼을 누르면 파이프라인이 실행됩니다.
@@ -65,7 +73,8 @@ GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백�
 
 기본 점수는 **마감 캔들**만 사용합니다. 진행 중 캔들을 포함한 실시간 예상 신호를 보려면
 설정에서 별도로 켤 수 있으며, 이 경우 신호는 실시간 추정으로 구분됩니다.
-모든 지표는 과거 데이터만으로 계산되며 미래 데이터를 참조하지 않습니다. (`tests/repaint.test.js`로 검증)
+모든 지표는 과거 데이터만으로 계산되며 미래 데이터를 참조하지 않습니다. 기존 계산은
+`tests/repaint.test.js`, pump_fade는 미래 5분봉 차단과 prefix 불변성 테스트로 검증합니다.
 
 ---
 
@@ -124,8 +133,19 @@ node tests/run.js
 # http://localhost:8123/tests/ 접속
 ```
 
-현재 32개 테스트 전부 통과합니다. (EMA·RSI·MACD·ATR·Bollinger·VWAP·OBV,
-Pivot·BOS·CHoCH, 스윕·FVG, 흡수·단계·점수, prefix==full 리페인트 검증)
+현재 157개 테스트 전부 통과합니다. (기존 지표·구조·early·페이퍼 기록 회귀와
+pump_fade 급등 경계·거절·소진·SHORT 계획·UI 모드·미래 봉 차단·사후 라벨 분리 포함)
+
+### pump_fade 오프라인 연구
+
+운영 가중치를 바꾸지 않고 6시간 12/15%와 24시간 25/30% 조합을 시간순 60/20/20,
+6시간 purge로 비교합니다. 같은 5분봉에서 목표와 손절을 모두 건드리면 `AMBIGUOUS`,
+자료 구간이 비면 `INCOMPLETE`로 분리합니다.
+
+```bash
+node research/pump-fade-backtest.mjs --help
+node research/pump-fade-backtest.mjs --input dataset.json --output report.json
+```
 
 ---
 
@@ -150,7 +170,8 @@ qar-ict-scanner/
 │   │   ├── fvg.js              # FVG (open/partial/filled/inverse)
 │   │   ├── order-block.js      # 오더블록 (자체 규칙)
 │   │   ├── risk-reward.js      # 진입·손절·TP·손익비
-│   │   └── scoring.js          # 흡수 추정·단계 분류·100점 점수
+│   │   ├── scoring.js          # 흡수 추정·단계 분류·100점 점수
+│   │   └── pump-fade.js        # 급등 후 급락 SHORT 전용 순수 계산
 │   ├── scanner/
 │   │   ├── prefilter.js        # 1~3단계 필터
 │   │   ├── deep-scanner.js     # 멀티타임프레임 정밀 분석
@@ -158,7 +179,8 @@ qar-ict-scanner/
 │   └── ui/
 │       ├── dashboard.js, detail-panel.js, settings.js,
 │       ├── notifications.js, tradingview.js, format.js
-└── tests/                # harness + 5개 테스트 스위트 + 브라우저 러너
+├── research/             # pump_fade threshold sweep와 기존 재현 스크립트
+└── tests/                # 결정적 계산·UI·리페인트 회귀 스위트
 ```
 
 ## 설계 원칙
@@ -174,4 +196,6 @@ qar-ict-scanner/
 
 - 실제 호가창을 복원하지 않습니다. 흡수·Delta는 kline의 Taker Volume 기반 **추정**입니다.
 - TradingView 유료·Invite-Only 지표를 복제하지 않습니다. 링크로만 연결합니다.
+- pump_fade 임계값·가중치는 초기 실험값입니다. 고정 과거 데이터셋에서 비용·펀딩·
+  슬리피지를 포함한 검증을 마치지 않았으므로 성과 우위를 주장할 수 없습니다.
 - 점수·단계·손익비는 참고 지표이며 매매 신호가 아닙니다.

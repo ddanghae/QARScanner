@@ -86,17 +86,51 @@
 - Pine v3.3/v3.4 소스 로직은 통합 중 변경하지 않는다.
 - 원격 push와 로그인된 TradingView 저장본 수정은 이 작업의 범위가 아니다.
 
+### 10. pump_fade 세 번째 독립 모드
+
+- `scanMode: pump_fade`와 UI 이름 `급등 후 급락 (숏)`을 추가했다. 기존 reversal/early와
+  계산 경로를 공유하지 않는 SHORT 전용 파이프라인이다.
+- 기존 `stage2Liquidity`의 거래대금 상위 130개 유니버스에서 1시간 마감봉의 6시간 +12%
+  또는 24시간 +25% 급등을 확인한다. 급등 통과 집합은 성능을 이유로 추가 절단하지 않고
+  모두 15분·5분 정밀 분석한 뒤 단계 우선, 점수 순으로 최종 5개만 남긴다.
+- 15분 거래량 클라이맥스, 윗꼬리, 고점 sweep 실패, 최근 3봉 Taker Buy 소진,
+  EMA20/VWAP 이탈과 5분 구조 붕괴를 계산한다. 2개 이상의 고점 거절 근거와 하락 확인이
+  모두 있어야 `3 급락 확인`이다.
+- 점수는 초기 실험 가중치 100점과 고점 대비 12% 이상 하락 시 -25점을 사용한다.
+  45점 컷과 채점 강도는 검증 전 고정하며 UI에서 성공 확률로 표현하지 않는다.
+- SHORT 계획은 최근 15분 고점 + 0.5 ATR을 손절로, 1R/2R/3R을 하방 목표로 사용한다.
+  손절 거리가 8% 이상이거나 TP3가 0 이하이면 계획을 무효화한다.
+- 기본은 진행 중 마지막 캔들을 제외하고 `includeRealtimeCandle=true`일 때만
+  `provisional` 결과를 허용한다. 15분 신호보다 미래인 5분봉은 시각으로 제거한다.
+- `research/pump-fade-backtest.mjs`는 12/15% × 25/30% 네 조합을 시간순 60/20/20과
+  6시간 purge로 모두 보고한다. 사후 라벨은 운영 코어와 분리했고 동일 봉 목표/손절은
+  `AMBIGUOUS`, 중간 또는 종료 봉 누락은 `INCOMPLETE`로 처리한다.
+- 승인 PRD: `docs/superpowers/specs/2026-08-24-pump-fade-mode-prd.md`
+- 요구문에 언급된 `js/ui/format.js`의 `planMoney()`와 청산가 필드는 현재 파일 및 전체
+  Git 이력에 존재하지 않았다. 승인된 범위에 따라 레버리지·청산 모델을 새로 만들지 않고,
+  실제 LONG 계획 회귀와 새 SHORT stop/TP 방향만 테스트했다.
+
 ## 검증 상태
 
 - 통합 전 `origin/main`은 `90/90`, 로컬 QAR/Pine `deecc31`은 `100/100`이었고,
   중복을 제외한 병합 기초 기대치는 `104`개였다.
-- 현재 통합본 자동 테스트는 `118/118` 통과했다. 전체 JavaScript `node --check`와
-  reversal/early 순수 함수 스모크, 충돌 마커 검사도 통과했다. byte-preserved Pine 두 파일을
-  제외한 staged `git diff --check`도 통과했다. 전체 staged 검사는 Pine 원본의 기존 공백
-  주석 6줄을 보고하지만 `deecc31` Git blob 보존을 위해 해당 줄은 정규화하지 않았다.
+- pump_fade 작업 전 기준선은 `118/118`, 현재 전체 자동 테스트는 `156/156` 통과했다.
+  전체 JS/MJS 44개 `node --check`, `git diff --check`, 서비스워커 앱 셸 27개 경로 검사,
+  연구 CLI `--help`도 통과했다. 합성 데이터 스모크는 threshold 4개와 base 표본 40개를
+  생성했고 동일 입력의 보고서 byte 문자열이 재현됨을 확인했다.
+- pump_fade 운영 계산은 마감봉 기본, 신호시각 이하 5분봉만 사용, prefix와 미래 봉 추가
+  결과 불변, 비정상 시각·0 거래량 fail-closed를 테스트했다. 연구 계산은 미래 라벨 모듈을
+  운영 코어가 import하지 않으며 split 경계의 6시간 결과 구간을 purge한다.
+- 2026-08-24 공개 Binance USDⓈ-M kline 요청은 `200 OK`와 사용량 헤더를 반환했고,
+  `exchangeInfo`의 당시 `REQUEST_WEIGHT` 한도는 분당 2400이었다. 코드는 동시요청 5,
+  시간봉별 캐시, 429/418 재시도를 유지한다. 다만 전체 130개 후보가 모두 급등한 상황의
+  반복 실스캔 부하 테스트는 실행하지 않았다.
 - 1280×760 headless Chromium에서 reversal stage 5 상태에서 early로 전환해 단계 필터가
   `전체`로 정상화되고 수동 점수 입력이 숨겨지며 품질 컷 `40+`가 표시됨을 확인했다.
   페이지 오류와 4xx 응답은 0건이었다.
+- 이번 pump_fade 실행에서는 Browser 보안 정책이 로컬 `file://` 접근을 거부해 실제 페이지
+  스모크를 우회하지 않았다. 대신 DOM 이벤트 회귀 테스트로 SHORT 방향 잠금, 단계 1~3,
+  고정 45점 컷과 강도 선택 잠금을 검증했다. 로컬 서버 기반 시각 검증은 남아 있다.
 - Pine v3.3/v3.4는 로컬 QAR/Pine 커밋 `deecc31`의 Git blob과 동일함을 확인했다.
 - TradingView 실차트에서 새 롱·숏 후보와 실제 알림 전달을 관찰하는 검증은 아직 남아 있다.
 
@@ -131,19 +165,23 @@ js/
   api/binance.js
   core/ indicators.js volume-analysis.js market-structure.js liquidity.js
         fvg.js order-block.js risk-reward.js scoring.js
-        golden-cross-retest.js noise-filter.js early-detect.js
+        golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js
   scanner/ prefilter.js deep-scanner.js scan-controller.js
   ui/ dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
 tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
-  golden-cross.test.js noise.test.js early-detect.test.js
+  golden-cross.test.js noise.test.js early-detect.test.js pump-fade.test.js
+  pump-fade-research.test.js
   repaint.test.js refresh.test.js settings.test.js tradingview.test.js
 tradingview/
   easy_market_flow_v3_3.pine easy_market_flow_v3_4.pine VERIFY.md
 docs/superpowers/specs/
   2026-07-27-qar-pine-alignment-prd.md
   2026-07-27-claude-early-integration-prd.md
+  2026-08-24-pump-fade-mode-prd.md
+research/
+  pump-fade-backtest.mjs pump-fade-research-core.mjs
 ```
 
 핵심 진입점:
@@ -153,16 +191,19 @@ docs/superpowers/specs/
 - `js/scanner/prefilter.js`: 모드별 1차 후보 선별
 - `js/scanner/deep-scanner.js`: reversal 멀티타임프레임 분석
 - `js/core/early-detect.js`: early 단계·품질 계산
+- `js/core/pump-fade.js`: pump_fade 단계·점수·SHORT 계획 계산
 - `js/core/scoring.js`: reversal 단계·점수
 
 ## 다음 검토 우선순위
 
-1. 통합본을 고정된 기간·유니버스·채점 강도로 반복 측정해 후보 수, 자료 부족률,
-   단계 분포와 사후 결과를 분리 기록한다.
-2. early 임계값은 한 번에 하나만 바꾸고 후보 수 증가와 품질 저하를 함께 비교한다.
-3. 실제 iPhone Safari에서 Safe Area, 터치, 팝업 차단 대응을 검증한다.
-4. Pine에 early를 포팅하려면 별도 PRD와 독립 성과 검증을 먼저 수행한다.
-5. WebSocket 가격 스트리밍과 모바일 사이드바 드로어는 별도 기능 범위로 다룬다.
+1. 동일 시점 유니버스와 생존 종목 편향을 통제한 실제 과거 데이터셋을 준비해 pump_fade의
+   4개 threshold를 실행하고 표본 수, base rate, lift, 비용 차감 성과를 split별로 비교한다.
+2. 전체 유동성 상위 130개가 급등 필터를 통과하는 스트레스 조건에서 API 사용량과 스캔
+   완료 시간을 측정한다. 속도를 위해 후보 수를 임의 축소하지 않는다.
+3. 로컬 서버와 실제 iPhone Safari에서 pump_fade 모드 전환, Safe Area, 터치, 팝업 차단을 검증한다.
+4. early 임계값은 한 번에 하나만 바꾸고 후보 수 증가와 품질 저하를 함께 비교한다.
+5. Pine에 early/pump_fade를 포팅하려면 별도 PRD와 독립 성과 검증을 먼저 수행한다.
+6. WebSocket 가격 스트리밍과 모바일 사이드바 드로어는 별도 기능 범위로 다룬다.
 
 ## 설계 원칙
 

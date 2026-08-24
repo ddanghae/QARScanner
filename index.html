@@ -95,6 +95,7 @@
               <select id="filter-scanmode">
                 <option value="reversal">급락 반등 (기본)</option>
                 <option value="early">조기 포착 (오르기 전)</option>
+                <option value="pump_fade">급등 후 급락 (숏)</option>
               </select>
             </label>
             <label>방향
@@ -103,6 +104,7 @@
                 <option value="short">숏 후보</option>
                 <option value="both">양방향</option>
               </select>
+              <small id="filter-direction-note" hidden>이 모드는 SHORT 전용입니다.</small>
             </label>
             <label id="filter-minscore-wrap">최소 셋업 점수
               <select id="filter-minscore">
@@ -115,10 +117,10 @@
                 <option value="85">85+</option>
               </select>
             </label>
-            <div id="filter-early-cut" class="filter-readonly" hidden>
-              <span>조기 포착 품질 컷</span>
-              <output id="filter-early-cut-value">40+</output>
-              <small>설정의 채점 강도에서 조정</small>
+            <div id="filter-mode-cut" class="filter-readonly" hidden>
+              <span id="filter-mode-cut-label">조기 포착 품질 컷</span>
+              <output id="filter-mode-cut-value">40+</output>
+              <small id="filter-mode-cut-help">설정의 채점 강도에서 조정</small>
             </div>
             <label>최소 거래대금
               <select id="filter-minvolume">
@@ -175,7 +177,7 @@
             <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
             <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
           </div>
-          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. 5단계는 기본 목록에서 숨겨지며 <b>5 늦음·추격 금지</b>를 직접 고를 때만 표시됩니다. <b>셋업 점수</b>와 <b>진행 단계</b>는 규칙 충족 정도이며 성공 확률이 아닙니다. TradingView의 <b>차트 정합 등급</b>과도 서로 환산되지 않습니다.</p>
+          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. 급락 반등의 5단계는 기본 목록에서 숨겨지며 <b>5 늦음·추격 금지</b>를 직접 고를 때만 표시됩니다. <b>셋업 점수</b>와 <b>진행 단계</b>는 규칙 충족 정도이며 성공 확률이 아닙니다. <b>급등 후 급락</b> 점수와 임계값은 초기 실험값입니다.</p>
         </section>
 
         <!-- 결과 -->
@@ -202,7 +204,7 @@
               <span class="set-label">현재 모드</span>
               <span class="tagline">위 필터 바의 "스캔 모드"에서 변경</span>
             </div>
-            <p class="set-help"><b>급락 반등</b>은 크게 떨어진 코인이 되돌아오는 자리를 찾습니다. <b>조기 포착</b>은 충분한 4시간봉·OI 이력이 있고 OI가 빠져나가지 않은 후보를 <b>매집 → 임박 → 돌파</b> 3단계로 보여줍니다. early 점수는 단계 진행도가 아니라 압축·OI·거래량·박스 위치·추세 근거의 품질입니다. 언제 오를지는 알 수 없고 오르지 않을 수도 있습니다.</p>
+            <p class="set-help"><b>급락 반등</b>은 크게 떨어진 코인이 되돌아오는 자리를 찾습니다. <b>조기 포착</b>은 충분한 4시간봉·OI 이력이 있고 OI가 빠져나가지 않은 후보를 <b>매집 → 임박 → 돌파</b> 3단계로 보여줍니다. <b>급등 후 급락</b>은 급등 뒤 거래량 클라이맥스·고점 거절·매수 소진·15분선 이탈·5분 구조 붕괴가 확인되는 SHORT 후보만 좁힙니다. 세 모드의 점수는 서로 환산되지 않으며 성공 확률이 아닙니다.</p>
           </div>
         </section>
         <section class="card settings-group">
@@ -217,8 +219,9 @@
                 <option value="4">4 · 엄격하게</option>
                 <option value="5">5 · 아주 엄격하게 (후보 적게)</option>
               </select>
+              <small id="filter-strictness-note" hidden>급등 후 급락 모드는 검증 전 고정 45점 컷을 사용합니다.</small>
             </div>
-            <p class="set-help">셋업 규칙을 얼마나 깐깐하게 적용할지 정합니다. <b>숫자가 낮을수록</b> 조건을 느슨하게 봐서 <b>더 많은 코인</b>이 나오고, <b>높을수록</b> 더 많은 규칙을 충족한 후보만 남아 <b>적게</b> 나옵니다. 이 값은 성공 확률이나 승률이 아닙니다.</p>
+            <p class="set-help">급락 반등·조기 포착 셋업 규칙을 얼마나 깐깐하게 적용할지 정합니다. <b>숫자가 낮을수록</b> 조건을 느슨하게 봐서 <b>더 많은 코인</b>이 나오고, <b>높을수록</b> 더 많은 규칙을 충족한 후보만 남아 <b>적게</b> 나옵니다. 급등 후 급락 모드에서는 검증 전 고정 컷을 보호하기 위해 잠깁니다. 이 값은 성공 확률이나 승률이 아닙니다.</p>
           </div>
         </section>
 

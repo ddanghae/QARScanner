@@ -19,28 +19,29 @@ const REALTIME_IDS = ["set-realtime-candle"];
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
-  const early = s.scanMode === "early";
-  const stage5Explicit = !early && String(s.stageFilter) === "5";
+  const reversal = s.scanMode === "reversal";
+  const pumpFade = s.scanMode === "pump_fade";
+  const stage5Explicit = reversal && String(s.stageFilter) === "5";
   let list = results.slice();
 
-  // 방향 — early 모드는 롱 전용이라 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
-  if (!early && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  // 최소 점수 — early 는 점수 척도가 달라 별도 컷 사용
+  // 방향 — early/pump_fade는 각각 LONG/SHORT 전용 파이프라인이라 저장된 reversal 방향을 적용하지 않는다.
+  if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
+  // 최소 점수 — 모드별 점수 척도가 달라 각 전용 컷 사용
   const cut = minScoreFor(s);
   list = list.filter((r) => r.score >= cut);
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계)는 직접 고른 경우에만 노출한다. 레거시 체크 설정과 무관한 고정 계약이다.
-  if (!stage5Explicit) list = list.filter((r) => r.stage.stage !== 5);
+  if (reversal && !stage5Explicit) list = list.filter((r) => r.stage.stage !== 5);
   // 신규 종목 제외
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
-  if (s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
+  if (reversal && s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
   // 1시간봉 200일선 밀착만
-  if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
+  if (reversal && s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
   // 노이즈(촙 구간·저거래량) 제외
   // early 모드의 매집 구간은 정의상 횡보(=촙)라 이 필터를 적용하면 후보가 전멸한다.
-  if (!early && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
+  if (reversal && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
@@ -48,8 +49,10 @@ export function applyFilters(results) {
 
   // 정렬
   const sortFns = {
-    score: (a, b) => b.score - a.score,
-    change: (a, b) => a.change6h - b.change6h,
+    score: pumpFade
+      ? (a, b) => b.stage.stage - a.stage.stage || b.score - a.score
+      : (a, b) => b.score - a.score,
+    change: pumpFade ? (a, b) => b.change6h - a.change6h : (a, b) => a.change6h - b.change6h,
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
   list.sort(sortFns[s.sort] || sortFns.score);
@@ -58,10 +61,16 @@ export function applyFilters(results) {
 
 export function scoreControlModel(settings) {
   const early = settings?.scanMode === "early";
+  const pumpFade = settings?.scanMode === "pump_fade";
   return {
     early,
-    manualMinScoreVisible: !early,
+    pumpFade,
+    dedicated: early || pumpFade,
+    strictnessEnabled: !pumpFade,
+    manualMinScoreVisible: !early && !pumpFade,
     effectiveCut: minScoreFor(settings),
+    cutLabel: pumpFade ? "급등 후 급락 실험 컷" : "조기 포착 품질 컷",
+    cutHelp: pumpFade ? "초기 실험값 · 확률 아님" : "설정의 채점 강도에서 조정",
   };
 }
 
@@ -169,7 +178,7 @@ export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
   syncStageOptions(s.scanMode);
-  setVal("filter-direction", s.direction);
+  syncDirectionControl(s);
   setVal("filter-minscore", s.minScore);
   syncScoreControls(s);
   setVal("filter-dropbasis", s.dropBasis);
@@ -190,12 +199,31 @@ function syncScoreControls(settings) {
   const model = scoreControlModel(settings);
   const manualWrap = document.getElementById("filter-minscore-wrap");
   const manualSelect = document.getElementById("filter-minscore");
-  const earlyCut = document.getElementById("filter-early-cut");
-  const earlyCutValue = document.getElementById("filter-early-cut-value");
+  const modeCut = document.getElementById("filter-mode-cut");
+  const modeCutLabel = document.getElementById("filter-mode-cut-label");
+  const modeCutValue = document.getElementById("filter-mode-cut-value");
+  const modeCutHelp = document.getElementById("filter-mode-cut-help");
+  const strictness = document.getElementById("filter-strictness");
+  const strictnessNote = document.getElementById("filter-strictness-note");
   if (manualWrap) manualWrap.hidden = !model.manualMinScoreVisible;
   if (manualSelect) manualSelect.disabled = !model.manualMinScoreVisible;
-  if (earlyCut) earlyCut.hidden = !model.early;
-  if (earlyCutValue) earlyCutValue.textContent = `${model.effectiveCut}+`;
+  if (modeCut) modeCut.hidden = !model.dedicated;
+  if (modeCutLabel) modeCutLabel.textContent = model.cutLabel;
+  if (modeCutValue) modeCutValue.textContent = `${model.effectiveCut}+`;
+  if (modeCutHelp) modeCutHelp.textContent = model.cutHelp;
+  if (strictness) strictness.disabled = !model.strictnessEnabled;
+  if (strictnessNote) strictnessNote.hidden = model.strictnessEnabled;
+}
+
+function syncDirectionControl(settings) {
+  const direction = document.getElementById("filter-direction");
+  const note = document.getElementById("filter-direction-note");
+  const pumpFade = settings?.scanMode === "pump_fade";
+  if (direction) {
+    direction.disabled = pumpFade;
+    direction.value = pumpFade ? "short" : String(settings.direction);
+  }
+  if (note) note.hidden = !pumpFade;
 }
 
 // 진행 단계 필터는 모드별 실제 단계만 노출한다. early의 기존 1~3단계 의미는 유지한다.
@@ -214,6 +242,12 @@ const STAGE_OPTIONS = {
     ["1", "1 매집"],
     ["2", "2 임박"],
     ["3", "3 돌파"],
+  ],
+  pump_fade: [
+    ["all", "전체"],
+    ["1", "1 과열 감시"],
+    ["2", "2 고점 거절"],
+    ["3", "3 급락 확인"],
   ],
 };
 function syncStageOptions(mode) {

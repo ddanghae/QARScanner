@@ -8,6 +8,8 @@ import { run as scoring } from "./scoring.test.js";
 import { run as goldenCross } from "./golden-cross.test.js";
 import { run as noise } from "./noise.test.js";
 import { run as earlyDetect } from "./early-detect.test.js";
+import { run as pumpFade } from "./pump-fade.test.js";
+import { run as pumpFadeResearch } from "./pump-fade-research.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as settings } from "./settings.test.js";
@@ -22,6 +24,8 @@ export function runAll() {
   goldenCross();
   noise();
   earlyDetect();
+  pumpFade();
+  pumpFadeResearch();
   repaint();
   refresh();
   settings();

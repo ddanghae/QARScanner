@@ -4,13 +4,16 @@
 
 import { CONFIG, minScoreFor } from "../config.js";
 import { state, emit } from "../state.js";
-import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll } from "../api/binance.js";
+import {
+  getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll, closedOnly,
+} from "../api/binance.js";
 import {
   stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates,
   excludeMajors, stage3EvaluateEarly, prioritizeEarlyCandidates,
 } from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
 import { buildEarlyResult } from "../core/early-detect.js";
+import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
 
 let abortToken = { aborted: false };
 
@@ -96,6 +99,52 @@ async function runEarlyPipeline(universe, now) {
   return analyzed.filter(Boolean);
 }
 
+// ---- 급등 후 급락 모드 파이프라인 (SHORT 전용) ----
+// 1h 급등 필터를 먼저 적용하되 통과 집합을 추가로 자르지 않는다.
+async function runPumpFadePipeline(universe, now) {
+  const includeRealtime = Boolean(state.settings.includeRealtimeCandle);
+
+  setPhase("prefilter");
+  const tickers = await getTicker24h();
+  state.tickers = tickers;
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now);
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  if (abortToken.aborted) return null;
+
+  setPhase("candidate");
+  const evaluated = await mapWithProgress(prefiltered, async (item) => {
+    const raw1h = await getKlines(item.symbol, "1h");
+    const candles1h = closedOnly(raw1h, includeRealtime);
+    return { item, candles1h, pre: pumpFadePrefilter(candles1h, CONFIG) };
+  });
+  const candidates = evaluated
+    .filter((x) => x.pre?.pass)
+    .sort((a, b) => {
+      const strength = (b.pre.normalizedStrength ?? -Infinity) - (a.pre.normalizedStrength ?? -Infinity);
+      if (strength) return strength;
+      return String(a.item.symbol).localeCompare(String(b.item.symbol));
+    });
+  state.candidates = candidates.map((x) => x.item);
+  emit("scan:candidates", { count: candidates.length });
+  if (abortToken.aborted) return null;
+
+  setPhase("deep");
+  const analyzed = await mapWithProgress(candidates, async ({ item, candles1h }) => {
+    const [raw15m, raw5m] = await Promise.all([
+      getKlines(item.symbol, "15m"),
+      getKlines(item.symbol, "5m"),
+    ]);
+    const candles15m = closedOnly(raw15m, includeRealtime);
+    const candles5m = closedOnly(raw5m, includeRealtime);
+    return buildPumpFadeResult(item, candles1h, candles15m, candles5m, CONFIG, {
+      provisional: includeRealtime,
+    });
+  });
+  return analyzed.filter(Boolean);
+}
+
 export async function runScan() {
   if (state.scan.running) return;
   abortToken = { aborted: false };
@@ -113,6 +162,24 @@ export async function runScan() {
     const universe = stage1Universe(symbols);
     state.universe = universe;
     if (abortToken.aborted) return finishAborted();
+
+    // --- 급등 후 급락 모드면 별도 SHORT 파이프라인 ---
+    if (state.settings.scanMode === "pump_fade") {
+      const pumpFadeResults = await runPumpFadePipeline(universe, now);
+      if (pumpFadeResults === null) return finishAborted();
+      setPhase("score");
+      const results = pumpFadeResults
+        .filter((r) => !r.skipped && !r.error && r.score >= minScoreFor(state.settings))
+        .sort((a, b) => b.stage.stage - a.stage.stage || b.score - a.score || a.symbol.localeCompare(b.symbol))
+        .slice(0, CONFIG.pumpFade.keepMax)
+        .map((r, i) => ({ ...r, rank: i + 1 }));
+      state.results = results;
+      setPhase("done");
+      state.scan.running = false;
+      state.scan.lastUpdated = Date.now();
+      emit("scan:done", { count: results.length, analyzed: pumpFadeResults.length });
+      return results;
+    }
 
     // --- 조기 포착 모드면 별도 파이프라인 ---
     if (state.settings.scanMode === "early") {

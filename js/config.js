@@ -136,6 +136,52 @@ export const CONFIG = {
     { min: 0, label: "제외", key: "excluded" },
   ],
 
+  // ---- 급등 후 급락 모드 (pump_fade, SHORT 전용) ----
+  // 아래 임계값과 가중치는 검증 완료값이 아닌 초기 연구값이다.
+  // 점수는 규칙 근거의 합이며 성공 확률이나 기대수익률을 뜻하지 않는다.
+  pumpFade: {
+    pump6hMinPct: 12,
+    pump24hMinPct: 25,
+    volumeClimaxRatio: 2.5,
+    volumeBaselineBars: 20,
+    rejectionLookback15m: 6,
+    priorHighLookback15m: 20,
+    upperWickMinRatio: 0.35,
+    rejectionClosePositionMax: 0.5,
+    takerExhaustionBars: 3,
+    takerBuyRatioMax: 0.48,
+    recentHighLookback15m: 96,
+    microBreakdownBars5m: 4,
+    drawdownConfirmPct: 1.5,
+    lateDrawdownPct: 12,
+    lateDrawdownPenalty: -25,
+    rejectionEvidenceMin: 2,
+    atrStopBuffer: 0.5,
+    maxStopDistancePct: 8,
+    minScore: 45,
+    keepMax: 5,
+  },
+
+  // 합계 100. 초기 실험 가중치이며 백테스트 결과로 자동 재적합하지 않는다.
+  pumpFadeScoreWeights: {
+    pumpStrength: 20,
+    volumeClimax: 15,
+    upperWick: 15,
+    highSweepFailure: 15,
+    takerBuyExhaustion: 10,
+    ema20Loss: 10,
+    vwapLoss: 5,
+    microBreakdown: 10,
+  },
+
+  // 진행 단계와 독립적인 중립 등급. 성공 확률을 뜻하지 않는다.
+  pumpFadeGrades: [
+    { min: 75, label: "근거 많음", key: "strong" },
+    { min: 60, label: "근거 양호", key: "watch" },
+    { min: 45, label: "관찰 후보", key: "observe" },
+    { min: 0, label: "제외", key: "excluded" },
+  ],
+
   // ---- 시장구조 엔진 ----
   structure: {
     internalPivot: 2,   // 좌우 2~3 봉
@@ -267,13 +313,15 @@ export function strictnessPreset(level) {
   return STRICTNESS_LEVELS.find((s) => s.level === level) || STRICTNESS_LEVELS[2];
 }
 
-// 모드별 최소 점수. 두 모드의 점수 척도가 달라 같은 컷을 쓰면 안 된다.
+// 모드별 최소 점수. 각 모드의 점수 척도가 달라 같은 컷을 쓰면 안 된다.
 // early 는 강도 프리셋의 감점 항목(reversal 전용)은 못 쓰지만 컷은 단계에 맞춰 따라간다
 // — 그래야 "채점 강도" 선택기가 early 에서도 죽은 컨트롤이 되지 않는다.
 export function minScoreFor(settings) {
-  return settings?.scanMode === "early"
-    ? strictnessPreset(settings?.strictnessLevel ?? 3).earlyMinScore
-    : settings?.minScore;
+  if (settings?.scanMode === "early") {
+    return strictnessPreset(settings?.strictnessLevel ?? 3).earlyMinScore;
+  }
+  if (settings?.scanMode === "pump_fade") return CONFIG.pumpFade.minScore;
+  return settings?.minScore;
 }
 
 // 스테이블/레버리지 판별용 패턴

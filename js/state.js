@@ -10,9 +10,9 @@ const defaultSettings = {
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
   dropBasis: "6h",          // "6h" | "24h"
   direction: "long",         // "long" | "short" | "both"
-  scanMode: "reversal",      // "reversal"(급락 반등) | "early"(조기 포착)
+  scanMode: "reversal",      // "reversal" | "early" | "pump_fade"(SHORT 전용)
   timeframeFocus: "15m",
-  stageFilter: "all",        // reversal 0~5, early 1~3 또는 all
+  stageFilter: "all",        // reversal 0~5, early/pump_fade 1~3 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
   favorites: [],             // 관심 종목 심볼 배열

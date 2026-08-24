@@ -121,12 +121,12 @@ function progressStageText(r) {
   return `진행 ${r.stage.stage}단계 · ${escapeHtml(label)}`;
 }
 
-function isEarlyResult(r) {
-  return r.scanMode === "early" || Boolean(r.early);
+function isStandaloneResult(r) {
+  return r.scanMode === "early" || r.scanMode === "pump_fade" || Boolean(r.early);
 }
 
 function tvHandoffLabel(r, compact = false) {
-  if (isEarlyResult(r)) return compact ? "TV 차트" : "TradingView 차트 (early 판정과 별개)";
+  if (isStandaloneResult(r)) return compact ? "TV 차트" : "TradingView 차트 (스캐너 판정과 별개)";
   return compact ? "TV 정합" : "TradingView 독립 차트 정합 확인";
 }
 
@@ -142,7 +142,7 @@ function rowHtml(r) {
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${r.plan.rrText}</td>
     <td><button class="btn-mini" data-detail="${r.symbol}">상세</button></td>
-    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="${tvHandoffLabel(r)}" title="${tvHandoffLabel(r)}">${isEarlyResult(r) ? "TV" : "TV 정합"}</button></td>
+    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="${tvHandoffLabel(r)}" title="${tvHandoffLabel(r)}">${isStandaloneResult(r) ? "TV" : "TV 정합"}</button></td>
   </tr>`;
 }
 

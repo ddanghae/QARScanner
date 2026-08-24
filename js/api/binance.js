@@ -130,6 +130,26 @@ export async function getKlines(symbol, interval, limit) {
   return parseKlines(raw);
 }
 
+// Closed forward-paper outcomes need an exact post-detection range, not the latest N candles.
+export function buildKlineRangePath(symbol, interval, startTime, endTime, limit = 1500) {
+  const safeSymbol = String(symbol || "").trim().toUpperCase();
+  const safeInterval = String(interval || "").trim();
+  const start = startTime == null ? NaN : Math.floor(Number(startTime));
+  const end = endTime == null ? NaN : Math.floor(Number(endTime));
+  const lim = Math.min(1500, Math.max(1, Math.floor(Number(limit)) || 1));
+  if (!/^[A-Z0-9_]+$/.test(safeSymbol)) throw new Error("Invalid symbol for kline range");
+  if (!/^[1-9][0-9]*[mhdwM]$/.test(safeInterval)) throw new Error("Invalid interval for kline range");
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) throw new Error("Invalid kline time range");
+  return `/fapi/v1/klines?symbol=${encodeURIComponent(safeSymbol)}&interval=${encodeURIComponent(safeInterval)}&startTime=${start}&endTime=${end}&limit=${lim}`;
+}
+
+export async function getKlinesRange(symbol, interval, startTime, endTime, limit = 1500) {
+  const path = buildKlineRangePath(symbol, interval, startTime, endTime, limit);
+  const ttl = CONFIG.cacheTtlMs[interval] || 60000;
+  const raw = await request(path, { ttl, cacheKey: `range:${path}` });
+  return parseKlines(raw);
+}
+
 // Mark Price (필요 시)
 export async function getMarkPrice(symbol) {
   return request(`/fapi/v1/premiumIndex?symbol=${symbol}`);
@@ -198,7 +218,7 @@ export function closedOnly(candles, includeRealtime) {
 }
 
 export default {
-  getExchangeInfo, getTicker24h, getKlines, getMarkPrice,
+  getExchangeInfo, getTicker24h, getKlines, getKlinesRange, getMarkPrice,
   getOpenInterestHist, getPremiumIndexAll,
-  parseKlines, closedOnly, clearCache,
+  parseKlines, closedOnly, clearCache, buildKlineRangePath,
 };

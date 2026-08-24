@@ -14,6 +14,8 @@ import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as settings } from "./settings.test.js";
 import { run as tradingview } from "./tradingview.test.js";
+import { run as history } from "./history.test.js";
+import { run as historyStore } from "./history-store.test.js";
 
 export function runAll() {
   reset();
@@ -30,6 +32,8 @@ export function runAll() {
   refresh();
   settings();
   tradingview();
+  history();
+  historyStore();
   return report();
 }
 

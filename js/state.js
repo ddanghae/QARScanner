@@ -72,6 +72,13 @@ export const state = {
     lastError: null,
     weightUsed: 0,
   },
+  history: {
+    events: [],
+    refreshing: false,
+    lastRefreshAt: 0,
+    lastError: null,
+    storageIssue: null,
+  },
 };
 
 // ---- 간단 이벤트 버스 ----

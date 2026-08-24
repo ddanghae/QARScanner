@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
           <span>개요</span>
         </button>
+        <button class="side-link" data-nav="history">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+          <span>기록·성과</span>
+        </button>
         <button class="side-link" data-nav="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>설정</span>
@@ -193,6 +197,58 @@
         <footer class="app-footer">
           <p>공개 REST API 기반 · 개인 API 키 없음 · 자동 주문 없음 · 기술적 참고용</p>
         </footer>
+       </div>
+
+       <!-- ================= 기록·성과 탭 ================= -->
+       <div id="view-history" hidden>
+        <section class="card history-intro">
+          <div class="card-head history-head">
+            <div>
+              <h2>스캔 기록과 이후 성과</h2>
+              <p class="hint">실제 매수 내역이 아니라, 스캐너에 포착된 신호의 비용 전 가상 성과입니다.</p>
+            </div>
+            <div class="history-actions">
+              <button id="history-refresh" class="btn btn-primary">성과 갱신</button>
+              <button id="history-export-json" class="btn">JSON 내보내기</button>
+              <button id="history-export-csv" class="btn">CSV 내보내기</button>
+              <button id="history-clear" class="btn btn-danger">기록 삭제</button>
+            </div>
+          </div>
+          <p class="history-disclosure">포착 다음 5분봉 시가를 가상 진입가로 사용하고 1시간·6시간·24시간 뒤 방향 수익률을 계산합니다. 수수료, 펀딩, 슬리피지, 포지션 크기는 반영하지 않습니다. 임시 캔들 신호와 불완전 자료는 기본 성과 분모에서 제외됩니다.</p>
+          <p id="history-storage-notice" class="history-warning" hidden></p>
+        </section>
+
+        <section class="card history-filter-card" aria-label="기록 필터">
+          <div class="card-head"><h2>기록 필터</h2><span id="history-filter-count" class="tagline">0건 표시</span></div>
+          <div class="filter-grid">
+            <label>기간
+              <select id="history-period"><option value="all">전체</option><option value="7d">최근 7일</option><option value="30d">최근 30일</option><option value="90d">최근 90일</option></select>
+            </label>
+            <label>스캔 모드
+              <select id="history-mode"><option value="all">전체</option><option value="reversal">급락 반등</option><option value="early">조기 매집</option><option value="pump_fade">급등 후 급락</option></select>
+            </label>
+            <label>방향
+              <select id="history-direction"><option value="all">전체</option><option value="long">LONG</option><option value="short">SHORT</option></select>
+            </label>
+            <label>상태
+              <select id="history-status"><option value="all">전체</option><option value="complete">24h 완료</option><option value="pending">성과 대기</option><option value="issue">불완전·평가 제외</option><option value="provisional">임시 신호</option></select>
+            </label>
+          </div>
+        </section>
+
+        <section id="history-summary" class="status-bar history-summary" aria-live="polite"></section>
+
+        <section class="card">
+          <div class="card-head"><h2>모드별 요약</h2></div>
+          <div id="history-mode-breakdown" class="history-table-wrap"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>코인별 기록</h2></div>
+          <div id="history-results" aria-live="polite"><div class="empty">다음 성공 스캔부터 결과가 쌓입니다.</div></div>
+        </section>
+
+        <footer class="app-footer"><p>브라우저별 로컬 기록 · 공개 Binance 5분봉 · 주문 및 계좌 연결 없음</p></footer>
        </div>
 
        <!-- ================= 설정 탭 ================= -->

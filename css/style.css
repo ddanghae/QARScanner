@@ -265,6 +265,42 @@ html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
 
 .app-footer { padding: 8px 0 0; text-align: center; color: var(--muted); font-size: 12px; }
 
+/* ---- 스캔 기록·성과 ---- */
+#view-history { display: flex; flex-direction: column; gap: 18px; }
+#view-history[hidden] { display: none; }
+.history-head { align-items: flex-start; gap: 16px; }
+.history-head .hint { margin: 5px 0 0; }
+.history-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.history-disclosure {
+  margin: 12px 0 0; padding: 12px 14px; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1.6;
+}
+.history-warning {
+  margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: rgba(216,58,58,.12); color: var(--down); font-size: 12px;
+}
+.history-summary { margin: 0; }
+.history-summary .stat-val { font-size: 18px; }
+.history-metric-detail { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.history-table-wrap { width: 100%; overflow-x: auto; }
+.history-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+.history-table th, .history-table td {
+  padding: 11px 9px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle;
+}
+.history-table th { color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.history-table tbody tr:last-child td { border-bottom: none; }
+.history-table td small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.history-table .sym { font-weight: 700; white-space: nowrap; }
+.history-mode-table { min-width: 620px; }
+.history-status {
+  display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.history-status-ok { background: rgba(18,153,91,.14); color: var(--up); }
+.history-status-pending { background: rgba(214,139,0,.14); color: var(--warn); }
+.history-status-provisional { background: rgba(98,91,246,.14); color: var(--accent); }
+.history-status-issue { background: rgba(216,58,58,.14); color: var(--down); }
+
 /* ---- 반응형 ----
    사이드바는 900px 아래에서 가로 스크롤 탭 바로 전환(별도 드로어 JS 없이 CSS만으로 처리). */
 @media (max-width: 900px) {
@@ -287,4 +323,7 @@ html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
   .result-table { display: none; }
   .result-cards { display: flex; }
   .topbar-title h1 { font-size: 16px; }
+  .history-head { flex-direction: column; }
+  .history-actions { width: 100%; justify-content: flex-start; }
+  .history-actions .btn { flex: 1 1 calc(50% - 8px); }
 }

@@ -78,6 +78,20 @@ GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백�
    설정은 `localStorage`에 자동 저장됩니다.
 7. **자동 갱신**을 켜면 일정 주기(기본 90초)로 재스캔하며 "다음 갱신까지 남은 시간"이 표시됩니다.
    탭이 백그라운드로 가면 주기가 자동으로 느려집니다.(§18) 주기는 `js/config.js`의 `refresh.intervalMs`에서 조정합니다.
+8. 왼쪽 **기록·성과** 탭에서는 포착된 코인, 모드, 방향, 최초·최근 포착 시각, 반복 횟수와
+   1시간·6시간·24시간 가상 성과를 확인하고 JSON/CSV로 내보낼 수 있습니다.
+
+### 기록·성과
+
+- 성공적으로 끝난 스캔의 최종 후보만 이 브라우저의 `qar-scan-history-v1` 저장소에 기록합니다.
+- 같은 코인·모드·방향·확정 상태가 6시간 안에 반복되면 한 사건으로 묶고 포착 횟수만 늘립니다.
+- 포착 시각보다 엄격히 뒤인 **다음 5분봉 시가**를 가상 진입가로 사용합니다. LONG과 SHORT
+  방향을 반영한 1h/6h/24h 수익률, 24h MFE/MAE, TP1·손절 선도달을 계산합니다.
+- 5분봉이 빠지면 `불완전`, 한 봉에서 TP1과 손절이 모두 닿으면 `같은 봉 동시 도달`, 아직
+  시간이 지나지 않았으면 `성과 대기`로 두며 성과 분모에서 제외합니다. 진행 중 캔들을 포함한
+  임시 신호도 헤드라인 성과에서 제외합니다.
+- 기록은 최대 500건이며 이 기능을 적용한 뒤부터 쌓입니다. 이전에 저장하지 않은 과거 스캔은
+  복구하지 않고, 다른 브라우저나 기기로 자동 동기화하지 않습니다.
 
 ### 리페인트(미래 참조) 방지
 
@@ -143,10 +157,11 @@ node tests/run.js
 # http://localhost:8123/tests/ 접속
 ```
 
-현재 전체 테스트는 **156/156 통과**했습니다. (EMA·RSI·MACD·ATR·Bollinger·VWAP·OBV,
+현재 전체 테스트는 **179/179 통과**했습니다. (EMA·RSI·MACD·ATR·Bollinger·VWAP·OBV,
 Pivot·BOS·CHoCH, 스윕·FVG, stage 0/1, 흡수 60%/100%, stage 5 필터,
 timestamp 기반 OI·자료 부족 fail-closed·단계별 압축·early 등급·돌파 우선,
 모드 전환 UI 동기화, pump_fade 정밀 신호·SHORT 계획·동일 봉 모호성·불완전 라벨,
+기록 중복·보관 상한·LONG/SHORT 성과·미래 봉 차단·확정값 불변·저장 실패,
 TradingView 심볼·15분봉 인계, prefix==full 리페인트 검증)
 
 ### pump_fade 오프라인 연구
@@ -189,14 +204,18 @@ QARScanner/
 │   │   ├── risk-reward.js      # 진입·손절·TP·손익비
 │   │   ├── scoring.js          # 흡수 추정·단계 분류·100점 점수
 │   │   ├── early-detect.js     # 조기 포착 단계·품질 계산
-│   │   └── pump-fade.js        # 급등 후 급락 SHORT 전용 순수 계산
+│   │   ├── pump-fade.js        # 급등 후 급락 SHORT 전용 순수 계산
+│   │   └── signal-history.js    # 인과적 스캔 기록·forward paper 성과
+│   ├── history/
+│   │   ├── history-store.js     # 버전된 localStorage 저장
+│   │   └── history-controller.js # 기록·공개 5분봉 성과 갱신
 │   ├── scanner/
 │   │   ├── prefilter.js        # 1~3단계 필터
 │   │   ├── deep-scanner.js     # 멀티타임프레임 정밀 분석
 │   │   └── scan-controller.js  # 파이프라인 오케스트레이션
 │   └── ui/
 │       ├── dashboard.js, detail-panel.js, settings.js,
-│       ├── notifications.js, tradingview.js, format.js
+│       ├── notifications.js, tradingview.js, format.js, history.js
 ├── tradingview/
 │   ├── easy_market_flow_v3_3.pine # 첨부 원본 보존
 │   ├── easy_market_flow_v3_4.pine # 정밀 게이트 + 차트 정합 등급 버전
@@ -207,7 +226,8 @@ QARScanner/
 ├── docs/superpowers/specs/
 │   ├── 2026-07-27-qar-pine-alignment-prd.md
 │   ├── 2026-07-27-claude-early-integration-prd.md
-│   └── 2026-08-24-pump-fade-mode-prd.md
+│   ├── 2026-08-24-pump-fade-mode-prd.md
+│   └── 2026-08-24-scan-history-performance-prd.md
 └── tests/                # Node/브라우저 테스트 하네스와 회귀 스위트
 ```
 
@@ -228,4 +248,6 @@ QARScanner/
   정합 확인, early와 pump_fade는 별도 차트 관찰이며 Pine v3.4에 두 판정은 포팅되지 않았습니다.
 - pump_fade 임계값·가중치는 초기 실험값입니다. 고정 과거 데이터셋의 실제 threshold sweep과
   수수료·펀딩·슬리피지 반영 연구를 마치지 않았으므로 성과 우위를 주장할 수 없습니다.
+- 기록·성과는 브라우저별 로컬 forward paper 결과입니다. 실제 체결, 수수료, 펀딩,
+  슬리피지, 포지션 크기와 겹치는 포지션을 모델링하지 않으므로 계좌 수익으로 해석할 수 없습니다.
 - 점수·단계·손익비는 참고 지표이며 매매 신호가 아닙니다.

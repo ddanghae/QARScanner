@@ -6,12 +6,16 @@ import { runScan, abortScan, startAutoRefresh, stopAutoRefresh } from "./scanner
 import { initDashboard } from "./ui/dashboard.js";
 import { initSettingsUI } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
+import { initHistoryUI } from "./ui/history.js";
+import { initHistoryController } from "./history/history-controller.js";
 import { toast, notifyError } from "./ui/notifications.js";
 
 function boot() {
+  initHistoryController();
   initSettingsUI();
   initDetailPanel();
   initDashboard();
+  initHistoryUI();
 
   // 스캔 버튼
   document.getElementById("scan-btn")?.addEventListener("click", () => {
@@ -57,16 +61,24 @@ function boot() {
 
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
 function initTabs() {
-  const views = { overview: document.getElementById("view-overview"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "개요", settings: "설정" };
+  const views = {
+    overview: document.getElementById("view-overview"),
+    history: document.getElementById("view-history"),
+    settings: document.getElementById("view-settings"),
+  };
+  const titles = { overview: "개요", history: "기록·성과", settings: "설정" };
   const navBtns = document.querySelectorAll("[data-nav]");
   navBtns.forEach((btn) => btn.addEventListener("click", () => {
     const nav = btn.dataset.nav;
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
-    navBtns.forEach((b) => b.classList.toggle("active", b === btn));
+    navBtns.forEach((b) => {
+      b.classList.toggle("active", b === btn);
+      if (b === btn) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    });
     const h1 = document.querySelector(".topbar-title h1");
     if (h1 && titles[nav]) h1.textContent = titles[nav];
+    emit("nav:changed", { nav });
   }));
 }
 

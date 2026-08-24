@@ -151,6 +151,7 @@ export async function runScan() {
   state.scan.running = true;
   state.scan.error = null;
   state.scan.startedAt = Date.now();
+  const scanProvisional = Boolean(state.settings.includeRealtimeCandle);
   emit("scan:start");
 
   try {
@@ -176,8 +177,9 @@ export async function runScan() {
       state.results = results;
       setPhase("done");
       state.scan.running = false;
-      state.scan.lastUpdated = Date.now();
-      emit("scan:done", { count: results.length, analyzed: pumpFadeResults.length });
+      const completedAt = Date.now();
+      state.scan.lastUpdated = completedAt;
+      emit("scan:done", { count: results.length, analyzed: pumpFadeResults.length, completedAt, provisional: scanProvisional });
       return results;
     }
 
@@ -193,8 +195,9 @@ export async function runScan() {
       state.results = results;
       setPhase("done");
       state.scan.running = false;
-      state.scan.lastUpdated = Date.now();
-      emit("scan:done", { count: results.length, analyzed: earlyResults.length });
+      const completedAt = Date.now();
+      state.scan.lastUpdated = completedAt;
+      emit("scan:done", { count: results.length, analyzed: earlyResults.length, completedAt, provisional: scanProvisional });
       return results;
     }
 
@@ -240,8 +243,9 @@ export async function runScan() {
 
     setPhase("done");
     state.scan.running = false;
-    state.scan.lastUpdated = Date.now();
-    emit("scan:done", { count: results.length, analyzed: analyzed.length });
+    const completedAt = Date.now();
+    state.scan.lastUpdated = completedAt;
+    emit("scan:done", { count: results.length, analyzed: analyzed.length, completedAt, provisional: scanProvisional });
     return results;
   } catch (e) {
     console.error("스캔 실패", e);

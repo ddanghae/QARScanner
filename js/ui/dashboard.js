@@ -8,6 +8,7 @@ import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
+import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
 
 let resultsEl, statusEl, progressEl;
 
@@ -19,6 +20,7 @@ export function initDashboard() {
   // 스캔 이벤트 구독
   on("scan:start", () => { renderStatus(); setBusy(true); });
   on("scan:phase", renderStatus);
+  on("scan:mode", renderStatus);
   on("scan:progress", renderProgress);
   on("scan:prefiltered", renderStatus);
   on("scan:candidates", renderStatus);
@@ -56,13 +58,24 @@ function renderStatus() {
   if (pill) { pill.textContent = conn; pill.className = `conn-pill ${connClass}`; }
 
   if (!statusEl) return;
+  const unifiedDone = state.settings.scanMode === "all" && sc.phase === "done";
   statusEl.innerHTML = `
     <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
     <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
-    <div class="stat-card"><span class="stat-label">1차 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
-    <div class="stat-card"><span class="stat-label">후보</span><span class="stat-val">${state.candidates.length}</span></div>
-    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
+    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 1차 통과" : "1차 통과"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("prefiltered") : state.prefiltered.length}</span></div>
+    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 후보" : "후보"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("candidates") : state.candidates.length}</span></div>
+    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
   `;
+}
+
+function modeStatText(key) {
+  return SCAN_MODES.map((mode) => `${SCAN_MODE_META[mode].shortLabel} ${state.scan.modeStats?.[mode]?.[key] ?? 0}`).join(" · ");
+}
+
+function modeProgressLabel(sc) {
+  if (!sc.currentMode) return "";
+  const label = SCAN_MODE_META[sc.currentMode]?.label || sc.currentMode;
+  return sc.modeTotal > 1 ? `${label} ${sc.modeIndex}/${sc.modeTotal} · ` : `${label} · `;
 }
 
 function renderProgress(e) {
@@ -71,7 +84,7 @@ function renderProgress(e) {
   progressEl.style.width = pct + "%";
   progressEl.parentElement?.setAttribute("aria-valuenow", String(pct));
   const txt = document.getElementById("progress-text");
-  if (txt) txt.textContent = `${PHASE_LABEL[state.scan.phase] || ""} ${e.done}/${e.total} (${pct}%)`;
+  if (txt) txt.textContent = `${modeProgressLabel(state.scan)}${PHASE_LABEL[state.scan.phase] || ""} ${e.done}/${e.total} (${pct}%)`;
 }
 
 function setBusy(busy) {
@@ -85,23 +98,48 @@ export function renderResults() {
   if (!resultsEl) return;
   const view = applyFilters(state.results);
   visibleSyms = new Set(view.map((r) => r.symbol));
-  if (!view.length) {
+  const modes = modesForScan(state.settings.scanMode);
+  if (!view.length && state.settings.scanMode !== "all") {
     resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
   }
+  const summary = state.settings.scanMode === "all" ? unifiedSummary(view) : "";
+  resultsEl.innerHTML = summary + modes.map((mode) => modeSection(mode, view.filter((r) => resultMode(r) === mode))).join("");
+  bindRows(view);
+}
+
+function unifiedSummary(view) {
+  const counts = modesForScan("all").map((mode) => {
+    const n = view.filter((r) => resultMode(r) === mode).length;
+    return `<span class="mode-count">${modeBadge(mode)} <b>${n}</b></span>`;
+  }).join("");
+  return `<div class="mode-summary" aria-label="모드별 검색 결과">${counts}</div>`;
+}
+
+function modeSection(mode, rows) {
+  const meta = SCAN_MODE_META[mode];
+  const error = state.scan.modeErrors?.[mode];
+  const body = rows.length ? resultTables(rows, mode)
+    : `<div class="mode-empty">${error ? `실행 실패 · ${escapeHtml(error)}` : "조건을 만족하는 후보가 없습니다."}</div>`;
+  return `<section class="mode-results mode-results-${meta.badge}">
+    <div class="mode-results-head"><h3>${modeBadge(mode)}</h3><span>${rows.length}개</span></div>
+    ${body}
+  </section>`;
+}
+
+function resultTables(view, mode) {
   // 데스크톱 테이블 + 모바일 카드 — CSS 로 전환. 둘 다 생성.
-  resultsEl.innerHTML = `
+  return `
     <table class="result-table">
       <thead><tr>
-        <th>#</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>${isEarly() ? "급등확률" : "손익비"}</th>
+        <th>#</th><th>스캐너</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
+        <th>점수</th><th>단계</th><th>방향</th><th>${mode === "early" ? "급등확률" : "손익비"}</th>
         <th>${partialOn() ? "손절 / 절반 / 끝까지" : "손절 / 목표"}</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
     <div class="result-cards">${view.map(cardHtml).join("")}</div>
   `;
-  bindRows(view);
 }
 
 // 후보가 없을 때 — 스캐너가 고장난 건지 시장에 없는 건지 구분되게 깔때기를 보여준다.
@@ -121,11 +159,16 @@ function emptyMessage() {
 
 // 조기 포착은 목표가 R 배수 고정이라 손익비가 항상 1:2.00 — 정보가 없다.
 // 대신 그 점수대의 실측 급등 확률을 보여준다(검증셋 17,597행). 그게 이 모드가 실제로 파는 것이다.
-const isEarly = () => state.settings.scanMode === "early";
+const isEarly = (r) => resultMode(r) === "early";
 const isPumpFade = (r) => r?.scanMode === "pump_fade";
 
+function modeBadge(mode) {
+  const meta = SCAN_MODE_META[mode] || SCAN_MODE_META.reversal;
+  return `<span class="badge badge-mode badge-mode-${meta.badge}">${meta.label}</span>`;
+}
+
 function oddsCell(r) {
-  if (!isEarly()) return escapeHtml(r.plan.rrText);
+  if (!isEarly(r)) return escapeHtml(r.plan.rrText);
   const b = CONFIG.earlyHitBaseline;
   const lift = (r.grade.hitRate / b).toFixed(1);
   return `<span class="odds" title="${CONFIG.earlyHitLabel} · 무작위 ${b}% 대비 ${lift}배">${r.grade.hitRate}% <span class="muted">(${lift}x)</span></span>`;
@@ -186,8 +229,10 @@ function noiseBadge(r) {
 }
 
 function rowHtml(r) {
-  return `<tr data-sym="${r.symbol}">
+  const key = resultKey(r);
+  return `<tr data-result-key="${key}">
     <td>${r.rank}</td>
+    <td>${modeBadge(resultMode(r))}</td>
     <td class="sym"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>${escapeHtml(r.symbol)}</td>
     <td>${fmtPrice(r.price)}</td>
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
@@ -197,17 +242,19 @@ function rowHtml(r) {
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${oddsCell(r)}</td>
     <td>${moneyCell(r)}</td>
-    <td><button class="btn-mini" data-detail="${r.symbol}">상세</button><button class="btn-mini" data-paper="${r.symbol}">기록</button></td>
+    <td><button class="btn-mini" data-detail="${key}">상세</button><button class="btn-mini" data-paper="${key}">기록</button></td>
     <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
   </tr>`;
 }
 
 function cardHtml(r) {
   const p = r.plan;
-  return `<div class="rcard" data-sym="${r.symbol}">
+  const key = resultKey(r);
+  return `<div class="rcard" data-result-key="${key}">
     <div class="rcard-top">
       <button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>
       <b class="rcard-sym">${escapeHtml(r.symbol)}</b>
+      ${modeBadge(resultMode(r))}
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
@@ -219,19 +266,19 @@ function cardHtml(r) {
     <div class="rcard-plan">
       <span>진입 ${fmtPrice(p.entry)}</span>
       <span>손절 ${fmtPrice(p.invalidation)}</span>
-      <span>${isEarly() ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
+      <span>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
       <span>${moneyCell(r)}</span>
     </div>
     <div class="rcard-actions">
-      <button class="btn-mini" data-detail="${r.symbol}">상세 보기</button>
-      <button class="btn-mini" data-paper="${r.symbol}">기록</button>
+      <button class="btn-mini" data-detail="${key}">상세 보기</button>
+      <button class="btn-mini" data-paper="${key}">기록</button>
       <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
     </div>
   </div>`;
 }
 
 function bindRows(view) {
-  const byId = (sym) => view.find((r) => r.symbol === sym);
+  const byId = (key) => view.find((r) => resultKey(r) === key);
   resultsEl.querySelectorAll("[data-detail]").forEach((b) =>
     b.addEventListener("click", (e) => { e.stopPropagation(); const r = byId(b.dataset.detail); if (r) showDetail(r); }));
   resultsEl.querySelectorAll("[data-tv]").forEach((b) =>
@@ -245,8 +292,8 @@ function bindRows(view) {
       b.classList.toggle("active", isFavorite(b.dataset.fav));
     }));
   // 카드/행 전체 클릭 → 상세
-  resultsEl.querySelectorAll("[data-sym]").forEach((el) =>
-    el.addEventListener("click", () => { const r = byId(el.dataset.sym); if (r) showDetail(r); }));
+  resultsEl.querySelectorAll("[data-result-key]").forEach((el) =>
+    el.addEventListener("click", () => { const r = byId(el.dataset.resultKey); if (r) showDetail(r); }));
 }
 
 export default { initDashboard, renderResults };

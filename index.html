@@ -93,6 +93,7 @@
           <div class="filter-grid">
             <label>스캔 모드
               <select id="filter-scanmode">
+                <option value="all">전체 스캔 (3개 모드)</option>
                 <option value="reversal">급락 반등 (기본)</option>
                 <option value="early">조기 포착 (오르기 전)</option>
                 <option value="pump_fade">급등 후 급락 (숏)</option>
@@ -169,7 +170,7 @@
             <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
             <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
           </div>
-          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. <b>급등 후 급락</b>은 SHORT 전용 실험 모드이며 점수는 급락 확률이 아닙니다.</p>
+          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. <b>전체 스캔</b>은 세 모드를 한 번씩 실행해 모드별로 묶어 보여줍니다. <b>급등 후 급락</b>은 SHORT 전용 실험 모드이며 점수는 급락 확률이 아닙니다.</p>
         </section>
 
         <!-- 결과 -->
@@ -204,7 +205,7 @@
               <span class="set-label">현재 모드</span>
               <span class="tagline">위 필터 바의 "스캔 모드"에서 변경</span>
             </div>
-            <p class="set-help"><b>급락 반등</b>은 크게 떨어진 코인의 되돌림을 찾습니다. <b>조기 포착</b>은 14일 추세·24시간 변동·상장 기간으로 <b>관찰 → 임박 → 돌파</b>를 분류합니다. <b>급등 후 급락</b>은 급등 뒤 거래량 클라이맥스·고점 거절·매수 소진·15분선 이탈·5분 구조 붕괴를 확인하는 SHORT 전용 실험 모드입니다.</p>
+            <p class="set-help"><b>전체 스캔</b>은 아래 세 모드를 한 번씩 순차 실행하고 결과를 같은 화면에 모드별로 표시합니다. <b>급락 반등</b>은 크게 떨어진 코인의 되돌림을 찾습니다. <b>조기 포착</b>은 14일 추세·24시간 변동·상장 기간으로 <b>관찰 → 임박 → 돌파</b>를 분류합니다. <b>급등 후 급락</b>은 급등 뒤 거래량 클라이맥스·고점 거절·매수 소진·15분선 이탈·5분 구조 붕괴를 확인하는 SHORT 전용 실험 모드입니다.</p>
           </div>
         </section>
         <section class="card settings-group">

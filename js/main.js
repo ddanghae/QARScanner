@@ -8,6 +8,7 @@ import { initSettingsUI, applyFilters } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
 import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
+import { SCAN_MODE_META } from "./scan-modes.js";
 
 function boot() {
   initSettingsUI();
@@ -33,6 +34,9 @@ function boot() {
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
+  on("scan:mode-error", ({ mode, message }) => {
+    toast(`${SCAN_MODE_META[mode]?.label || mode} 실행 실패 — ${message}`, "error", 6000);
+  });
   // 목록과 같은 필터를 통과한 수. 스캔 단계 숫자를 쓰면 화면엔 5줄인데 12개라 뜬다.
   on("scan:done", () => toast(`스캔 완료 — 후보 ${applyFilters(state.results).length}개`, "success"));
   on("scan:aborted", () => toast("스캔을 중단했습니다.", "info"));

@@ -9,7 +9,7 @@ const defaultSettings = {
   minScore: 30,              // 채점 강도 3(기본)과 같은 값 — grades 의 "관찰 후보" 경계
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
   direction: "long",         // "long" | "short" | "both"
-  scanMode: "reversal",      // "reversal" | "early" | "pump_fade"(SHORT 전용)
+  scanMode: "reversal",      // "all" | "reversal" | "early" | "pump_fade"(SHORT 전용)
   stageFilter: "all",        // reversal 1~5, early/pump_fade 1~3 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
@@ -68,6 +68,11 @@ export const state = {
     startedAt: 0,
     lastUpdated: 0,
     error: null,
+    currentMode: null,  // 전체 스캔에서 현재 실행 중인 모드
+    modeIndex: 0,
+    modeTotal: 0,
+    modeStats: {},      // mode -> { prefiltered, candidates, results }
+    modeErrors: {},     // mode -> 오류 문구 (다른 모드는 계속 실행)
   },
   apiHealth: {
     connected: null,   // null=미확인 true/false

@@ -483,10 +483,22 @@
       `INCOMPLETE`로 처리한다. 승인 PRD는
       `docs/superpowers/specs/2026-08-24-pump-fade-mode-prd.md`다.
 
+16. **3개 모드 통합 스캔 (2026-08-25)** — `전체 스캔 (3개 모드)`를 추가해 한 번의
+    사용자 실행으로 reversal → early → pump_fade를 순차 실행한다.
+    - exchangeInfo와 24h ticker는 한 번만 받고 세 파이프라인이 재사용한다. 캔들 요청은
+      기존 API 캐시·동시성 제한을 그대로 사용한다.
+    - 결과는 모드별 섹션과 출처 배지로 표시하며, 동일 심볼의 다중 전략 결과는
+      `scanMode:symbol` 키로 분리해 상세 보기와 기록 버튼이 올바른 계획을 참조한다.
+    - 세 모드 점수는 의미가 달라 전역 점수순으로 섞지 않고 각 모드의 기존 순위를 유지한다.
+    - 전체 모드에서도 reversal 전용 방향·강도·노이즈 필터는 reversal 결과에만 적용하고,
+      early/pump_fade 고정 컷과 전용 방향은 유지한다.
+    - 한 모드가 최상위 요청에서 실패하면 오류를 표시하고 나머지 모드는 계속 실행한다.
+    - 로컬 공개 Binance 데이터 실행에서 세 섹션이 각각 렌더되고 콘솔 오류가 없음을 확인했다.
+
 ## 검증 상태
 
-- **현재 테스트 157/157 통과** — `node tests/run.js`. pump_fade 계산·연구·UI 39개와
-  기존 main 회귀 118개가 함께 통과한다.
+- **현재 테스트 162/162 통과** — `node tests/run.js`. pump_fade 계산·연구·UI 39개,
+  기존 main 회귀 118개, 통합 스캔 계약 5개가 함께 통과한다.
 - **통합 전 기준선 118/118 통과** — indicators, structure, liquidity, scoring,
   goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트.
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
@@ -520,7 +532,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (157/157 나와야 정상)
+node tests/run.js          # 테스트 확인 (162/162 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```

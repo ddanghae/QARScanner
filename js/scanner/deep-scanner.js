@@ -343,6 +343,7 @@ export async function deepAnalyze(item, settings) {
   // 신호 노이즈 — 촙 구간/저거래량 판정 (15m 기준). applyFilters 에서 걸러냄.
   const noise = evaluateNoise(noiseTf({ a4, a1, a15, a5 }), CONFIG);
   return {
+    scanMode: "reversal",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: sig.price,

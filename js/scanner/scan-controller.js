@@ -2,7 +2,7 @@
 // 순서(§18): 24h 데이터 → 유동성 상위 → 1h 빠른 분석 → 후보 축소 → 4H·15M·5M 정밀.
 // 동시요청 제한은 api 계층 세마포어가 담당. 진행률/오류 이벤트 emit.
 
-import { CONFIG, minScoreFor } from "../config.js";
+import { CONFIG } from "../config.js";
 import { state, emit } from "../state.js";
 import {
   getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll, closedOnly,
@@ -12,6 +12,7 @@ import { deepAnalyze } from "./deep-scanner.js";
 import { buildEarlyResult } from "../core/early-detect.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
 import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
+import { modesForScan, resultMode } from "../scan-modes.js";
 
 let abortToken = { aborted: false };
 
@@ -25,6 +26,19 @@ export function abortScan() {
 function setPhase(phase) {
   state.scan.phase = phase;
   emit("scan:phase", phase);
+}
+function setCurrentMode(mode, index, total) {
+  state.scan.currentMode = mode;
+  state.scan.modeIndex = index;
+  state.scan.modeTotal = total;
+  emit("scan:mode", { mode, index, total });
+}
+function recordModeStats(mode, results) {
+  state.scan.modeStats[mode] = {
+    prefiltered: state.prefiltered.length,
+    candidates: state.candidates.length,
+    results: results.filter((r) => r && !r.skipped && !r.error).length,
+  };
 }
 function setProgress(done, total) {
   state.scan.done = done;
@@ -55,13 +69,11 @@ async function mapWithProgress(items, fn, onEach) {
 
 // ---- 조기 포착 모드 파이프라인 ----
 // 반환: 기존과 동일 shape 결과 배열 (rank 는 호출부에서 부여)
-async function runEarlyPipeline(universe, now) {
+async function runEarlyPipeline(universe, now, tickers, settings) {
   const e = CONFIG.earlyDetect;
 
   // 2단계: early 유니버스 기준으로 유동성 필터
   setPhase("prefilter");
-  const tickers = await getTicker24h();
-  state.tickers = tickers;
   const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
     ...CONFIG.prefilter,
     minQuoteVolume: e.minQuoteVolume,
@@ -80,7 +92,7 @@ async function runEarlyPipeline(universe, now) {
   setPhase("candidate");
   const evaluated = await mapWithProgress(midCaps, async (item) => {
     const k4h = await getKlines(item.symbol, "4h");
-    const closed = k4h.slice(0, state.settings.includeRealtimeCandle ? k4h.length : -1);
+    const closed = k4h.slice(0, settings.includeRealtimeCandle ? k4h.length : -1);
     return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
   });
   let candidates = evaluated
@@ -115,15 +127,13 @@ async function runEarlyPipeline(universe, now) {
 
 // ---- 급등 후 급락 모드 파이프라인 (SHORT 전용) ----
 // 1h 급등 통과 집합은 임의로 추가 절단하지 않고 모두 15m/5m 정밀 분석한다.
-async function runPumpFadePipeline(universe, now) {
-  const includeRealtime = Boolean(state.settings.includeRealtimeCandle);
+async function runPumpFadePipeline(universe, now, tickers, settings) {
+  const includeRealtime = Boolean(settings.includeRealtimeCandle);
 
   setPhase("prefilter");
-  const tickers = await getTicker24h();
-  state.tickers = tickers;
   const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
     ...CONFIG.prefilter,
-    minQuoteVolume: state.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+    minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
   });
   state.prefiltered = prefiltered;
   state.newListings = newListings;
@@ -161,16 +171,69 @@ async function runPumpFadePipeline(universe, now) {
   return analyzed.filter(Boolean);
 }
 
+// ---- 급락 반등 모드 파이프라인 ----
+async function runReversalPipeline(universe, now, tickers, settings) {
+  setPhase("prefilter");
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter,
+    minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+  });
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  if (abortToken.aborted) return null;
+
+  setPhase("candidate");
+  const dir = settings.direction || "long";
+  const evaluated = await mapWithProgress(prefiltered, async (item) => {
+    const k1h = await getKlines(item.symbol, "1h");
+    const closed = k1h.slice(0, settings.includeRealtimeCandle ? k1h.length : -1);
+    const res = stage3Evaluate(item, closed, dir);
+    return { item, res };
+  });
+  let candidates = evaluated
+    .filter((e) => e.res?.pass)
+    .sort((a, b) => Math.abs(b.res.change6h) - Math.abs(a.res.change6h))
+    .map((e) => ({ ...e.item, pre: e.res }));
+  candidates = capCandidates(candidates);
+  state.candidates = candidates;
+  emit("scan:candidates", { count: candidates.length });
+  if (abortToken.aborted) return null;
+
+  setPhase("deep");
+  return mapWithProgress(candidates, (item) => deepAnalyze(item, settings));
+}
+
+export function sortAndRankResults(results, requestedMode = "all") {
+  return modesForScan(requestedMode).flatMap((mode) => {
+    const comparator = mode === "pump_fade"
+      ? pumpFadeComparator
+      : (a, b) => b.score - a.score || String(a.symbol).localeCompare(String(b.symbol));
+    return results
+      .filter((r) => r && !r.skipped && !r.error && resultMode(r) === mode)
+      .sort(comparator)
+      .map((r, i) => ({ ...r, rank: i + 1 }));
+  });
+}
+
 export async function runScan() {
   if (state.scan.running) return;
   abortToken = { aborted: false };
   state.scan.running = true;
   state.scan.error = null;
   state.scan.startedAt = Date.now();
+  state.scan.currentMode = null;
+  state.scan.modeIndex = 0;
+  state.scan.modeTotal = 0;
+  state.scan.modeStats = {};
+  state.scan.modeErrors = {};
   emit("scan:start");
 
   try {
     const now = Date.now();
+    // 실행 중 UI 설정을 바꿔도 세 파이프라인의 데이터 경계와 채점 조건은 시작 시점 기준으로 고정한다.
+    const settings = { ...state.settings, penalties: { ...state.settings.penalties } };
+    const requestedMode = settings.scanMode;
 
     // --- 1단계: 전체 종목 수집 ---
     setPhase("universe");
@@ -179,61 +242,35 @@ export async function runScan() {
     state.universe = universe;
     if (abortToken.aborted) return finishAborted();
 
-    // --- 급등 후 급락 모드면 별도 SHORT 파이프라인 ---
-    if (state.settings.scanMode === "pump_fade") {
-      const pumpFadeResults = await runPumpFadePipeline(universe, now);
-      if (pumpFadeResults === null) return finishAborted();
-      const ranked = pumpFadeResults
-        .filter((r) => !r.skipped && !r.error && r.score >= minScoreFor(state.settings))
-        .sort(pumpFadeComparator)
-        .slice(0, CONFIG.pumpFade.keepMax);
-      return finishScan(ranked, pumpFadeComparator);
-    }
-
-    // --- 조기 포착 모드면 별도 파이프라인 ---
-    if (state.settings.scanMode === "early") {
-      const earlyResults = await runEarlyPipeline(universe, now);
-      if (earlyResults === null) return finishAborted();
-      return finishScan(earlyResults);
-    }
-
-    // --- 2단계: 24h 유동성 필터 ---
+    // 공통 24h 데이터는 전체 스캔에서도 한 번만 요청한다.
     setPhase("prefilter");
     const tickers = await getTicker24h();
     state.tickers = tickers;
-    // 최소 거래대금은 사용자 설정 우선 (필터 바의 "최소 거래대금").
-    // early 모드는 중형 중심 유니버스라 자체 기준(earlyDetect.minQuoteVolume)을 그대로 쓴다.
-    const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
-      ...CONFIG.prefilter,
-      minQuoteVolume: state.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
-    });
-    state.prefiltered = prefiltered;
-    state.newListings = newListings;
-    emit("scan:prefiltered", { count: prefiltered.length, newListings });
     if (abortToken.aborted) return finishAborted();
 
-    // --- 3단계: 1h 빠른 분석 → 급락·초기 후보 ---
-    setPhase("candidate");
-    const dir = state.settings.direction || "long";
-    const evaluated = await mapWithProgress(prefiltered, async (item) => {
-      const k1h = await getKlines(item.symbol, "1h");
-      const closed = k1h.slice(0, state.settings.includeRealtimeCandle ? k1h.length : -1);
-      const res = stage3Evaluate(item, closed, dir);
-      return { item, res };
-    });
-    let candidates = evaluated
-      .filter((e) => e.res?.pass)
-      .sort((a, b) => Math.abs(b.res.change6h) - Math.abs(a.res.change6h)) // 더 크게 움직인 순(롱=급락/숏=급등)
-      .map((e) => ({ ...e.item, pre: e.res }));
-    candidates = capCandidates(candidates);
-    state.candidates = candidates;
-    emit("scan:candidates", { count: candidates.length });
-    if (abortToken.aborted) return finishAborted();
-
-    // --- 4·5단계: 정밀 분석 + 점수 ---
-    setPhase("deep");
-    const analyzed = await mapWithProgress(candidates, (item) => deepAnalyze(item, state.settings));
-    return finishScan(analyzed);
+    const modes = modesForScan(requestedMode);
+    const combined = [];
+    for (let i = 0; i < modes.length; i++) {
+      const mode = modes[i];
+      if (abortToken.aborted) return finishAborted();
+      setCurrentMode(mode, i + 1, modes.length);
+      try {
+        const results = mode === "early"
+          ? await runEarlyPipeline(universe, now, tickers, settings)
+          : mode === "pump_fade"
+            ? await runPumpFadePipeline(universe, now, tickers, settings)
+            : await runReversalPipeline(universe, now, tickers, settings);
+        if (results === null) return finishAborted();
+        recordModeStats(mode, results);
+        combined.push(...results);
+      } catch (e) {
+        if (modes.length === 1) throw e;
+        state.scan.modeErrors[mode] = e.message;
+        state.scan.modeStats[mode] = { prefiltered: 0, candidates: 0, results: 0 };
+        emit("scan:mode-error", { mode, message: e.message });
+      }
+    }
+    return finishScan(combined, requestedMode);
   } catch (e) {
     console.error("스캔 실패", e);
     state.scan.error = e.message;
@@ -251,17 +288,15 @@ function pumpFadeComparator(a, b) {
   return b.stage.stage - a.stage.stage || b.score - a.score || a.symbol.localeCompare(b.symbol);
 }
 
-function finishScan(analyzed, comparator = (a, b) => b.score - a.score) {
+function finishScan(analyzed, requestedMode) {
   setPhase("score");
-  const results = analyzed
-    .filter((r) => !r.skipped && !r.error)
-    .sort(comparator)
-    .map((r, i) => ({ ...r, rank: i + 1 }));
+  const results = sortAndRankResults(analyzed, requestedMode);
   state.results = results;
 
   setPhase("done");
   state.scan.running = false;
   state.scan.lastUpdated = Date.now();
+  state.scan.currentMode = null;
   // payload 없음 — 표시용 개수는 목록과 같은 필터를 거쳐야 맞으므로 main.js 가 직접 센다.
   emit("scan:done");
   return results;

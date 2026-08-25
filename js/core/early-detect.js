@@ -281,6 +281,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
   const plan = earlyPlan(m, m.atrVal, m.price, cfg);
 
   return {
+    scanMode: "early",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: m.price,

@@ -6,6 +6,7 @@ import { openTradingView, copyTvLink, tvChartUrl, binanceFuturesUrl } from "./tr
 import { toggleFavorite, isFavorite, state } from "../state.js";
 import { CONFIG } from "../config.js";
 import { toast } from "./notifications.js";
+import { SCAN_MODE_META, resultMode } from "../scan-modes.js";
 
 let panelEl = null;
 
@@ -84,7 +85,9 @@ export function showDetail(r) {
 
 function renderDetail(r) {
   const p = r.plan;
-  const isPumpFade = r.scanMode === "pump_fade";
+  const mode = resultMode(r);
+  const modeMeta = SCAN_MODE_META[mode];
+  const isPumpFade = mode === "pump_fade";
   const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
   const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
@@ -96,6 +99,7 @@ function renderDetail(r) {
       <div class="detail-title">
         <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
         <h2>${escapeHtml(r.symbol)}</h2>
+        <span class="badge badge-mode badge-mode-${modeMeta.badge}">${modeMeta.label}</span>
         <span class="score-pill score-${r.grade.key}">${isPumpFade ? "실험 점수 " : ""}${r.score}</span>
         ${dirBadge}
       </div>

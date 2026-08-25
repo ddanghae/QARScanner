@@ -14,6 +14,7 @@ import { run as pumpFadeUi } from "./pump-fade-ui.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
+import { run as unifiedScan } from "./unified-scan.test.js";
 
 export function runAll() {
   reset();
@@ -30,6 +31,7 @@ export function runAll() {
   repaint();
   refresh();
   paperCorr();
+  unifiedScan();
   return report();
 }
 

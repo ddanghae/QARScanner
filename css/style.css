@@ -111,6 +111,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 }
 .stat-label { font-size: 12px; color: var(--muted); }
 .stat-val { font-size: 20px; font-weight: 700; }
+.stat-val-compact { font-size: 13px; line-height: 1.4; }
 .stat-card-hero { background: var(--text); border-color: var(--text); }
 .stat-card-hero .stat-label { color: rgba(255,255,255,.6); }
 .stat-card-hero .stat-val { color: #fff; }
@@ -157,6 +158,14 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 /* ---- 결과 테이블 ---- */
 .results { margin: 0; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+.mode-summary { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 0 16px; border-bottom: 1px solid var(--border); }
+.mode-count { display: inline-flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); font-size: 12px; }
+.mode-results { padding: 18px 0 6px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.mode-results:last-child { border-bottom: none; padding-bottom: 0; }
+.mode-results-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.mode-results-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
+.mode-results-head > span { color: var(--muted); font-size: 12px; }
+.mode-empty { padding: 24px 12px; border: 1px dashed var(--border); border-radius: 12px; text-align: center; color: var(--muted); font-size: 13px; }
 .result-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .result-table th, .result-table td { padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .result-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--muted); font-weight: 600; }
@@ -187,6 +196,9 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-cross { background: #d6f0f6; color: #0c7488; }
 .badge-ema200 { background: #ffe6d0; color: #b5560a; }
 .badge-noise { background: #e6e8ec; color: #6b7280; }
+.badge-mode-reversal { background: #e0f2fe; color: #0369a1; }
+.badge-mode-early { background: #dcfce7; color: #15803d; }
+.badge-mode-pump-fade { background: #fee2e2; color: #b91c1c; }
 html.dark .badge-blue { background: #2a2864; color: #b3adff; }
 html.dark .badge-green { background: #113d2a; color: #63e0a5; }
 html.dark .badge-yellow { background: #3d3413; color: #ffcf6b; }
@@ -195,6 +207,9 @@ html.dark .badge-danger { background: #46201f; color: #ff9a9a; }
 html.dark .badge-cross { background: #113a42; color: #6fe0f2; }
 html.dark .badge-ema200 { background: #422814; color: #ffb26f; }
 html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
+html.dark .badge-mode-reversal { background: #12344a; color: #7dd3fc; }
+html.dark .badge-mode-early { background: #153c27; color: #86efac; }
+html.dark .badge-mode-pump-fade { background: #472020; color: #fca5a5; }
 
 .dir { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
 .dir-long { background: rgba(18,153,91,.15); color: var(--up); }

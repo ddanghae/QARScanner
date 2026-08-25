@@ -3,6 +3,7 @@
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
 import { CONFIG, minScoreFor, strictnessPreset } from "../config.js";
+import { modesForScan, resultMode } from "../scan-modes.js";
 import { toast } from "./notifications.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
@@ -20,15 +21,19 @@ const REALTIME_IDS = ["set-realtime-candle"];
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
-  const mode = s.scanMode || "reversal";
+  const selectedMode = s.scanMode || "reversal";
+  return modesForScan(selectedMode).flatMap((mode) => applyModeFilters(results, mode, s, selectedMode === "all"));
+}
+
+function applyModeFilters(results, mode, s, unified) {
   const reversal = mode === "reversal";
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
-  let list = results.slice();
+  let list = results.filter((r) => resultMode(r) === mode);
 
   // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
   if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  list = list.filter((r) => r.score >= minScoreFor(s));
+  list = list.filter((r) => r.score >= minScoreFor({ ...s, scanMode: mode }));
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
@@ -45,7 +50,7 @@ export function applyFilters(results) {
   // 제외 종목
   if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
-  if (s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
+  if (!unified && s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
 
   const sortFns = {
     score: pumpFade
@@ -62,23 +67,26 @@ export function applyFilters(results) {
   list = list.slice(0, keepMax);
 
   // 정렬
-  list.sort(sortFns[s.sort] || sortFns.score);
+  // 통합 화면에서는 서로 의미가 다른 점수를 섞지 않고 각 스캐너의 기본 순위를 유지한다.
+  list.sort(unified ? sortFns.score : (sortFns[s.sort] || sortFns.score));
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
 // 모드 UI가 실제 필터 계약과 같은지 테스트 가능한 순수 모델.
 export function modeControlModel(settings) {
   const mode = settings?.scanMode || "reversal";
+  const all = mode === "all";
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
   return {
     mode,
+    all,
     early,
     pumpFade,
     dedicated: early || pumpFade,
     direction: pumpFade ? "short" : early ? "long" : String(settings?.direction || "long"),
     effectiveCut: minScoreFor(settings),
-    strictnessEnabled: !early && !pumpFade,
+    strictnessEnabled: all || (!early && !pumpFade),
     moneyControlsEnabled: !pumpFade,
   };
 }
@@ -228,6 +236,7 @@ function setChk(id, v) { const el = document.getElementById(id); if (el) el.chec
 
 // 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계, 방향, 정렬, 점수/강도, 금액 표시.
 const STAGE_OPTIONS = {
+  all: [["all", "전체 모드 단계"]],
   reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
   early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 임박"], ["3", "3 돌파"]],
   pump_fade: [["all", "전체"], ["1", "1 과열 감시"], ["2", "2 고점 거절"], ["3", "3 급락 확인"]],
@@ -253,19 +262,24 @@ function syncModeControls(settings) {
   }
   const directionNote = document.getElementById("filter-direction-note");
   if (directionNote) {
-    directionNote.hidden = !model.dedicated;
-    directionNote.textContent = model.pumpFade ? "SHORT 전용" : "LONG 전용";
+    directionNote.hidden = !model.dedicated && !model.all;
+    directionNote.textContent = model.all ? "급락 반등 결과에만 적용"
+      : model.pumpFade ? "SHORT 전용" : "LONG 전용";
   }
 
   const sortEl = document.getElementById("filter-sort");
   const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
   if (changeOpt) {
-    changeOpt.disabled = model.early;
-    changeOpt.textContent = model.pumpFade ? "급등률" : "하락률";
+    changeOpt.disabled = model.early || model.all;
+    changeOpt.textContent = model.all ? "모드별 기본 순위" : model.pumpFade ? "급등률" : "하락률";
     if (model.early && sortEl.value === "change") {
       sortEl.value = "score";
       updateSettings({ sort: "score" });
     }
+  }
+  if (sortEl) {
+    sortEl.disabled = model.all;
+    sortEl.title = model.all ? "전체 스캔은 각 모드의 기본 순위를 유지합니다." : "";
   }
 
   const msEl = document.getElementById("filter-minscore");
@@ -275,7 +289,8 @@ function syncModeControls(settings) {
   }
   const msLabel = msEl?.closest("label");
   if (msLabel) {
-    msLabel.childNodes[0].nodeValue = model.dedicated
+    msLabel.childNodes[0].nodeValue = model.all ? "급락 반등 최소 점수"
+      : model.dedicated
       ? `최소 점수 (${model.effectiveCut} 고정)` : "최소 점수";
   }
 
@@ -306,7 +321,8 @@ function syncModeControls(settings) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.disabled = model.dedicated;
-    el.title = model.dedicated ? "급락 반등 전용 조건입니다." : "";
+    el.title = model.dedicated ? "급락 반등 전용 조건입니다."
+      : model.all ? "전체 스캔에서는 급락 반등 결과에만 적용됩니다." : "";
   }
 }
 

@@ -2,7 +2,7 @@
 // 앱 셸(정적 파일)만 캐시. Binance API 응답은 절대 캐시하지 않음(데이터 최신성).
 // 캐시 버전을 명확히 관리 → 최신 코드 미반영 문제 방지.
 
-const CACHE_VERSION = "qar-ict-v8";
+const CACHE_VERSION = "qar-ict-v9";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -11,6 +11,7 @@ const APP_SHELL = [
   "./js/main.js",
   "./js/config.js",
   "./js/state.js",
+  "./js/scan-modes.js",
   "./js/api/binance.js",
   "./js/core/indicators.js",
   "./js/core/volume-analysis.js",

@@ -2,6 +2,7 @@
 // 자동 주문 아님. 기술적 참고 구간만 계산.
 
 import { CONFIG } from "../config.js";
+import { finalizePlan } from "./plan-validation.js";
 
 // 손절이 진입에 붙으면 손익비가 폭주한다(실측 1:30.1, 리스크 폭 0.16%).
 // 저변동성 종목에서 0.5×ATR(15m) 이 지나치게 좁아 생기는 현상이고,
@@ -44,7 +45,7 @@ export function computeLongPlan(ctx) {
   const reward = Math.max(tp2 - entry, 0); // 대표 손익비는 TP2 기준
   const rr = reward / risk;
 
-  return {
+  return finalizePlan({
     direction: "long",
     entry, stop,
     tp1, tp2, tp3,
@@ -52,7 +53,7 @@ export function computeLongPlan(ctx) {
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && entry > stop,
-  };
+  });
 }
 
 // short 기준 (반대)
@@ -72,14 +73,14 @@ export function computeShortPlan(ctx) {
   const risk = Math.max(stop - entry, 1e-9);
   const reward = Math.max(entry - tp2, 0);
   const rr = reward / risk;
-  return {
+  return finalizePlan({
     direction: "short",
     entry, stop, tp1, tp2, tp3,
     invalidation: stop,
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && stop > entry,
-  };
+  });
 }
 
 export default { computeLongPlan, computeShortPlan };

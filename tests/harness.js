@@ -1,16 +1,23 @@
 // tests/harness.js — 의존성 없는 초소형 테스트 하네스. Node + 브라우저 겸용.
 
 const results = [];
+const cases = [];
 let curSuite = "";
 
 export function suite(name) { curSuite = name; }
 
 export function test(name, fn) {
-  try {
-    fn();
-    results.push({ suite: curSuite, name, ok: true });
-  } catch (e) {
-    results.push({ suite: curSuite, name, ok: false, err: e.message });
+  cases.push({ suite: curSuite, name, fn });
+}
+
+export async function settle() {
+  for (const item of cases) {
+    try {
+      await item.fn();
+      results.push({ suite: item.suite, name: item.name, ok: true });
+    } catch (e) {
+      results.push({ suite: item.suite, name: item.name, ok: false, err: e.message });
+    }
   }
 }
 
@@ -39,4 +46,7 @@ export function report() {
   return { pass, fail, total: results.length, lines, summary, results };
 }
 
-export function reset() { results.length = 0; }
+export function reset() {
+  results.length = 0;
+  cases.length = 0;
+}

@@ -3,6 +3,7 @@
 
 import { atr, dailyVwap, ema, last } from "./indicators.js";
 import { gradeFor, topSignals } from "./scoring.js";
+import { finalizePlan } from "./plan-validation.js";
 
 const finite = (v) => Number.isFinite(v);
 
@@ -19,13 +20,19 @@ function pctChange(closes, barsAgo) {
 export function pumpFadePrefilter(candles1h, cfg) {
   const p = cfg.pumpFade;
   if (!Array.isArray(candles1h) || candles1h.length < 25) {
-    return { pass: false, reason: "1시간봉 자료 부족", change6h: null, change24h: null, price: null };
+    return {
+      pass: false, reason: "1시간봉 자료 부족", change6h: null, change24h: null, price: null,
+      openTime: null, asOf: null,
+    };
   }
   const closes = candles1h.map((c) => Number(c?.close));
   const price = closes[closes.length - 1];
+  const openTime = Number(candles1h[candles1h.length - 1]?.openTime);
+  const asOf = Number(candles1h[candles1h.length - 1]?.closeTime);
   const change6h = pctChange(closes, 6);
   const change24h = pctChange(closes, 24);
-  const valid = finite(price) && price > 0 && finite(change6h) && finite(change24h);
+  const valid = finite(price) && price > 0 && finite(change6h) && finite(change24h) &&
+    finite(openTime) && finite(asOf);
   const pass = valid && (change6h >= p.pump6hMinPct || change24h >= p.pump24hMinPct);
   const normalizedStrength = valid
     ? Math.max(change6h / p.pump6hMinPct, change24h / p.pump24hMinPct)
@@ -36,6 +43,8 @@ export function pumpFadePrefilter(candles1h, cfg) {
     change6h,
     change24h,
     price,
+    openTime,
+    asOf,
     normalizedStrength,
   };
 }
@@ -119,26 +128,41 @@ function takerExhaustionMetric(candles, cfg) {
   return { hit: ratio <= cfg.pumpFade.takerBuyRatioMax, ratio };
 }
 
-function microBreakdownMetric(candles5m, signalCloseTime, cfg) {
+function microBreakdownMetric(candles5m, signalCloseTime, cfg, options = {}) {
   if (!finite(signalCloseTime)) {
-    return { hit: false, level: null, close: null, alignedCount: 0 };
+    return { valid: false, hit: false, level: null, close: null, alignedCount: 0 };
   }
   const aligned = candles5m
-    .filter((c) => finite(c?.closeTime) && c.closeTime <= signalCloseTime)
+    .filter((c) => finite(c?.closeTime) && c.closeTime <= signalCloseTime &&
+      (!options.provisional || (finite(c?.openTime) && c.openTime <= options.asOf)))
     .slice()
     .sort((a, b) => a.closeTime - b.closeTime);
   const bars = cfg.pumpFade.microBreakdownBars5m;
-  if (aligned.length < bars + 1) return { hit: false, level: null, close: null, alignedCount: aligned.length };
-  const current = aligned[aligned.length - 1];
-  const prior = aligned.slice(-bars - 1, -1);
+  if (aligned.length < bars + 1) {
+    return { valid: false, hit: false, level: null, close: null, alignedCount: aligned.length };
+  }
+  const window = aligned.slice(-bars - 1);
+  const current = window[window.length - 1];
+  const currentAligned = options.provisional
+    ? finite(options.asOf) && current.openTime <= options.asOf && current.closeTime >= options.asOf
+    : current.closeTime === signalCloseTime;
+  if (!currentAligned) {
+    return { valid: false, hit: false, level: null, close: null, alignedCount: aligned.length };
+  }
+  for (let i = 1; i < window.length; i++) {
+    if (window[i].closeTime - window[i - 1].closeTime !== cfg.pumpFade.interval5mMs) {
+      return { valid: false, hit: false, level: null, close: null, alignedCount: aligned.length };
+    }
+  }
+  const prior = window.slice(0, -1);
   if (!finite(current?.close) || prior.some((c) => !finite(c?.low))) {
-    return { hit: false, level: null, close: null, alignedCount: aligned.length };
+    return { valid: false, hit: false, level: null, close: null, alignedCount: aligned.length };
   }
   const level = Math.min(...prior.map((c) => c.low));
-  return { hit: current.close < level, level, close: current.close, alignedCount: aligned.length };
+  return { valid: true, hit: current.close < level, level, close: current.close, alignedCount: aligned.length };
 }
 
-export function buildPumpFadeMetrics(candles15m, candles5m, pump, cfg) {
+export function buildPumpFadeMetrics(candles15m, candles5m, pump, cfg, options = {}) {
   const p = cfg.pumpFade;
   const min15 = Math.max(
     p.recentHighLookback15m,
@@ -151,7 +175,19 @@ export function buildPumpFadeMetrics(candles15m, candles5m, pump, cfg) {
 
   const last15 = candles15m[candles15m.length - 1];
   const signalCloseTime = Number(last15?.closeTime);
-  if (!finite(last15?.close) || last15.close <= 0 || !finite(signalCloseTime)) return null;
+  const signalOpenTime = Number(last15?.openTime);
+  const provisional = Boolean(options.provisional);
+  const asOf = Number(options.asOf);
+  const effectiveAsOf = finite(asOf) ? asOf : signalCloseTime;
+  const fresh15m = finite(effectiveAsOf) && effectiveAsOf >= signalCloseTime &&
+    effectiveAsOf - signalCloseTime <= p.interval15mMs;
+  const fresh1h = finite(pump.asOf) && effectiveAsOf >= pump.asOf &&
+    effectiveAsOf - pump.asOf <= p.interval1hMs;
+  const aligned = provisional
+    ? finite(asOf) && finite(signalOpenTime) && signalOpenTime <= asOf && signalCloseTime >= asOf &&
+      finite(pump.openTime) && pump.openTime <= asOf && pump.asOf >= asOf
+    : fresh15m && fresh1h && pump.asOf <= signalCloseTime;
+  if (!finite(last15?.close) || last15.close <= 0 || !finite(signalCloseTime) || !aligned) return null;
   const climax = volumeClimaxMetric(candles15m, cfg);
   const wick = upperWickMetric(candles15m, cfg);
   const sweep = highSweepFailureMetric(candles15m, cfg);
@@ -168,7 +204,8 @@ export function buildPumpFadeMetrics(candles15m, candles5m, pump, cfg) {
   if (recent.some((c) => !finite(c?.high))) return null;
   const pumpHigh = Math.max(...recent.map((c) => c.high));
   const drawdownPct = pumpHigh > 0 ? ((pumpHigh - last15.close) / pumpHigh) * 100 : null;
-  const micro = microBreakdownMetric(candles5m, signalCloseTime, cfg);
+  const micro = microBreakdownMetric(candles5m, signalCloseTime, cfg, { provisional, asOf });
+  if (!micro.valid) return null;
   const rejectionEvidence = [climax.hit, wick.hit, sweep.hit].filter(Boolean).length;
 
   return {
@@ -250,11 +287,11 @@ export function pumpFadePlan(metrics, cfg) {
   const pumpHigh = Number(metrics?.pumpHigh);
   const atrVal = Number(metrics?.atrVal);
   if (!(entry > 0) || !(pumpHigh > 0) || !(atrVal > 0)) {
-    return {
+    return finalizePlan({
       direction: "short", entry, stop: null, tp1: null, tp2: null, tp3: null,
       invalidation: null, riskReward: 0, rrText: "-", valid: false,
       stopDistancePct: null, warning: "진입계획 자료 부족",
-    };
+    });
   }
   const stop = Math.max(pumpHigh, entry) + atrVal * cfg.pumpFade.atrStopBuffer;
   const risk = stop - entry;
@@ -264,7 +301,7 @@ export function pumpFadePlan(metrics, cfg) {
   const tp3 = entry - risk * 3;
   const excessiveRisk = stopDistancePct >= cfg.pumpFade.maxStopDistancePct;
   const valid = risk > 0 && tp3 > 0 && !excessiveRisk;
-  return {
+  return finalizePlan({
     direction: "short",
     entry,
     stop,
@@ -277,7 +314,7 @@ export function pumpFadePlan(metrics, cfg) {
     valid,
     stopDistancePct,
     warning: excessiveRisk ? `손절 거리 ${stopDistancePct.toFixed(2)}% — 8% 이상 위험` : null,
-  };
+  });
 }
 
 function pumpFadeGrade(score, cfg) {
@@ -287,7 +324,7 @@ function pumpFadeGrade(score, cfg) {
 export function buildPumpFadeResult(item, candles1h, candles15m, candles5m, cfg, options = {}) {
   const pump = pumpFadePrefilter(candles1h, cfg);
   if (!pump.pass) return null;
-  const metrics = buildPumpFadeMetrics(candles15m, candles5m, pump, cfg);
+  const metrics = buildPumpFadeMetrics(candles15m, candles5m, pump, cfg, options);
   if (!metrics) return null;
   const stageInfo = classifyPumpFadeStage(metrics, cfg);
   const scored = scorePumpFade(metrics, cfg);
@@ -296,6 +333,7 @@ export function buildPumpFadeResult(item, candles1h, candles15m, candles5m, cfg,
     scanMode: "pump_fade",
     experimental: true,
     provisional: Boolean(options.provisional),
+    asOf: options.asOf ?? metrics.signalCloseTime,
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: metrics.price,

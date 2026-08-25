@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
   <title>QAR ICT Scanner — 테스트</title>
   <style>
     body { font-family: ui-monospace, Menlo, Consolas, monospace; background: #0b1220; color: #e6ecf6; padding: 20px; line-height: 1.6; }
@@ -18,7 +19,7 @@
   <pre id="output"></pre>
   <script type="module">
     import { runAll } from "./run.js";
-    const r = runAll();
+    const r = await runAll();
     const out = document.getElementById("output");
     out.innerHTML = r.lines
       .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)

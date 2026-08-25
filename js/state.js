@@ -34,18 +34,36 @@ const defaultSettings = {
   refreshIntervalMs: CONFIG.refresh.intervalMs,
 };
 
+function freshDefaults() {
+  return {
+    ...defaultSettings,
+    penalties: { ...defaultSettings.penalties },
+    favorites: [],
+    excluded: [],
+  };
+}
+
+function mergeSettings(parsed = {}) {
+  const base = freshDefaults();
+  return {
+    ...base,
+    ...parsed,
+    version: CONFIG.version,
+    penalties: { ...base.penalties, ...(parsed.penalties || {}) },
+    favorites: Array.isArray(parsed.favorites) ? [...parsed.favorites] : [],
+    excluded: Array.isArray(parsed.excluded) ? [...parsed.excluded] : [],
+  };
+}
+
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...defaultSettings };
+    if (!raw) return freshDefaults();
     const parsed = JSON.parse(raw);
     // 버전 마이그레이션: 필드 누락 시 기본값 병합
-    if (parsed.version !== CONFIG.version) {
-      return { ...defaultSettings, ...parsed, version: CONFIG.version };
-    }
-    return { ...defaultSettings, ...parsed };
+    return mergeSettings(parsed);
   } catch {
-    return { ...defaultSettings };
+    return freshDefaults();
   }
 }
 
@@ -61,7 +79,10 @@ export const state = {
   newListings: [],     // 신규 상장 심볼
   scan: {
     running: false,
-    phase: "idle",     // idle|universe|prefilter|candidate|deep|score|done|error
+    stopping: false,
+    runId: 0,
+    cutoff: 0,
+    phase: "idle",     // idle|universe|prefilter|candidate|deep|score|done|stopping|error
     progress: 0,       // 0~1
     total: 0,
     done: 0,
@@ -73,10 +94,13 @@ export const state = {
     modeTotal: 0,
     modeStats: {},      // mode -> { prefiltered, candidates, results }
     modeErrors: {},     // mode -> 오류 문구 (다른 모드는 계속 실행)
+    realtimeSuppressed: false, // 전체 검색에서 공통 시각 보호를 위해 진행 중 봉을 끈 경우
   },
   apiHealth: {
     connected: null,   // null=미확인 true/false
     lastError: null,
+    lastStatus: null,
+    blockedUntil: 0,
     weightUsed: 0,
   },
 };
@@ -105,7 +129,7 @@ export function saveSettings() {
   emit("settings:changed", state.settings);
 }
 export function resetSettings() {
-  state.settings = { ...defaultSettings };
+  state.settings = freshDefaults();
   saveSettings();
 }
 export function updateSettings(patch) {

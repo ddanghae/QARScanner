@@ -2,7 +2,7 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { returnsFrom, pearson, correlationMap } from "../js/core/correlation.js";
-import { resolveTrade } from "../js/ui/paper.js";
+import { resolveTrade, paperRecordState } from "../js/ui/paper.js";
 
 const bar = (o, h, l, c, t) => ({ time: t, open: o, high: h, low: l, close: c, volume: 1 });
 const fromCloses = (closes, t0 = 0) =>
@@ -83,5 +83,42 @@ export function run() {
     const win = resolveTrade(rec, [bar(100, 145, 99, 143, 1000), bar(143, 150, 80, 85, 2000)]);
     eq(win.status, "win", "목표를 먼저 친 뒤의 폭락은 이미 청산된 뒤다");
     eq(win.r, 4);
+  });
+
+  test("가상 기록은 정상 LONG 결과만 허용한다", () => {
+    const result = {
+      scanMode: "reversal", direction: "long", provisional: false,
+      plan: {
+        direction: "long", valid: true, stop: 90, invalidation: 90, entry: 100,
+        tp1: 110, tp2: 120, tp3: 130, riskReward: 2,
+      },
+    };
+    eq(paperRecordState(result).allowed, true, "정상 LONG 허용");
+  });
+
+  test("SHORT와 진행 중 캔들 결과는 가상 기록을 막는다", () => {
+    const plan = {
+      direction: "short", valid: true, stop: 110, invalidation: 110, entry: 100,
+      tp1: 90, tp2: 80, tp3: 70, riskReward: 2,
+    };
+    eq(paperRecordState({ scanMode: "pump_fade", direction: "short", plan }).allowed, false,
+      "SHORT 차단");
+    const longPlan = {
+      direction: "long", valid: true, stop: 90, invalidation: 90, entry: 100,
+      tp1: 110, tp2: 120, tp3: 130, riskReward: 2,
+    };
+    eq(paperRecordState({ scanMode: "early", direction: "long", provisional: true, plan: longPlan }).allowed,
+      false, "진행 중 봉 차단");
+  });
+
+  test("가격 순서가 잘못된 계획은 저장 경계에서 다시 막는다", () => {
+    const bad = {
+      scanMode: "reversal", direction: "long",
+      plan: {
+        direction: "long", valid: true, stop: 90, invalidation: 90, entry: 100,
+        tp1: 110, tp2: 105, tp3: 130, riskReward: 2,
+      },
+    };
+    eq(paperRecordState(bad).allowed, false, "잘못된 목표 순서 차단");
   });
 }

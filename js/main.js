@@ -1,14 +1,16 @@
 // main.js — 진입점. UI 초기화 + 스캔 버튼 + 서비스워커 등록 + 백그라운드 처리.
 // index.html 에서 <script type="module" src="./js/main.js"> 로 로드.
 
-import { state, on, emit } from "./state.js";
+import { state, on, updateSettings } from "./state.js";
 import { runScan, abortScan, startAutoRefresh, stopAutoRefresh } from "./scanner/scan-controller.js";
 import { initDashboard } from "./ui/dashboard.js";
-import { initSettingsUI, applyFilters } from "./ui/settings.js";
+import { initSettingsUI, applyFilters, syncControls } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
 import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
 import { SCAN_MODE_META } from "./scan-modes.js";
+
+let lastApiBlockedUntil = 0;
 
 function boot() {
   initSettingsUI();
@@ -37,9 +39,22 @@ function boot() {
   on("scan:mode-error", ({ mode, message }) => {
     toast(`${SCAN_MODE_META[mode]?.label || mode} 실행 실패 — ${message}`, "error", 6000);
   });
+  on("scan:notice", (message) => toast(message, "info", 6000));
   // 목록과 같은 필터를 통과한 수. 스캔 단계 숫자를 쓰면 화면엔 5줄인데 12개라 뜬다.
   on("scan:done", () => toast(`스캔 완료 — 후보 ${applyFilters(state.results).length}개`, "success"));
   on("scan:aborted", () => toast("스캔을 중단했습니다.", "info"));
+  on("api:blocked", ({ until }) => {
+    if (until <= lastApiBlockedUntil) return;
+    lastApiBlockedUntil = until;
+    stopAutoRefresh();
+    if (state.scan.running) abortScan();
+    if (state.settings.autoRefresh) {
+      updateSettings({ autoRefresh: false });
+      syncControls();
+    }
+    const seconds = Math.max(1, Math.ceil((until - Date.now()) / 1000));
+    toast(`거래소 요청을 잠시 멈췄습니다. 약 ${seconds}초 뒤 다시 시도하세요.`, "error", 7000);
+  });
   document.addEventListener("tv:popup-blocked", () => notifyError("tvPopup"));
 
   // 자동 갱신 토글 (§15)
@@ -71,7 +86,12 @@ function initTabs() {
     const nav = btn.dataset.nav;
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
-    navBtns.forEach((b) => b.classList.toggle("active", b === btn));
+    navBtns.forEach((b) => {
+      const selected = b === btn;
+      b.classList.toggle("active", selected);
+      if (selected) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
     const h1 = document.querySelector(".topbar-title h1");
     if (h1 && titles[nav]) h1.textContent = titles[nav];
   }));

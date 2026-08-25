@@ -495,10 +495,35 @@
     - 한 모드가 최상위 요청에서 실패하면 오류를 표시하고 나머지 모드는 계속 실행한다.
     - 로컬 공개 Binance 데이터 실행에서 세 섹션이 각각 렌더되고 콘솔 오류가 없음을 확인했다.
 
+17. **스캐너 신뢰성 점검·수정 (2026-08-25)** — 승인 PRD
+    `docs/superpowers/specs/2026-08-25-scanner-reliability-audit-fixes-prd.md` 범위.
+    - 검색마다 번호와 공통 기준 시각을 붙였다. 중단은 실제 요청까지 끊고, 늦은 응답은
+      결과를 덮지 못한다. 정리가 끝나기 전에는 새 검색을 겹쳐 시작하지 않는다.
+    - 세 모드가 같은 기준 시각의 마감봉을 사용한다. pump_fade의 최근 5분봉은 마지막 시각,
+      연속성, 중복 여부를 검사하고 1시간 자료가 15분 신호보다 미래면 제외한다.
+    - 피봇은 오른쪽 확인 봉이 닫힌 뒤부터만 구조 레벨로 사용하며 마지막 마감봉을 두 번
+      제외하던 경로를 제거했다.
+      고정 예시 3개 비교에서는 구조 신호가 수정 전 8개, 수정 후 8개였다. 이는 예시 자료의
+      신호 수 보존 확인일 뿐, 실제 성능이 좋아졌다는 뜻은 아니다.
+    - 전체 종목 자료 요청이 모두 실패하면 후보 0개로 숨기지 않고 오류로 표시한다.
+      418/429 응답과 API 사용량이 높을 때는 요청을 쉬고 자동 갱신을 끈다.
+      세 모드가 전부 실패한 경우도 완료로 표시하지 않으며, 중단된 옛 응답은 새 캐시를
+      덮지 못한다. 캐시는 시간봉 단위로 재사용하고 최대 개수를 제한한다.
+    - LONG/SHORT 가격 순서와 양수 가격을 최종 검사한다. 잘못된 계획, SHORT, 진행 중 봉은
+      가상 기록을 막는다. 이전 형식 기록은 보존하되 통계에서 제외하고 자료 실패도 별도 표시한다.
+    - 조기 포착의 "급등확률/임박" 표현을 "과거 적중률/조건 2개 충족"으로 바꾸고
+      검증 기간(2026-06-08~2026-07-11, 17,597행)과 한 시기 자료라는 한계를 표시한다.
+    - 상세창 키보드 초점, 모바일 가상 기록 표, 메뉴 접근성 이름을 보강했다.
+      조기 포착의 검증 기간·한계는 마우스를 올리지 않아도 보이며, 데스크톱 결과표는
+      글자가 세로로 찌그러지지 않도록 가로 스크롤을 허용한다.
+
 ## 검증 상태
 
-- **현재 테스트 162/162 통과** — `node tests/run.js`. pump_fade 계산·연구·UI 39개,
-  기존 main 회귀 118개, 통합 스캔 계약 5개가 함께 통과한다.
+- **현재 테스트 190/190 통과** — `node tests/run.js`. 기존 계산 회귀와 함께
+  API 중단·차단, 검색 중단/재시작, 구조 시점, 5분봉 정렬, 계획 검사, 가상 기록 경계를 확인한다.
+- **로컬 화면 검수 통과** — 데스크톱·390×844 모바일에서 세 모드 결과, 한 모드 실패,
+  무효 계획 기록 차단, 상세창 키보드, 과거자료 한계, 모바일 가상 기록 표와 브라우저
+  `190/190`을 확인했다.
 - **통합 전 기준선 118/118 통과** — indicators, structure, liquidity, scoring,
   goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트.
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
@@ -532,7 +557,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (162/162 나와야 정상)
+node tests/run.js          # 테스트 확인 (190/190 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -548,7 +573,7 @@ js/
   main.js, config.js, state.js
   api/binance.js
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
-         fvg.js order-block.js risk-reward.js scoring.js
+         fvg.js order-block.js risk-reward.js plan-validation.js scoring.js
          golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js correlation.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
@@ -557,7 +582,8 @@ tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
   golden-cross.test.js noise.test.js early-detect.test.js
-  repaint.test.js refresh.test.js paper-corr.test.js
+  repaint.test.js refresh.test.js paper-corr.test.js api.test.js plan-validation.test.js
+  scan-controller.test.js
 pine/  qar_scanner_sync_indicator.pine   (트레이딩뷰 동기화 지표. 모드 2 = early)
 docs/  펌프예측_연구정리.md               (11~12번의 원자료 정리 — 수치 출처)
        superpowers/{specs,plans}/…

@@ -238,7 +238,7 @@ function setChk(id, v) { const el = document.getElementById(id); if (el) el.chec
 const STAGE_OPTIONS = {
   all: [["all", "전체 모드 단계"]],
   reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
-  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 임박"], ["3", "3 돌파"]],
+  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 조건 2개 충족"], ["3", "3 돌파"]],
   pump_fade: [["all", "전체"], ["1", "1 과열 감시"], ["2", "2 고점 거절"], ["3", "3 급락 확인"]],
 };
 function syncModeControls(settings) {

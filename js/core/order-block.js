@@ -13,7 +13,8 @@ export function detectOrderBlocks(candles, events, avgVolPeriod = 20) {
   const blocks = [];
   for (const ev of events) {
     // 이벤트 캔들 인덱스 찾기
-    const evIdx = candles.findIndex((c) => c.openTime === ev.candleTime);
+    const evIdx = candles.findIndex((c) =>
+      c.openTime === ev.candleTime || c.closeTime === ev.signalTime || c.closeTime === ev.candleTime);
     if (evIdx < 1) continue;
     const bullish = ev.type.startsWith("bullish");
     // 직전으로 거슬러 올라가 반대색 마지막 캔들

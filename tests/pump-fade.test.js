@@ -17,13 +17,20 @@ import { candlesFromCloses } from "./fixtures.js";
 const HOUR = 60 * 60 * 1000;
 const MIN15 = 15 * 60 * 1000;
 const MIN5 = 5 * 60 * 1000;
+const REJECTION_START = Date.UTC(2025, 0, 1, 0, 0, 0);
+const SIGNAL_CLOSE = REJECTION_START + 100 * MIN15 - 1;
 
 function oneHourPump(finalPrice = 112.5) {
   const closes = new Array(30).fill(100);
   for (let i = 24; i < closes.length; i++) {
     closes[i] = 100 + (finalPrice - 100) * ((i - 23) / 6);
   }
-  return candlesFromCloses(closes, { step: HOUR, spread: 0.4, vol: 100 });
+  return candlesFromCloses(closes, {
+    start: SIGNAL_CLOSE - closes.length * HOUR + 1,
+    step: HOUR,
+    spread: 0.4,
+    vol: 100,
+  });
 }
 
 function rejection15m() {
@@ -32,9 +39,8 @@ function rejection15m() {
   closes[97] = 126;
   closes[98] = 125.5;
   closes[99] = 125;
-  const start = Date.UTC(2025, 0, 1, 0, 0, 0);
   const candles = candlesFromCloses(closes, {
-    start,
+    start: REJECTION_START,
     step: MIN15,
     spread: 0.5,
     vol: 100,
@@ -57,7 +63,7 @@ function rejection15m() {
 function breakdown5m(signalCloseTime, includeFuture = false) {
   const closes = new Array(40).fill(126);
   closes[39] = 124.5;
-  const start = signalCloseTime - 40 * MIN5;
+  const start = signalCloseTime - 40 * MIN5 + 1;
   const candles = candlesFromCloses(closes, {
     start,
     step: MIN5,
@@ -84,6 +90,14 @@ function fullMetrics() {
   const c15 = rejection15m();
   const c5 = breakdown5m(c15[c15.length - 1].closeTime);
   return { c1, c15, c5, pump, metrics: buildPumpFadeMetrics(c15, c5, pump, CONFIG) };
+}
+
+function moveLastOpen(candles, openTime) {
+  const delta = openTime - candles[candles.length - 1].openTime;
+  for (const candle of candles) {
+    candle.openTime += delta;
+    candle.closeTime += delta;
+  }
 }
 
 export function run() {
@@ -263,6 +277,53 @@ export function run() {
     eq(b.microBreakdownLevel, a.microBreakdownLevel, "구조 레벨 동일");
   });
 
+  test("15분 신호와 같은 시각의 마지막 5분봉이 없으면 제외", () => {
+    const { pump, c15, c5 } = fullMetrics();
+    c5.pop();
+    eq(buildPumpFadeMetrics(c15, c5, pump, CONFIG), null, "마지막 5분봉 누락 거부");
+  });
+
+  test("최근 5분봉 사이가 비거나 중복되면 제외", () => {
+    const { pump, c15, c5 } = fullMetrics();
+    const gap = [...c5];
+    gap.splice(gap.length - 3, 1);
+    eq(buildPumpFadeMetrics(c15, gap, pump, CONFIG), null, "5분봉 빈칸 거부");
+
+    const duplicate = [...c5, { ...c5[c5.length - 1] }];
+    eq(buildPumpFadeMetrics(c15, duplicate, pump, CONFIG), null, "5분봉 중복 거부");
+  });
+
+  test("1시간 급등 자료가 15분 신호보다 미래면 제외", () => {
+    const { pump, c15, c5 } = fullMetrics();
+    pump.asOf = c15[c15.length - 1].closeTime + 1;
+    eq(buildPumpFadeMetrics(c15, c5, pump, CONFIG), null, "서로 다른 시점 자료 혼합 거부");
+  });
+
+  test("1시간·15분 자료가 검색 기준시각보다 오래되면 제외", () => {
+    const { pump, c15, c5 } = fullMetrics();
+    const signal = c15[c15.length - 1].closeTime;
+    const oldPump = { ...pump, asOf: signal - CONFIG.pumpFade.interval1hMs - 1 };
+    eq(buildPumpFadeMetrics(c15, c5, oldPump, CONFIG, { asOf: signal }), null,
+      "오래된 1시간 급등 자료 거부");
+    eq(buildPumpFadeMetrics(c15, c5, pump, CONFIG, {
+      asOf: signal + CONFIG.pumpFade.interval15mMs + 1,
+    }), null, "오래된 15분 신호 거부");
+  });
+
+  test("진행 중 봉 모드는 같은 조회 시각을 포함한 1h·15m·5m 봉을 맞춘다", () => {
+    const c1 = oneHourPump();
+    const c15 = rejection15m();
+    const cutoff = Date.UTC(2026, 7, 25, 10, 7, 0);
+    moveLastOpen(c1, cutoff - 30 * 60 * 1000);
+    moveLastOpen(c15, cutoff - 7 * 60 * 1000);
+    const c5 = breakdown5m(c15[c15.length - 1].closeTime);
+    moveLastOpen(c5, cutoff - 2 * 60 * 1000);
+    const pump = pumpFadePrefilter(c1, CONFIG);
+    eq(buildPumpFadeMetrics(c15, c5, pump, CONFIG), null, "마감봉 규칙에서는 시각 불일치");
+    assert(buildPumpFadeMetrics(c15, c5, pump, CONFIG, { provisional: true, asOf: cutoff }),
+      "진행 중인 세 봉이 같은 조회 시각을 포함하면 허용");
+  });
+
   test("15분 신호 시각이 없으면 fail closed", () => {
     const { pump, c15, c5 } = fullMetrics();
     delete c15[c15.length - 1].closeTime;
@@ -288,6 +349,7 @@ export function run() {
     eq(result.scanMode, "pump_fade", "모드");
     eq(result.direction, "short", "방향");
     eq(result.experimental, true, "실험 표시");
+    assert(Number.isFinite(result.asOf), "기준 시각 표시");
     for (const key of ["score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "timeframes"]) {
       assert(result[key] != null, `${key} 존재`);
     }

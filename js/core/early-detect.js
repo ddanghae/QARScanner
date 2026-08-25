@@ -5,6 +5,7 @@
 import { bollinger, atr, ema, last } from "./indicators.js";
 import { relativeVolume } from "./volume-analysis.js";
 import { gradeFor, topSignals } from "./scoring.js";
+import { finalizePlan } from "./plan-validation.js";
 
 // 최근 lookback 봉의 박스(고/저)와 그 안에서의 현재 위치.
 export function boxRange(candles, lookback) {
@@ -93,8 +94,8 @@ export function classifyEarlyStage(m, cfg) {
 
   const hits = coreHits(m, e);
   if (hits === 0) return null;
-  // 2단계 임박 — 둘 다 성립. 14일 추세와 24시간 변동이 동시에 크면 재적합 점수도 최상위권.
-  if (hits >= 2) return stage(2, "imminent", "2 임박", "yellow");
+  // 2단계 — 검증 조건 두 개가 함께 성립. 미래 급등이 임박했다는 뜻은 아니다.
+  if (hits >= 2) return stage(2, "imminent", "2 조건 2개 충족", "yellow");
   return stage(1, "accumulation", "1 관찰", "blue");
 }
 
@@ -191,7 +192,8 @@ export function earlyPlan(m, atrVal, price, cfg) {
   const tp2 = entry + risk * targetR;
   const tp3 = entry + risk * targetR * 1.5;
   const rr = (tp2 - entry) / risk;
-  return {
+  return finalizePlan({
+    direction: "long",
     entry, stop, tp1, tp2, tp3,
     invalidation: stop,
     partialAtR, partialFrac,
@@ -202,7 +204,7 @@ export function earlyPlan(m, atrVal, price, cfg) {
     // 파는 방식(부분 익절 여부)은 사용자가 고르므로 여기서 단정하지 않는다 — 상세 패널이 설명한다.
     note: "급등 141건 추적 결과 고점 이후 중앙 82% 를 반납했고(31%는 전량 반납) " +
           "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다.",
-  };
+  });
 }
 
 // ---- 지표 조립 ----

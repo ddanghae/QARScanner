@@ -1,6 +1,6 @@
 // tests/run.js — 모든 테스트 실행. Node: `node tests/run.js`. 브라우저: index.html.
 
-import { report, reset } from "./harness.js";
+import { report, reset, settle } from "./harness.js";
 import { run as indicators } from "./indicators.test.js";
 import { run as structure } from "./structure.test.js";
 import { run as liquidity } from "./liquidity.test.js";
@@ -15,8 +15,11 @@ import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
 import { run as unifiedScan } from "./unified-scan.test.js";
+import { run as api } from "./api.test.js";
+import { run as planValidation } from "./plan-validation.test.js";
+import { run as scanController } from "./scan-controller.test.js";
 
-export function runAll() {
+export async function runAll() {
   reset();
   indicators();
   structure();
@@ -32,13 +35,17 @@ export function runAll() {
   refresh();
   paperCorr();
   unifiedScan();
+  api();
+  planValidation();
+  scanController();
+  await settle();
   return report();
 }
 
 // Node 환경이면 자동 실행 + 종료코드
 const isNode = typeof process !== "undefined" && process.versions?.node;
 if (isNode) {
-  const r = runAll();
+  const r = await runAll();
   console.log(r.lines.join("\n"));
   console.log(r.summary);
   process.exit(r.fail ? 1 : 0);

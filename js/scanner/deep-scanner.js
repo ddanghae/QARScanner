@@ -17,8 +17,8 @@ import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
 import { evaluateNoise } from "../core/noise-filter.js";
 
 // 한 시간봉 분석 묶음
-function analyzeTf(candlesRaw, includeRealtime, tf) {
-  const candles = closedOnly(candlesRaw, includeRealtime);
+function analyzeTf(candlesRaw, includeRealtime, tf, cutoff) {
+  const candles = closedOnly(candlesRaw, includeRealtime, cutoff);
   if (candles.length < 40) return null;
   const ind = computeIndicators(candles, CONFIG.indicators);
   const atrVal = last(ind.atr);
@@ -42,12 +42,17 @@ function analyzeTf(candlesRaw, includeRealtime, tf) {
 }
 
 // 멀티타임프레임 데이터 요청
-async function fetchAll(symbol) {
+async function fetchAll(symbol, context = {}) {
+  const options = {
+    signal: context.signal,
+    endTime: context.cutoff,
+    cacheBucket: context.cacheBucket ?? context.cutoff,
+  };
   const [k4h, k1h, k15m, k5m] = await Promise.all([
-    getKlines(symbol, "4h"),
-    getKlines(symbol, "1h"),
-    getKlines(symbol, "15m"),
-    getKlines(symbol, "5m"),
+    getKlines(symbol, "4h", undefined, options),
+    getKlines(symbol, "1h", undefined, options),
+    getKlines(symbol, "15m", undefined, options),
+    getKlines(symbol, "5m", undefined, options),
   ]);
   return { k4h, k1h, k15m, k5m };
 }
@@ -135,8 +140,8 @@ function buildLongSignals(item, a4, a1, a15, a5, pre) {
     swingLow: recentLow,
     atr: atr15,
   });
-  const riskRewardOk = plan.riskReward >= 2;
-  const poorRiskReward = plan.riskReward < 1.5;
+  const riskRewardOk = plan.valid && plan.riskReward >= 2;
+  const poorRiskReward = !plan.valid || plan.riskReward < 1.5;
 
   return {
     direction: "long",
@@ -270,8 +275,8 @@ function buildShortSignals(item, a4, a1, a15, a5, pre) {
     swingHigh: recentHigh,
     atr: atr15,
   });
-  const riskRewardOk = plan.riskReward >= 2;
-  const poorRiskReward = plan.riskReward < 1.5;
+  const riskRewardOk = plan.valid && plan.riskReward >= 2;
+  const poorRiskReward = !plan.valid || plan.riskReward < 1.5;
 
   return {
     direction: "short", price,
@@ -297,13 +302,13 @@ function lowerHigh(a5) {
 }
 
 // 최종: 종목 하나 정밀 분석
-export async function deepAnalyze(item, settings) {
+export async function deepAnalyze(item, settings, context = {}) {
   const includeRt = settings.includeRealtimeCandle;
-  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol);
-  const a4 = analyzeTf(k4h, includeRt, "4h");
-  const a1 = analyzeTf(k1h, includeRt, "1h");
-  const a15 = analyzeTf(k15m, includeRt, "15m");
-  const a5 = analyzeTf(k5m, includeRt, "5m");
+  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol, context);
+  const a4 = analyzeTf(k4h, includeRt, "4h", context.cutoff);
+  const a1 = analyzeTf(k1h, includeRt, "1h", context.cutoff);
+  const a15 = analyzeTf(k15m, includeRt, "15m", context.cutoff);
+  const a5 = analyzeTf(k5m, includeRt, "5m", context.cutoff);
   if (!a4 || !a1 || !a15 || !a5) {
     return { symbol: item.symbol, error: "캔들 데이터 부족", skipped: true };
   }
@@ -348,10 +353,12 @@ export async function deepAnalyze(item, settings) {
     baseAsset: item.baseAsset,
     price: sig.price,
     change6h: pre.change6h,
-    change24h: item.change24h ?? pre.change24h,
+    change24h: pre.change24h,
     quoteVolume: item.quoteVolume,
     newListing: item.newListing,
     direction: side,
+    asOf: context.cutoff ?? null,
+    provisional: Boolean(includeRt),
     score: scored.score,
     grade: scored.grade,
     stage: stageInfo,

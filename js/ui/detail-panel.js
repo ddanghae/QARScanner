@@ -9,12 +9,21 @@ import { toast } from "./notifications.js";
 import { SCAN_MODE_META, resultMode } from "../scan-modes.js";
 
 let panelEl = null;
+let lastFocused = null;
+
+function focusableElements() {
+  if (!panelEl) return [];
+  return [...panelEl.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+}
 
 // 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
-function moneySection(p) {
+function moneySection(p, mode, direction) {
+  if (!p?.valid) return `<p class="warn"><b>가격 계획을 확인해야 합니다.</b> ${escapeHtml(p?.validationError || "가격 순서가 올바르지 않습니다.")}</p>`;
+  if (direction === "short") return '<p class="muted">SHORT 금액·청산 계산은 아직 제공하지 않습니다.</p>';
   const s = state.settings;
-  const on = s.partialTake !== false;
+  const early = mode === "early";
+  const on = early && s.partialTake !== false;
   const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, on ? undefined : 0);
   if (!m) return `<p class="muted">시드머니를 입력하면 손익 금액이 표시됩니다.</p>`;
@@ -36,11 +45,11 @@ function moneySection(p) {
   const midRow = on
     ? `<tr><td>TP1 에서 ${pct}% 빼고 본전에 걸리면</td><td class="up">+${fmtWon(m.partial)} <small>(+${m.partialPct.toFixed(1)}%)</small></td></tr>`
     : "";
-  const how = on
-    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올리는 전제입니다 —
-       평균 수익은 낮지만 아픈 구간이 절반이고 승률이 37% → 49% 입니다.`
-    : `목표까지 통째로 버티는 전제입니다 — 평균 수익이 더 높은 대신 아픈 구간이 2배이고
-       10번 중 3.7번만 이깁니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
+  const how = early
+    ? on
+      ? `조기 포착 과거 실험처럼 TP1에서 ${pct}%를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올리는 전제입니다.`
+      : '조기 포착 과거 실험처럼 목표까지 나누지 않고 유지하는 전제입니다.'
+    : '급락 반등 결과의 진입·손절·TP2 가격 차이만 금액으로 바꾼 참고 계산입니다.';
   return `<table class="plan-table money-table">
     <tr><td>넣는 금액</td><td>${fmtWon(s.seedMoney)}</td></tr>
     ${levRow}
@@ -59,17 +68,38 @@ export function initDetailPanel() {
   panelEl.addEventListener("click", (e) => {
     if (e.target.dataset.close !== undefined || e.target === panelEl) closeDetail();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
+  document.addEventListener("keydown", (e) => {
+    if (!panelEl?.classList.contains("open")) return;
+    if (e.key === "Escape") { closeDetail(); return; }
+    if (e.key !== "Tab") return;
+    const focusable = focusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
 }
 
 export function closeDetail() {
-  if (panelEl) panelEl.classList.remove("open");
+  if (!panelEl?.classList.contains("open")) return;
+  panelEl.classList.remove("open");
+  panelEl.setAttribute("aria-hidden", "true");
+  const shell = document.querySelector(".app-shell");
+  if (shell) shell.inert = false;
+  if (lastFocused instanceof HTMLElement) lastFocused.focus();
+  lastFocused = null;
 }
 
 export function showDetail(r) {
   if (!panelEl) return;
+  lastFocused = document.activeElement;
   panelEl.innerHTML = renderDetail(r);
   panelEl.classList.add("open");
+  panelEl.setAttribute("aria-hidden", "false");
+  const shell = document.querySelector(".app-shell");
+  if (shell) shell.inert = true;
+  panelEl.querySelector("[data-close]")?.focus();
 
   // 버튼 바인딩 (실제 클릭 이벤트 안에서 새 탭 — 팝업 차단 회피)
   panelEl.querySelector("[data-tv-open]")?.addEventListener("click", () => openTradingView(r.symbol));
@@ -79,7 +109,10 @@ export function showDetail(r) {
   });
   panelEl.querySelector("[data-fav]")?.addEventListener("click", (e) => {
     toggleFavorite(r.symbol);
-    e.currentTarget.classList.toggle("active", isFavorite(r.symbol));
+    const active = isFavorite(r.symbol);
+    e.currentTarget.classList.toggle("active", active);
+    e.currentTarget.setAttribute("aria-pressed", String(active));
+    e.currentTarget.setAttribute("aria-label", `${r.symbol} 관심 종목 ${active ? "해제" : "추가"}`);
   });
 }
 
@@ -88,17 +121,21 @@ function renderDetail(r) {
   const mode = resultMode(r);
   const modeMeta = SCAN_MODE_META[mode];
   const isPumpFade = mode === "pump_fade";
+  const favorite = isFavorite(r.symbol);
+  const planWarning = !p?.valid
+    ? `<p class="warn"><b>이 가격 계획은 사용할 수 없습니다.</b> ${escapeHtml(p?.validationError || "가격 순서를 확인하세요.")}</p>`
+    : "";
   const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
   const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
 
   return `
-  <div class="detail-card" role="dialog" aria-modal="true">
+  <div class="detail-card" role="dialog" aria-modal="true" aria-labelledby="detail-title">
     <button class="detail-close" data-close aria-label="닫기">✕</button>
     <header class="detail-head">
       <div class="detail-title">
-        <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
-        <h2>${escapeHtml(r.symbol)}</h2>
+        <button class="fav-btn ${favorite ? "active" : ""}" data-fav aria-pressed="${favorite}" aria-label="${escapeHtml(r.symbol)} 관심 종목 ${favorite ? "해제" : "추가"}">★</button>
+        <h2 id="detail-title">${escapeHtml(r.symbol)}</h2>
         <span class="badge badge-mode badge-mode-${modeMeta.badge}">${modeMeta.label}</span>
         <span class="score-pill score-${r.grade.key}">${isPumpFade ? "실험 점수 " : ""}${r.score}</span>
         ${dirBadge}
@@ -113,6 +150,8 @@ function renderDetail(r) {
       </div>
     </header>
 
+    ${mode === "early" ? `<p class="evidence-note">과거 자료 ${CONFIG.earlyValidation.start}~${CONFIG.earlyValidation.end} · ${CONFIG.earlyValidation.rows.toLocaleString("ko-KR")}행에서 확인한 값입니다. 한 시기 자료이며 미래 확률이 아닙니다.</p>` : ""}
+
     <section class="detail-section">
       <h3>핵심 신호</h3>
       <ul class="signal-list">${r.topSignals.map((s) => `<li>✔ ${escapeHtml(s)}</li>`).join("")}</ul>
@@ -121,6 +160,7 @@ function renderDetail(r) {
 
     <section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
+      ${planWarning}
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>
         <tr><td>무효화(손절)</td><td>${fmtPrice(p.invalidation)}</td></tr>
@@ -128,9 +168,9 @@ function renderDetail(r) {
         <tr><td>TP2 (${isPumpFade ? "2R" : r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
         <tr><td>TP3 (${isPumpFade ? "3R" : r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
-        ${p.warning ? `<tr><td>위험 경고</td><td>${escapeHtml(p.warning)}</td></tr>` : ""}
+        ${p.warning || p.validationError ? `<tr><td>위험 경고</td><td>${escapeHtml(p.warning || p.validationError)}</td></tr>` : ""}
       </table>
-      ${isPumpFade ? '<p class="muted">pump_fade는 공개 데이터 기반 실험 신호만 제공하며 금액·레버리지·청산 계산을 적용하지 않습니다.</p>' : moneySection(p)}
+      ${isPumpFade ? '<p class="muted">급등 후 급락은 공개 데이터 기반 실험 신호이며 금액 계산을 제공하지 않습니다.</p>' : moneySection(p, mode, r.direction)}
       ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
       ${isPumpFade ? '<p class="plan-note">초기 임계값과 가중치이며 성공 확률이나 기대수익률로 해석할 수 없습니다.</p>' : ""}
     </section>

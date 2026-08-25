@@ -12,6 +12,11 @@ export const CONFIG = {
     requestTimeoutMs: 12000,
     maxRetries: 2,
     retryBackoffMs: 800,
+    rateLimitFallbackMs: 30_000,
+    banFallbackMs: 5 * 60_000,
+    weightPauseAt: 2200,
+    weightCooldownMs: 60_000,
+    maxCacheEntries: 1200,
   },
 
   // ---- 캔들 데이터 캐시 TTL (시간봉별 다르게) ----
@@ -165,8 +170,14 @@ export const CONFIG = {
     { min: 25, label: "조건 부족", key: "weak", hitRate: 7 },      // 2.03x
     { min: 0, label: "제외", key: "excluded", hitRate: 2 },        // 0.58x
   ],
-  earlyHitBaseline: 3.57,   // 무작위 종목의 같은 기간 적중률. 확률만 보면 크기를 못 느낀다.
+  earlyHitBaseline: 3.57,   // 같은 검증 기간 전체 표본 적중률. 미래 확률이 아니다.
   earlyHitLabel: "7일 내 24h +40%",
+  earlyValidation: {
+    start: "2026-06-08",
+    end: "2026-07-11",
+    rows: 17_597,
+    note: "한 시기 자료로 확인한 과거 결과이며 다른 시장에서도 같다는 보장은 없습니다.",
+  },
 
   // ---- 급등 후 급락 모드 (pump_fade, SHORT 전용) ----
   // 아래 임계값과 가중치는 검증 완료값이 아닌 초기 연구값이다.
@@ -184,6 +195,9 @@ export const CONFIG = {
     takerBuyRatioMax: 0.48,
     recentHighLookback15m: 96,
     microBreakdownBars5m: 4,
+    interval5mMs: 5 * 60 * 1000,
+    interval15mMs: 15 * 60 * 1000,
+    interval1hMs: 60 * 60 * 1000,
     drawdownConfirmPct: 1.5,
     lateDrawdownPct: 12,
     lateDrawdownPenalty: -25,

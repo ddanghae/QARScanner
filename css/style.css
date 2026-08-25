@@ -101,6 +101,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
   min-height: 36px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font-size: 13px; cursor: pointer;
 }
+.btn-mini:disabled { opacity: .5; cursor: not-allowed; }
 .btn-mini.tv { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 
 /* ---- 상태 스탯 카드 ---- */
@@ -159,6 +160,8 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .results { margin: 0; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
 .mode-summary { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 0 16px; border-bottom: 1px solid var(--border); }
+.mode-score-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.evidence-note { margin: 8px 0 12px; padding: 8px 10px; border-left: 3px solid var(--watch); color: var(--muted); background: var(--surface-2); font-size: 12px; line-height: 1.5; }
 .mode-count { display: inline-flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); font-size: 12px; }
 .mode-results { padding: 18px 0 6px; overflow-x: auto; border-bottom: 1px solid var(--border); }
 .mode-results:last-child { border-bottom: none; padding-bottom: 0; }
@@ -167,6 +170,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .mode-results-head > span { color: var(--muted); font-size: 12px; }
 .mode-empty { padding: 24px 12px; border: 1px dashed var(--border); border-radius: 12px; text-align: center; color: var(--muted); font-size: 13px; }
 .result-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.result-table:not(.paper-table) { min-width: 1280px; }
 .result-table th, .result-table td { padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .result-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--muted); font-weight: 600; }
 .result-table tbody tr:hover td { background: var(--surface-2); cursor: pointer; }
@@ -179,6 +183,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 /* 같이 움직이는 후보 — 나눠 담아도 분산이 아니라는 표시 */
 .badge-corr { background: rgba(217,138,0,.15); color: var(--warn); }
 .paper-summary { margin: 0 0 10px; }
+.paper { overflow-x: auto; }
 .paper-table td, .paper-table th { font-size: 13px; }
 
 /* 점수/등급 pill */
@@ -297,7 +302,8 @@ html.dark .badge-mode-pump-fade { background: #472020; color: #fca5a5; }
   .topbar { padding: 14px 16px; }
   .content { padding: 16px 16px calc(32px + var(--safe-b)); }
   .card { padding: 16px; }
-  .result-table { display: none; }
+  .result-table:not(.paper-table) { display: none; }
+  .paper-table { display: table; min-width: 1050px; }
   .result-cards { display: flex; }
   .topbar-title h1 { font-size: 16px; }
 }

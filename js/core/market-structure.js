@@ -3,7 +3,8 @@
 // 마감 캔들만 사용. 미래 데이터 참조 없음. UI와 분리된 순수 함수.
 
 // 좌우 length 봉 기준 pivot high/low 탐지.
-// 반환: [{ idx, price, kind: "high"|"low", time }]
+// pivot 은 오른쪽 length개 봉이 생긴 뒤에야 알 수 있다.
+// confirmedIdx/confirmedTime을 따로 보존해 과거 시점에 신호를 소급하지 않는다.
 export function findPivots(candles, length) {
   const pivots = [];
   for (let i = length; i < candles.length - length; i++) {
@@ -14,8 +15,16 @@ export function findPivots(candles, length) {
       if (candles[j].high >= c.high) isHigh = false;
       if (candles[j].low <= c.low) isLow = false;
     }
-    if (isHigh) pivots.push({ idx: i, price: c.high, kind: "high", time: c.openTime });
-    if (isLow) pivots.push({ idx: i, price: c.low, kind: "low", time: c.openTime });
+    const confirmedIdx = i + length;
+    const confirmedCandle = candles[confirmedIdx];
+    const base = {
+      idx: i,
+      time: c.openTime,
+      confirmedIdx,
+      confirmedTime: confirmedCandle?.closeTime ?? confirmedCandle?.openTime ?? null,
+    };
+    if (isHigh) pivots.push({ ...base, price: c.high, kind: "high" });
+    if (isLow) pivots.push({ ...base, price: c.low, kind: "low" });
   }
   return pivots.sort((a, b) => a.idx - b.idx);
 }
@@ -44,51 +53,71 @@ export function lastSwing(pivots, kind) {
 
 // BOS / CHoCH 판별.
 // 추세 방향(bias)을 스윙 순서로 추정한 뒤, 종가가 직전 스윙을 돌파하면 이벤트 생성.
-// events: { type, timeframe, price, candleTime, confirmed }
+// events: candleTime/breakTime = 실제 돌파를 인식한 봉, signalTime = 사용 가능한 시점.
 export function detectStructureEvents(candles, pivots, timeframe, includeRealtime) {
   const events = [];
   const swings = labelSwings(pivots);
-  if (swings.length < 3) return events;
 
-  // 종가 배열 (진행 캔들 포함 여부에 따라 마지막 캔들 취급)
-  const closeIdxMax = includeRealtime ? candles.length - 1 : candles.length - 2;
+  // 호출자가 이미 마감봉/실시간봉 경계를 정한다. 여기서 마지막 봉을 또 빼면
+  // 정상 마감 신호가 한 봉 늦어지므로 전달받은 배열 전체를 사용한다.
+  const closeIdxMax = candles.length - 1;
   if (closeIdxMax < 0) return events;
 
-  // 순차적으로 bias 추적하며 돌파 감지
+  // 확인 시점별 pivot 목록. pivot 위치가 아니라 확인봉부터 참조 레벨로 쓴다.
+  const confirmedAt = new Map();
+  for (const sw of swings) {
+    const idx = Number.isInteger(sw.confirmedIdx) ? sw.confirmedIdx : sw.idx;
+    if (idx > closeIdxMax) continue;
+    if (!confirmedAt.has(idx)) confirmedAt.set(idx, []);
+    confirmedAt.get(idx).push(sw);
+  }
+
   let bias = null; // "bull" | "bear"
   let refHigh = null, refLow = null; // 직전 확정 스윙 하이/로우
+  let confirmedSwingCount = 0;
 
-  for (let s = 0; s < swings.length; s++) {
-    const sw = swings[s];
-    if (sw.kind === "high") refHigh = sw;
-    else refLow = sw;
-
-    // 다음 스윙까지의 캔들 구간에서 종가 돌파 확인
-    const from = sw.idx + 1;
-    const to = s + 1 < swings.length ? swings[s + 1].idx : closeIdxMax;
-    for (let i = from; i <= to && i <= closeIdxMax; i++) {
-      const close = candles[i].close;
-      // 상방 돌파
-      if (refHigh && close > refHigh.price) {
-        const type = bias === "bear" ? "bullish_choch" : "bullish_bos";
-        events.push(mkEvent(type, timeframe, refHigh.price, candles[i].openTime, true));
-        bias = "bull";
-        refHigh = null; // 소비
-      }
-      // 하방 돌파
-      if (refLow && close < refLow.price) {
-        const type = bias === "bull" ? "bearish_choch" : "bearish_bos";
-        events.push(mkEvent(type, timeframe, refLow.price, candles[i].openTime, true));
-        bias = "bear";
-        refLow = null;
-      }
+  for (let i = 0; i <= closeIdxMax; i++) {
+    for (const sw of confirmedAt.get(i) || []) {
+      confirmedSwingCount++;
+      if (sw.kind === "high") refHigh = sw;
+      else refLow = sw;
+    }
+    // 미래에 세 번째 피봇이 생겼다는 이유로, 피봇이 둘뿐이던 과거 시점에
+    // 구조 신호를 뒤늦게 소급하지 않는다.
+    if (confirmedSwingCount < 3) continue;
+    const close = candles[i]?.close;
+    if (!Number.isFinite(close)) continue;
+    const confirmed = !(includeRealtime && i === closeIdxMax);
+    if (refHigh && close > refHigh.price) {
+      const type = bias === "bear" ? "bullish_choch" : "bullish_bos";
+      events.push(mkEvent(type, timeframe, refHigh, candles[i], confirmed));
+      bias = "bull";
+      refHigh = null;
+    }
+    if (refLow && close < refLow.price) {
+      const type = bias === "bull" ? "bearish_choch" : "bearish_bos";
+      events.push(mkEvent(type, timeframe, refLow, candles[i], confirmed));
+      bias = "bear";
+      refLow = null;
     }
   }
   return dedupeEvents(events);
 }
 
-function mkEvent(type, timeframe, price, candleTime, confirmed) {
-  return { type, timeframe, price, candleTime, confirmed };
+function mkEvent(type, timeframe, pivot, candle, confirmed) {
+  // 종가 돌파는 봉이 닫힌 뒤에만 확정되므로 신호 시각도 closeTime 이어야 한다.
+  const signalTime = candle?.closeTime ?? candle?.openTime ?? null;
+  return {
+    type,
+    timeframe,
+    price: pivot.price,
+    candleTime: signalTime,
+    breakTime: signalTime,
+    signalTime,
+    pivotTime: pivot.time,
+    pivotConfirmedTime: pivot.confirmedTime ?? null,
+    confirmed,
+  };
 }
 
 function dedupeEvents(events) {

@@ -8,9 +8,10 @@ import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade, paperRecordState } from "./paper.js";
-import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
+import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode, resultModeCounts } from "../scan-modes.js";
 
 let resultsEl, statusEl, progressEl;
+let activeResultMode = "all";
 
 export function initDashboard() {
   resultsEl = document.getElementById("results");
@@ -18,7 +19,7 @@ export function initDashboard() {
   progressEl = document.getElementById("scan-progress");
 
   // 스캔 이벤트 구독
-  on("scan:start", () => { renderStatus(); renderResults(); setBusy(true); });
+  on("scan:start", () => { activeResultMode = "all"; renderStatus(); renderResults(); setBusy(true); });
   on("scan:phase", () => { renderStatus(); setBusy(state.scan.running); });
   on("scan:mode", renderStatus);
   on("scan:progress", renderProgress);
@@ -28,17 +29,19 @@ export function initDashboard() {
   on("scan:error", () => { setBusy(false); renderStatus(); renderResults(); });
   on("scan:aborted", () => { setBusy(false); renderStatus(); });
   // 설정 변경 시 컨트롤(단계 라벨 등 부수효과 포함) 재동기화 후 결과 재렌더
-  on("filters:apply", () => { syncControls(); renderResults(); });
+  on("filters:apply", () => { activeResultMode = "all"; syncControls(); setBusy(state.scan.running); renderResults(); });
   on("apihealth:changed", renderStatus);
   on("refresh:tick", renderCountdown);
 
   renderStatus();
   renderResults();
+  setBusy(state.scan.running);
 }
 
 function renderCountdown(e) {
   const el = document.getElementById("refresh-countdown");
   if (!el) return;
+  document.querySelector(".progress-wrap")?.classList.toggle("visible", Boolean(e.active || state.scan.running));
   if (!e.active) { el.textContent = ""; return; }
   el.textContent = state.scan.running ? "· 갱신 중" : `· 다음 갱신 ${e.secondsRemaining}s`;
 }
@@ -58,15 +61,27 @@ function renderStatus() {
   const connClass = blocked || h.connected === false ? "bad" : h.connected === true ? "ok" : "";
   const pill = document.getElementById("conn-pill");
   if (pill) { pill.textContent = conn; pill.className = `conn-pill ${connClass}`; }
+  document.querySelector(".progress-wrap")?.classList.toggle("visible", Boolean(sc.running));
 
   if (!statusEl) return;
   const unifiedDone = state.settings.scanMode === "all" && sc.phase === "done";
+  const filteredCount = applyFilters(state.results).length;
+  const modeCount = sc.modeTotal || modesForScan(state.settings.scanMode).length;
+  const updatedText = sc.lastUpdated ? `${fmtTime(sc.lastUpdated)} 검색` : "아직 검색 전";
   statusEl.innerHTML = `
-    <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
-    <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
-    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 1차 통과" : "1차 통과"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("prefiltered") : state.prefiltered.length}</span></div>
-    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 후보" : "후보"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("candidates") : state.candidates.length}</span></div>
-    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
+    <div class="scan-summary">
+      <div class="scan-summary-copy">
+        <span class="scan-summary-meta">${updatedText} · ${modeCount}개 스캐너</span>
+        <strong>${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}</strong>
+      </div>
+      <div class="scan-summary-total"><b>${filteredCount}</b><span>후보</span></div>
+    </div>
+    <div class="status-details" aria-label="검색 상세 상태">
+      <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
+      <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 1차 통과" : "1차 통과"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("prefiltered") : state.prefiltered.length}</span></div>
+      <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 후보" : "분석 후보"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("candidates") : state.candidates.length}</span></div>
+      <div class="stat-card"><span class="stat-label">화면 결과</span><span class="stat-val">${filteredCount}</span></div>
+    </div>
   `;
 }
 
@@ -96,7 +111,14 @@ function setBusy(busy) {
   const btn = document.getElementById("scan-btn");
   if (btn) {
     btn.disabled = busy;
-    btn.textContent = busy ? (state.scan.stopping ? "중단하는 중…" : "스캔 중…") : "스캔 시작";
+    btn.textContent = busy ? (state.scan.stopping ? "중단하는 중…" : "검색 중…") : "선택한 모드 검색";
+  }
+  const allBtn = document.getElementById("scan-all-btn");
+  if (allBtn) {
+    allBtn.disabled = busy;
+    allBtn.textContent = busy
+      ? (state.scan.stopping ? "중단하는 중…" : "3개 스캐너 검색 중…")
+      : state.scan.lastUpdated ? "3개 스캐너 다시 검색" : "3개 스캐너 한 번에 검색";
   }
   const stop = document.getElementById("stop-btn");
   if (stop) {
@@ -108,26 +130,66 @@ function setBusy(busy) {
 
 export function renderResults() {
   if (!resultsEl) return;
-  const view = applyFilters(state.results);
-  visibleSyms = new Set(view.map((r) => r.symbol));
+  const baseView = applyFilters(state.results);
   const modes = modesForScan(state.settings.scanMode);
-  if (!view.length && state.settings.scanMode !== "all") {
+  if (state.settings.scanMode !== "all") activeResultMode = modes[0];
+  if (state.settings.scanMode === "all" && !["all", ...modes].includes(activeResultMode)) activeResultMode = "all";
+  const shownModes = activeResultMode === "all" ? modes : modes.filter((mode) => mode === activeResultMode);
+  const view = activeResultMode === "all" ? baseView : baseView.filter((r) => resultMode(r) === activeResultMode);
+  visibleSyms = new Set(view.map((r) => r.symbol));
+  if (!baseView.length && state.settings.scanMode !== "all") {
     resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
   }
-  const summary = state.settings.scanMode === "all" ? unifiedSummary(view) : "";
-  resultsEl.innerHTML = summary + modes.map((mode) => modeSection(mode, view.filter((r) => resultMode(r) === mode))).join("");
+  const priority = view.length ? priorityResult(view[0]) : "";
+  const summary = state.settings.scanMode === "all" ? unifiedSummary(baseView) : "";
+  resultsEl.innerHTML = priority + summary
+    + shownModes.map((mode) => modeSection(mode, view.filter((r) => resultMode(r) === mode))).join("");
+  bindModeTabs();
   bindRows(view);
 }
 
 function unifiedSummary(view) {
-  const counts = modesForScan("all").map((mode) => {
-    const n = view.filter((r) => resultMode(r) === mode).length;
-    return `<span class="mode-count">${modeBadge(mode)} <b>${n}</b></span>`;
+  const counts = resultModeCounts(view);
+  const tabs = ["all", ...modesForScan("all")].map((mode) => {
+    const active = activeResultMode === mode;
+    const label = mode === "all" ? "전체" : SCAN_MODE_META[mode].shortLabel;
+    const count = mode === "all" ? counts.all : counts[mode];
+    return `<button class="result-mode-tab result-mode-tab-${mode} ${active ? "active" : ""}"
+      type="button" data-result-mode-filter="${mode}" aria-pressed="${active}">${label} <b>${count}</b></button>`;
   }).join("");
-  return `<div class="mode-summary" aria-label="모드별 검색 결과">${counts}</div>
+  return `<div class="mode-summary" role="group" aria-label="스캐너별 결과 보기">${tabs}</div>
     <p class="mode-score-note">세 스캐너의 점수는 계산 기준이 달라 서로 직접 비교할 수 없습니다.</p>
     ${state.scan.realtimeSuppressed ? '<p class="mode-score-note">같은 시각의 자료만 맞추기 위해 전체 검색에서는 진행 중 봉을 제외했습니다.</p>' : ""}`;
+}
+
+function bindModeTabs() {
+  resultsEl.querySelectorAll("[data-result-mode-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeResultMode = button.dataset.resultModeFilter || "all";
+      renderResults();
+    });
+  });
+}
+
+function priorityResult(r) {
+  const mode = resultMode(r);
+  const meta = SCAN_MODE_META[mode];
+  const key = resultKey(r);
+  const direction = r.direction === "long" ? "LONG" : "SHORT";
+  return `<section class="priority-result" data-result-key="${key}">
+    <span class="priority-kicker">먼저 볼 후보 · ${escapeHtml(meta.shortLabel)} 스캐너 1위</span>
+    <div class="priority-main">
+      <div>
+        <div class="priority-symbol-line"><h3>${escapeHtml(r.symbol)}</h3><span class="dir dir-${r.direction}">${direction}</span></div>
+        <p>${modeBadge(mode)} <span class="badge badge-${r.stage.badge}">${escapeHtml(r.stage.label)}</span></p>
+      </div>
+      <div class="priority-score"><b>${r.score}</b><span>점수</span></div>
+    </div>
+    <div class="priority-facts"><span>현재가 <b>${fmtPrice(r.price)}</b></span><span>6시간 <b class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</b></span></div>
+    <p class="priority-note">이 스캐너 안에서 첫 번째 후보입니다. 다른 스캐너 점수와는 직접 비교하지 않습니다.</p>
+    <div class="priority-actions"><button class="btn priority-detail" data-detail="${key}">자세히 보기</button><button class="btn priority-tv" data-tv="${escapeHtml(r.symbol)}">차트 보기</button></div>
+  </section>`;
 }
 
 function modeSection(mode, rows) {
@@ -299,33 +361,15 @@ function rowHtml(r) {
 }
 
 function cardHtml(r) {
-  const p = r.plan;
   const key = resultKey(r);
-  return `<div class="rcard" data-result-key="${key}">
-    <div class="rcard-top">
-      ${favoriteButton(r)}
-      <b class="rcard-sym">${escapeHtml(r.symbol)}</b>
-      ${modeBadge(resultMode(r))}
-      <span class="score-pill score-${r.grade.key}">${r.score}</span>
-      <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
+  return `<article class="result-mobile-row" data-result-key="${key}">
+    <div class="result-mobile-copy">
+      <div class="result-mobile-title">${favoriteButton(r)}<b>${escapeHtml(r.symbol)}</b>${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></div>
+      <div class="result-mobile-facts"><span class="badge badge-${r.stage.badge}">${escapeHtml(r.stage.label)}</span><span>${fmtPrice(r.price)}</span><span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>${resultStateBadges(r)}</div>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${resultStateBadges(r)}
-      <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
-      <span class="muted">${fmtPrice(r.price)}</span>
-    </div>
-    <ul class="rcard-signals">${r.goldenCrossRetest?.detected ? `<li>${goldenCrossBadge(r)}</li>` : ""}${r.topSignals.map((s) => `<li>· ${escapeHtml(s)}</li>`).join("")}</ul>
-    <div class="rcard-plan">
-      <span>진입 ${fmtPrice(p.entry)}</span>
-      <span>손절 ${fmtPrice(p.invalidation)}</span>
-      <span>${isEarly(r) ? "과거 적중률" : "손익비"} ${oddsCell(r)}</span>
-      <span>${moneyCell(r)}</span>
-    </div>
-    <div class="rcard-actions">
-      <button class="btn-mini" data-detail="${key}">상세 보기</button>
-      ${paperButton(r)}
-      <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
-    </div>
-  </div>`;
+    <div class="result-mobile-score"><span class="score-pill score-${r.grade.key}">${r.score}</span><small>점수</small></div>
+    <button class="result-mobile-open" type="button" data-detail="${key}" aria-label="${escapeHtml(r.symbol)} 자세히 보기">보기</button>
+  </article>`;
 }
 
 function bindRows(view) {

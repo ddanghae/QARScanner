@@ -22,6 +22,11 @@ function boot() {
   document.getElementById("scan-btn")?.addEventListener("click", () => {
     runScan().catch((e) => notifyError(null, e.message));
   });
+  document.getElementById("scan-all-btn")?.addEventListener("click", () => {
+    updateSettings({ scanMode: "all" });
+    syncControls();
+    runScan().catch((e) => notifyError(null, e.message));
+  });
   document.getElementById("stop-btn")?.addEventListener("click", () => abortScan());
 
   // 사이드바 — 기존 컨트롤을 대신 클릭/토글하는 얇은 위임 (중복 상태 없음)
@@ -33,6 +38,7 @@ function boot() {
   });
 
   initTabs();
+  initFilterPanel();
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
@@ -80,20 +86,46 @@ function boot() {
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
 function initTabs() {
   const views = { overview: document.getElementById("view-overview"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "개요", settings: "설정" };
+  const titles = { overview: "QAR Scanner", settings: "설정" };
+  const taglines = { overview: "세 스캐너를 한 번에", settings: "필요한 것만 조정" };
   const navBtns = document.querySelectorAll("[data-nav]");
-  navBtns.forEach((btn) => btn.addEventListener("click", () => {
-    const nav = btn.dataset.nav;
+  const activate = (nav) => {
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
     navBtns.forEach((b) => {
-      const selected = b === btn;
+      const selected = b.dataset.nav === nav;
       b.classList.toggle("active", selected);
       if (selected) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     });
     const h1 = document.querySelector(".topbar-title h1");
     if (h1 && titles[nav]) h1.textContent = titles[nav];
+    const tagline = document.querySelector(".topbar-title .tagline");
+    if (tagline && taglines[nav]) tagline.textContent = taglines[nav];
+    document.body.dataset.view = nav;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  navBtns.forEach((btn) => btn.addEventListener("click", () => activate(btn.dataset.nav)));
+  activate(views.settings?.hidden === false ? "settings" : "overview");
+}
+
+function initFilterPanel() {
+  const panel = document.getElementById("filter-panel");
+  const toggles = document.querySelectorAll("[data-filter-toggle]");
+  if (!panel || !toggles.length) return;
+
+  const setOpen = (open) => {
+    panel.classList.toggle("mobile-open", open);
+    toggles.forEach((button) => button.setAttribute("aria-expanded", String(open)));
+    if (open) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  toggles.forEach((button) => button.addEventListener("click", () => {
+    if (!window.matchMedia("(max-width: 720px)").matches) {
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setOpen(!panel.classList.contains("mobile-open"));
   }));
 }
 

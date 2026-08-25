@@ -5,7 +5,7 @@
   <!-- 아이폰 Safari: viewport-fit=cover + Safe Area -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <link rel="icon" href="data:," />
-  <meta name="theme-color" content="#0b1220" />
+  <meta name="theme-color" content="#ffffff" />
   <meta name="description" content="Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너" />
   <title>QAR ICT Early Scanner</title>
   <link rel="stylesheet" href="./css/style.css" />
@@ -64,11 +64,13 @@
       <!-- 톱바 -->
       <header class="topbar">
         <div class="topbar-title">
-          <h1>개요</h1>
-          <span class="tagline">Binance Futures 초기 구조전환 후보</span>
+          <h1>QAR Scanner</h1>
+          <span class="tagline">세 스캐너를 한 번에</span>
         </div>
         <div class="topbar-actions">
           <span id="conn-pill" class="conn-pill" aria-live="polite">미확인</span>
+          <button class="topbar-view-link active" data-nav="overview" aria-current="page">개요</button>
+          <button class="topbar-view-link" data-nav="settings">설정</button>
         </div>
       </header>
 
@@ -86,10 +88,19 @@
           <span id="refresh-countdown" class="refresh-countdown" aria-live="polite"></span>
         </div>
 
+        <div class="overview-tools">
+          <div>
+            <strong>3가지 스캐너 동시 검색</strong>
+            <span>한 번 검색하고, 어디서 찾았는지 바로 확인합니다.</span>
+          </div>
+          <button class="filter-toggle" type="button" data-filter-toggle aria-controls="filter-panel" aria-expanded="false">검색 설정</button>
+        </div>
+
         <!-- 필터 영역 (§15) -->
-        <section class="card filter-bar" aria-label="필터">
+        <section id="filter-panel" class="card filter-bar" aria-label="검색 설정">
           <div class="card-head">
-            <h2>필터</h2>
+            <h2>검색 설정</h2>
+            <button class="filter-close" type="button" data-filter-toggle aria-controls="filter-panel">닫기</button>
           </div>
           <div class="filter-grid">
             <label>스캔 모드
@@ -168,14 +179,14 @@
             <label title="일정 주기로 자동 재스캔"><input type="checkbox" id="filter-autorefresh" /> 자동 갱신</label>
             <div class="filter-checks-spacer"></div>
             <button id="filter-apply" class="btn">필터 적용</button>
-            <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
+            <button id="scan-btn" class="btn btn-primary">선택한 모드 검색</button>
             <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
           </div>
           <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. <b>전체 스캔</b>은 세 모드를 한 번씩 실행해 모드별로 묶어 보여줍니다. <b>급등 후 급락</b>은 SHORT 전용 실험 모드이며 점수는 급락 확률이 아닙니다.</p>
         </section>
 
         <!-- 결과 -->
-        <section class="card results-card">
+        <section class="results-section">
           <div class="card-head">
             <h2>스캔 결과</h2>
           </div>
@@ -185,20 +196,32 @@
         </section>
 
         <!-- 페이퍼 트레이딩 (기록만 · 실제 주문 없음) -->
-        <section class="card">
-          <div class="card-head">
-            <h2>가상 기록 (LONG만)</h2>
-          </div>
+        <details class="secondary-section">
+          <summary>가상 기록 (LONG만)</summary>
           <div id="paper" class="paper"></div>
-        </section>
+        </details>
 
         <footer class="app-footer">
           <p>공개 REST API 기반 · 개인 API 키 없음 · 자동 주문 없음 · 기술적 참고용</p>
         </footer>
+
+        <div class="mobile-action-bar" aria-label="검색 실행">
+          <button id="scan-all-btn" class="mobile-scan-primary" type="button">3개 스캐너 한 번에 검색</button>
+          <button class="mobile-filter-action" type="button" data-filter-toggle aria-controls="filter-panel" aria-expanded="false">검색 설정</button>
+        </div>
        </div>
 
        <!-- ================= 설정 탭 ================= -->
        <div id="view-settings" hidden>
+        <section class="card settings-group">
+          <div class="card-head"><h2>화면</h2></div>
+          <div class="set-row">
+            <div class="set-control">
+              <button class="btn" type="button" data-click="toggle-dark">밝게 / 어둡게 바꾸기</button>
+            </div>
+            <p class="set-help">눈이 편한 화면색으로 바꿉니다. 선택은 이 기기에 저장됩니다.</p>
+          </div>
+        </section>
         <section class="card settings-group">
           <div class="card-head"><h2>스캔 모드</h2></div>
           <div class="set-row">

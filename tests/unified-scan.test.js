@@ -1,7 +1,7 @@
 // tests/unified-scan.test.js — 3개 모드 통합 실행/표시 계약 회귀.
 
 import { suite, test, assert, eq } from "./harness.js";
-import { modesForScan, resultKey, resultMode } from "../js/scan-modes.js";
+import { modesForScan, resultKey, resultMode, resultModeCounts } from "../js/scan-modes.js";
 import { sortAndRankResults } from "../js/scanner/scan-controller.js";
 import { applyFilters, modeControlModel } from "../js/ui/settings.js";
 import { state } from "../js/state.js";
@@ -56,6 +56,19 @@ export function run() {
   test("기존 결과의 모드 기본값은 reversal이고 키는 모드+심볼이다", () => {
     eq(resultMode({ symbol: "SAMEUSDT" }), "reversal", "레거시 결과 호환");
     assert(resultKey(row("early", "SAMEUSDT", 50)) !== resultKey(row("pump_fade", "SAMEUSDT", 60)), "중복 심볼 키 분리");
+  });
+
+  test("결과 탭 숫자는 전체와 세 스캐너를 따로 센다", () => {
+    const counts = resultModeCounts([
+      row("reversal", "R1", 50),
+      row("early", "E1", 50),
+      row("early", "E2", 45),
+      row("pump_fade", "P1", 60),
+    ]);
+    eq(counts.all, 4, "전체 숫자");
+    eq(counts.reversal, 1, "반등 숫자");
+    eq(counts.early, 2, "조기 숫자");
+    eq(counts.pump_fade, 1, "급락 숫자");
   });
 
   test("통합 결과는 모드별 순서와 모드 내부 순위를 유지한다", () => {

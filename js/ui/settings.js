@@ -327,7 +327,9 @@ function syncModeControls(settings) {
 }
 
 export function applyDarkMode() {
-  document.documentElement.classList.toggle("dark", !!state.settings.darkMode);
+  const dark = !!state.settings.darkMode;
+  document.documentElement.classList.toggle("dark", dark);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#0b0d13" : "#ffffff");
 }
 
 export default { applyFilters, initSettingsUI, syncControls, applyDarkMode };

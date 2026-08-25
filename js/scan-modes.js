@@ -21,4 +21,14 @@ export function resultKey(result) {
   return `${resultMode(result)}:${result?.symbol || ""}`;
 }
 
-export default { SCAN_MODES, SCAN_MODE_META, resultMode, modesForScan, resultKey };
+export function resultModeCounts(results = []) {
+  const counts = { all: 0, reversal: 0, early: 0, pump_fade: 0 };
+  for (const result of results) {
+    const mode = resultMode(result);
+    counts[mode] += 1;
+    counts.all += 1;
+  }
+  return counts;
+}
+
+export default { SCAN_MODES, SCAN_MODE_META, resultMode, modesForScan, resultKey, resultModeCounts };

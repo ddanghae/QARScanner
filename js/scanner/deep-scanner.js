@@ -15,6 +15,7 @@ import { computeLongPlan, computeShortPlan } from "../core/risk-reward.js";
 import { estimateAbsorption, classifyStage, scoreCandidate, topSignals, coreStrengthPct } from "../core/scoring.js";
 import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
 import { evaluateNoise } from "../core/noise-filter.js";
+import { forecastDirection } from "../core/direction-forecast.js";
 
 // 한 시간봉 분석 묶음
 function analyzeTf(candlesRaw, includeRealtime, tf) {
@@ -297,7 +298,7 @@ function lowerHigh(a5) {
 }
 
 // 최종: 종목 하나 정밀 분석
-export async function deepAnalyze(item, settings) {
+export async function deepAnalyze(item, settings, market4h = []) {
   const includeRt = settings.includeRealtimeCandle;
   const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol);
   const a4 = analyzeTf(k4h, includeRt, "4h");
@@ -342,7 +343,7 @@ export async function deepAnalyze(item, settings) {
     : false;
   // 신호 노이즈 — 촙 구간/저거래량 판정 (15m 기준). applyFilters 에서 걸러냄.
   const noise = evaluateNoise(noiseTf({ a4, a1, a15, a5 }), CONFIG);
-  return {
+  const result = {
     scanMode: "reversal",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
@@ -372,6 +373,8 @@ export async function deepAnalyze(item, settings) {
       "5m": tfSummary(a5, side),
     },
   };
+  result.forecast = forecastDirection(a4.candles, market4h, { provisional: Boolean(includeRt) });
+  return result;
 }
 
 // 노이즈 판정용 TF 선택 (config.noiseFilter.tf) — 기본 15m

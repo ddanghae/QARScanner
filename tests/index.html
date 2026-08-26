@@ -17,15 +17,22 @@
   <div id="summary">실행 중…</div>
   <pre id="output"></pre>
   <script type="module">
-    import { runAll } from "./run.js";
-    const r = runAll();
     const out = document.getElementById("output");
-    out.innerHTML = r.lines
-      .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)
-      .join("");
     const s = document.getElementById("summary");
-    s.textContent = r.summary.trim();
-    s.className = r.fail ? "fail" : "pass";
+    try {
+      const { runAll } = await import("./run.js");
+      const r = runAll();
+      out.innerHTML = r.lines
+        .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)
+        .join("");
+      s.textContent = r.summary.trim();
+      s.className = r.fail ? "fail" : "pass";
+    } catch (error) {
+      s.textContent = "테스트 실행 오류";
+      s.className = "fail";
+      out.textContent = error?.stack || error?.message || String(error);
+      console.error(error);
+    }
   </script>
 </body>
 </html>

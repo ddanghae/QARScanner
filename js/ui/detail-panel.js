@@ -119,6 +119,8 @@ function renderDetail(r) {
       <p class="absorption">흡수 추정: <b>${escapeHtml(r.absorption.label)}</b></p>
     </section>
 
+    ${forecastSection(r)}
+
     <section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
       <table class="plan-table">
@@ -151,6 +153,42 @@ function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
+}
+
+function forecastSection(r) {
+  const f = r?.forecast;
+  if (!f?.available) return `<section class="detail-section forecast-detail forecast-detail-unavailable">
+    <h3>24시간 방향 전망 <small>(스캐너 점수와 별도)</small></h3>
+    <p class="muted">${escapeHtml(f?.reason || "방향 모델을 검증 중이라 숫자를 표시하지 않습니다.")}</p>
+  </section>`;
+  const label = { up: "상승 우세", down: "하락 우세", neutral: "횡보 우세" }[f.lead];
+  const confidence = { high: "높음", medium: "보통", low: "낮음" }[f.confidence];
+  const upper = f.upperBoundary;
+  const lower = f.lowerBoundary;
+  const dataDate = f.dataAsOf ? new Date(f.dataAsOf).toISOString().slice(0, 10) : "-";
+  const drivers = (f.drivers || []).map((d) => `<li>${escapeHtml(d.label)}</li>`).join("");
+  const extraWarn = f.outOfDistribution
+    ? '<p class="warn">현재 입력이 학습 범위를 크게 벗어나 신뢰도를 낮췄습니다.</p>' : "";
+  return `<section class="detail-section forecast-detail">
+    <h3>24시간 방향 전망 <small>(스캐너 점수와 별도 · 자동 주문 아님)</small></h3>
+    <div class="forecast-headline forecast-${f.lead}"><b>${label}</b><span>신뢰도 ${confidence}</span></div>
+    <div class="forecast-bars" aria-label="상승 ${f.up}%, 하락 ${f.down}%, 횡보 ${f.neutral}%">
+      <div class="forecast-bar forecast-bar-up" style="--forecast-width:${f.up}%"><span>상승</span><b>${f.up}%</b></div>
+      <div class="forecast-bar forecast-bar-down" style="--forecast-width:${f.down}%"><span>하락</span><b>${f.down}%</b></div>
+      <div class="forecast-bar forecast-bar-neutral" style="--forecast-width:${f.neutral}%"><span>횡보</span><b>${f.neutral}%</b></div>
+    </div>
+    <table class="plan-table">
+      <tr><td>예측 질문</td><td>${f.horizonHours}시간 안에 어느 경계에 먼저 닿나?</td></tr>
+      <tr><td>기준 가격</td><td>${fmtPrice(f.referencePrice)} (마지막 4시간 마감가)</td></tr>
+      <tr><td>상승 경계</td><td class="up">${fmtPrice(upper)} (+${f.thresholdPct.toFixed(1)}%)</td></tr>
+      <tr><td>하락 경계</td><td class="down">${fmtPrice(lower)} (-${f.thresholdPct.toFixed(1)}%)</td></tr>
+      <tr><td>학습 표본</td><td>${f.sampleCount?.toLocaleString?.() ?? "-"}건 · 데이터 ${dataDate}까지</td></tr>
+    </table>
+    ${drivers ? `<p class="muted">이 전망에 크게 작용한 입력</p><ul class="signal-list">${drivers}</ul>` : ""}
+    ${extraWarn}
+    <p class="plan-note">위 숫자는 TP·손절 도달률이나 수익 확률이 아닙니다. 마지막 4시간 마감가에서 코인별 변동성 경계 중
+    어느 쪽을 먼저 건드릴지 추정한 값이며, 최근 약 166일·현재 거래 중인 종목만 사용한 한계가 있습니다.</p>
+  </section>`;
 }
 
 // 조기 포착 모드 결과는 멀티타임프레임 분석을 하지 않아 timeframes 가 비어 있다.

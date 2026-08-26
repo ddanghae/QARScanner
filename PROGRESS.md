@@ -495,10 +495,30 @@
     - 한 모드가 최상위 요청에서 실패하면 오류를 표시하고 나머지 모드는 계속 실행한다.
     - 로컬 공개 Binance 데이터 실행에서 세 섹션이 각각 렌더되고 콘솔 오류가 없음을 확인했다.
 
+17. **24시간 방향 확률 전망 (2026-08-26, 완료)** — 기존 점수를 확률로 바꾸지 않고,
+    모든 스캔 결과에 공통으로 붙는 별도 3방향 모델과 검증 게이트를 추가했다.
+    - 질문: 다음 마감 4시간봉 6개(24시간) 안에 `±clamp(1.5×ATR14%, 2%, 8%)` 중
+      위·아래 어느 경계를 먼저 건드리는가. 둘 다 아니면 횡보, 같은 봉 양쪽 도달은 모호성 제외.
+    - 입력: 코인 4h/24h/72h/14d 흐름, RSI, EMA20/50 거리, ATR, 상대량, 범위 위치와
+      같은 시점 BTC 흐름. 전략 점수와 단계는 입력하지 않아 경험 가중치를 확률로 위장하지 않는다.
+    - 시간순 60/20/20 + 24시간 purge. 다항 로지스틱·움직임/방향 분리 로지스틱·Gaussian NB·Extra Trees를
+      검증 log loss로 비교한다. 최종 시험이 단순 기준선보다 나쁘면 `ready=false`로 숫자를 막는다.
+    - 파이프라인: BTC 4h는 스캔당 1회, reversal/early는 보유 4h 재사용, pump_fade는
+      1h 급등 필터 통과 후보에만 4h를 추가해 전체 종목 고비용 MTF를 피한다.
+    - UI: 상승/하락/횡보, 24시간, 코인별 경계, 신뢰도, 표본·데이터 기준일, 주요 입력과
+      생존편향·단일 국면 한계를 함께 표시한다. TP/SL 확률이나 수익 확률로 부르지 않는다.
+    - 첫 다항 로지스틱 시험은 최종 accuracy 38.86%로 다수 클래스 기준선 42.10%보다 낮아
+      활성화하지 않았다. 느린 전 종목 재수집 후 검증 구간 log loss가 가장 낮은 움직임/방향
+      분리 로지스틱을 선택했다. 시험 15,093건에서 accuracy 42.04%(다수 기준 41.38%),
+      log loss 1.0769(사전확률 기준 1.0813), Brier 0.6520(기준 0.6551), ECE 0.0258로
+      승격 게이트를 통과했다. 우위가 작으므로 보조 전망으로만 표시한다.
+    - 라이브 reversal 스캔 523종목 → 정밀 후보 50 → 결과 3건에서 표와 상세창 확률·경계·
+      주요 입력을 확인했고 콘솔 오류는 0건이었다.
+
 ## 검증 상태
 
-- **현재 테스트 162/162 통과** — `node tests/run.js`. pump_fade 계산·연구·UI 39개,
-  기존 main 회귀 118개, 통합 스캔 계약 5개가 함께 통과한다.
+- **현재 테스트 169/169 통과** — `node tests/run.js`. 기존 162개에 방향 전망 7개
+  (미래 참조 방지, 경계, 라벨 모호성, 확률 합, 실패-폐쇄, 후보 모델 추론, 배포 게이트)를 더했다.
 - **통합 전 기준선 118/118 통과** — indicators, structure, liquidity, scoring,
   goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트.
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
@@ -532,7 +552,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (162/162 나와야 정상)
+node tests/run.js          # 테스트 확인 (169/169 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -550,6 +570,7 @@ js/
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
          fvg.js order-block.js risk-reward.js scoring.js
          golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js correlation.js
+         direction-forecast.js direction-model-params.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
        paper.js
@@ -572,6 +593,7 @@ research/                               (재현 스크립트 + 원자료 CSV)
   refit.mjs variants.mjs predict-dump.mjs predict-eval.mjs
   predict.csv(5.8MB) gainers.csv gainers_0726.csv pumpers_0729.txt …
   pump-fade-backtest.mjs pump-fade-research-core.mjs
+  train-direction-model.mjs direction-model-report.json
 ```
 
 핵심 진입점: [config.js](js/config.js)(모든 가중치·필터·TTL 조정 지점),

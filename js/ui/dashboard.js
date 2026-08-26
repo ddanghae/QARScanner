@@ -133,7 +133,7 @@ function resultTables(view, mode) {
     <table class="result-table">
       <thead><tr>
         <th>#</th><th>스캐너</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>${mode === "early" ? "급등확률" : "손익비"}</th>
+        <th>점수</th><th>단계</th><th>방향</th><th>24h 방향확률</th><th>${mode === "early" ? "급등확률" : "손익비"}</th>
         <th>${partialOn() ? "손절 / 절반 / 끝까지" : "손절 / 목표"}</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
@@ -172,6 +172,22 @@ function oddsCell(r) {
   const b = CONFIG.earlyHitBaseline;
   const lift = (r.grade.hitRate / b).toFixed(1);
   return `<span class="odds" title="${CONFIG.earlyHitLabel} · 무작위 ${b}% 대비 ${lift}배">${r.grade.hitRate}% <span class="muted">(${lift}x)</span></span>`;
+}
+
+const FORECAST_LABEL = { up: "상승 우세", down: "하락 우세", neutral: "횡보 우세" };
+const CONFIDENCE_LABEL = { high: "높음", medium: "보통", low: "낮음" };
+
+function forecastCell(r) {
+  const f = r?.forecast;
+  if (!f?.available) {
+    const reason = escapeHtml(f?.reason || "검증 가능한 방향 모델 없음");
+    return `<span class="forecast-unavailable" title="${reason}">산출 보류</span>`;
+  }
+  const title = `${f.horizonHours}시간 안에 마지막 4시간 마감가 ±${f.thresholdPct.toFixed(1)}% 경계 중 먼저 닿는 방향 · `
+    + `상승 ${f.up}% / 하락 ${f.down}% / 횡보 ${f.neutral}% · 신뢰도 ${CONFIDENCE_LABEL[f.confidence]}`;
+  return `<span class="forecast forecast-${f.lead}" title="${escapeHtml(title)}">`
+    + `<b>${FORECAST_LABEL[f.lead]}</b> <span class="forecast-pair">↑${f.up}% · ↓${f.down}%</span>`
+    + `<small>횡보 ${f.neutral}% · 신뢰 ${CONFIDENCE_LABEL[f.confidence]}</small></span>`;
 }
 
 // 시드머니를 이 종목에 넣었을 때 손절 시 잃는 돈 / 목표 도달 시 버는 돈.
@@ -240,6 +256,7 @@ function rowHtml(r) {
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
     <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
+    <td>${forecastCell(r)}</td>
     <td>${oddsCell(r)}</td>
     <td>${moneyCell(r)}</td>
     <td><button class="btn-mini" data-detail="${key}">상세</button><button class="btn-mini" data-paper="${key}">기록</button></td>
@@ -266,6 +283,7 @@ function cardHtml(r) {
     <div class="rcard-plan">
       <span>진입 ${fmtPrice(p.entry)}</span>
       <span>손절 ${fmtPrice(p.invalidation)}</span>
+      <span>24h 전망 ${forecastCell(r)}</span>
       <span>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
       <span>${moneyCell(r)}</span>
     </div>

@@ -15,6 +15,7 @@ import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
 import { run as unifiedScan } from "./unified-scan.test.js";
+import { run as directionForecast } from "./direction-forecast.test.js";
 
 export function runAll() {
   reset();
@@ -32,6 +33,7 @@ export function runAll() {
   refresh();
   paperCorr();
   unifiedScan();
+  directionForecast();
   return report();
 }
 

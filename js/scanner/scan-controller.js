@@ -12,6 +12,7 @@ import { deepAnalyze } from "./deep-scanner.js";
 import { buildEarlyResult } from "../core/early-detect.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
 import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
+import { forecastDirection } from "../core/direction-forecast.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
 
 let abortToken = { aborted: false };
@@ -69,7 +70,7 @@ async function mapWithProgress(items, fn, onEach) {
 
 // ---- 조기 포착 모드 파이프라인 ----
 // 반환: 기존과 동일 shape 결과 배열 (rank 는 호출부에서 부여)
-async function runEarlyPipeline(universe, now, tickers, settings) {
+async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
   const e = CONFIG.earlyDetect;
 
   // 2단계: early 유니버스 기준으로 유동성 필터
@@ -108,7 +109,11 @@ async function runEarlyPipeline(universe, now, tickers, settings) {
   const analyzed = await mapWithProgress(candidates, async ({ item, k4h }) => {
     const oiSeries = await getOpenInterestHist(item.symbol, e.oiPeriod, e.oiLimit);
     const funding = fundingMap.get(item.symbol) ?? null;
-    return buildEarlyResult(item, k4h, oiSeries, funding, CONFIG);
+    const result = buildEarlyResult(item, k4h, oiSeries, funding, CONFIG);
+    if (result) result.forecast = forecastDirection(k4h, market4h, {
+      provisional: Boolean(settings.includeRealtimeCandle),
+    });
+    return result;
   });
   const results = analyzed.filter(Boolean);
 
@@ -127,7 +132,7 @@ async function runEarlyPipeline(universe, now, tickers, settings) {
 
 // ---- 급등 후 급락 모드 파이프라인 (SHORT 전용) ----
 // 1h 급등 통과 집합은 임의로 추가 절단하지 않고 모두 15m/5m 정밀 분석한다.
-async function runPumpFadePipeline(universe, now, tickers, settings) {
+async function runPumpFadePipeline(universe, now, tickers, settings, market4h) {
   const includeRealtime = Boolean(settings.includeRealtimeCandle);
 
   setPhase("prefilter");
@@ -158,21 +163,26 @@ async function runPumpFadePipeline(universe, now, tickers, settings) {
 
   setPhase("deep");
   const analyzed = await mapWithProgress(candidates, async ({ item, candles1h }) => {
-    const [raw15m, raw5m] = await Promise.all([
+    // 방향 모델의 4h 확인은 급등 1차 후보에만 붙인다. 전체 종목 4h 추가 호출은 하지 않는다.
+    const [raw4h, raw15m, raw5m] = await Promise.all([
+      getKlines(item.symbol, "4h"),
       getKlines(item.symbol, "15m"),
       getKlines(item.symbol, "5m"),
     ]);
+    const candles4h = closedOnly(raw4h, includeRealtime);
     const candles15m = closedOnly(raw15m, includeRealtime);
     const candles5m = closedOnly(raw5m, includeRealtime);
-    return buildPumpFadeResult(item, candles1h, candles15m, candles5m, CONFIG, {
+    const result = buildPumpFadeResult(item, candles1h, candles15m, candles5m, CONFIG, {
       provisional: includeRealtime,
     });
+    if (result) result.forecast = forecastDirection(candles4h, market4h, { provisional: includeRealtime });
+    return result;
   });
   return analyzed.filter(Boolean);
 }
 
 // ---- 급락 반등 모드 파이프라인 ----
-async function runReversalPipeline(universe, now, tickers, settings) {
+async function runReversalPipeline(universe, now, tickers, settings, market4h) {
   setPhase("prefilter");
   const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
     ...CONFIG.prefilter,
@@ -201,7 +211,7 @@ async function runReversalPipeline(universe, now, tickers, settings) {
   if (abortToken.aborted) return null;
 
   setPhase("deep");
-  return mapWithProgress(candidates, (item) => deepAnalyze(item, settings));
+  return mapWithProgress(candidates, (item) => deepAnalyze(item, settings, market4h));
 }
 
 export function sortAndRankResults(results, requestedMode = "all") {
@@ -248,6 +258,16 @@ export async function runScan() {
     state.tickers = tickers;
     if (abortToken.aborted) return finishAborted();
 
+    // 방향 확률의 시장 국면 입력. 한 번만 요청하고 모든 모드가 재사용한다.
+    // 실패해도 기존 세 스캐너는 정상 동작하고 확률만 "산출 보류"가 된다.
+    let market4h = [];
+    try {
+      const rawBtc4h = await getKlines("BTCUSDT", "4h");
+      market4h = closedOnly(rawBtc4h, Boolean(settings.includeRealtimeCandle));
+    } catch (error) {
+      console.warn("방향 모델 BTC 4시간봉 조회 실패", error);
+    }
+
     const modes = modesForScan(requestedMode);
     const combined = [];
     for (let i = 0; i < modes.length; i++) {
@@ -256,10 +276,10 @@ export async function runScan() {
       setCurrentMode(mode, i + 1, modes.length);
       try {
         const results = mode === "early"
-          ? await runEarlyPipeline(universe, now, tickers, settings)
+          ? await runEarlyPipeline(universe, now, tickers, settings, market4h)
           : mode === "pump_fade"
-            ? await runPumpFadePipeline(universe, now, tickers, settings)
-            : await runReversalPipeline(universe, now, tickers, settings);
+            ? await runPumpFadePipeline(universe, now, tickers, settings, market4h)
+            : await runReversalPipeline(universe, now, tickers, settings, market4h);
         if (results === null) return finishAborted();
         recordModeStats(mode, results);
         combined.push(...results);

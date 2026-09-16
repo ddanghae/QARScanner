@@ -14,6 +14,7 @@ import { returnsFrom, correlationMap } from "../core/correlation.js";
 import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
 import { forecastDirection } from "../core/direction-forecast.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
+import { evaluateCrtTbs } from "../core/crt-tbs.js";
 
 let abortToken = { aborted: false };
 
@@ -290,6 +291,22 @@ export async function runScan() {
         emit("scan:mode-error", { mode, message: e.message });
       }
     }
+    // 후보만 추가 확인. 중복 심볼은 1회 분석하고 기존 캔들 캐시를 재사용한다.
+    if (abortToken.aborted) return finishAborted();
+    setPhase("confirmation");
+    const symbolsToConfirm = [...new Set(combined.filter((r) => r && !r.skipped && !r.error).map((r) => r.symbol))];
+    const confirmations = new Map();
+    await mapWithProgress(symbolsToConfirm.map((symbol) => ({ symbol })), async ({ symbol }) => {
+      try {
+        const [h4, m5] = await Promise.all([getKlines(symbol, "4h"), getKlines(symbol, "5m")]);
+        confirmations.set(symbol, evaluateCrtTbs(h4, m5));
+      } catch {
+        confirmations.set(symbol, { available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "CRT 캔들 조회 실패" });
+      }
+      return { symbol };
+    });
+    if (abortToken.aborted) return finishAborted();
+    for (const r of combined) if (r && !r.skipped && !r.error) r.crtTbs = confirmations.get(r.symbol);
     return finishScan(combined, requestedMode);
   } catch (e) {
     console.error("스캔 실패", e);

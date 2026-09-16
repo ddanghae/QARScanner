@@ -9,6 +9,7 @@ import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
 import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
+import { crtBadge } from "./crt-tbs.js";
 
 let resultsEl, statusEl, progressEl;
 
@@ -46,7 +47,7 @@ function renderCountdown(e) {
 const PHASE_LABEL = {
   idle: "대기", universe: "종목 수집", prefilter: "유동성 필터",
   candidate: "1차 분석", deep: "정밀 분석", score: "점수 계산",
-  done: "완료", error: "오류",
+  confirmation: "CRT + TBS 확인", done: "완료", error: "오류",
 };
 
 function renderStatus() {
@@ -120,7 +121,7 @@ function modeSection(mode, rows) {
   const meta = SCAN_MODE_META[mode];
   const error = state.scan.modeErrors?.[mode];
   const body = rows.length ? resultTables(rows, mode)
-    : `<div class="mode-empty">${error ? `실행 실패 · ${escapeHtml(error)}` : "조건을 만족하는 후보가 없습니다."}</div>`;
+    : `<div class="mode-empty">${error ? `실행 실패 · ${escapeHtml(error)}` : state.settings.crtTbsOnly ? "기존 후보와 방향이 같은 CRT + TBS 확인 신호가 없습니다. 재스캔으로 갱신하세요." : "조건을 만족하는 후보가 없습니다."}</div>`;
   return `<section class="mode-results mode-results-${meta.badge}">
     <div class="mode-results-head"><h3>${modeBadge(mode)}</h3><span>${rows.length}개</span></div>
     ${body}
@@ -146,6 +147,7 @@ function resultTables(view, mode) {
 // early 는 확실한 소수만 고르므로 0건이 정상 결과일 수 있다.
 function emptyMessage() {
   if (state.scan.phase !== "done") return "스캔을 시작하세요.";
+  if (state.settings.crtTbsOnly) return "기존 후보와 방향이 같은 CRT + TBS 확인 신호가 없습니다.<br>범위 복귀와 5분 전환 확인을 기다린 뒤 재스캔하세요. 필터를 끄면 기존 후보를 볼 수 있습니다.";
   // 단계 이름은 모드마다 달라 라벨을 붙이면 한쪽이 거짓이 된다(reversal 은 압축·박스가 아니라 급락·RSI).
   const funnel = `깔때기 ${state.universe.length} → ${state.prefiltered.length}`
     + ` → ${state.candidates.length} → ${state.results.length}`;
@@ -254,7 +256,7 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}</td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${forecastCell(r)}</td>
     <td>${oddsCell(r)}</td>
@@ -275,7 +277,7 @@ function cardHtml(r) {
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>

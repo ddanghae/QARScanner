@@ -22,6 +22,7 @@ const defaultSettings = {
   excludeChaseBan: false,       // "추격 금지(5단계)" 제외
   excludeNewListing: false,
   goldenCrossOnly: false,       // 골든크로스 리테스트(거부 캔들 확인)만 보기
+  crtTbsOnly: false,            // 기존 후보와 방향이 같은 CRT + TBS 확인 신호만
   near1hEma200Only: false,      // 1시간봉 200일선 밀착만 보기
   near1hEma200AtrRatio: CONFIG.near1hEma200AtrRatio, // 200선 밀착 민감도 (ATR 배수)
   filterNoise: true,            // 노이즈(촙 구간·저거래량) 신호 제외

@@ -7,6 +7,7 @@ import { toggleFavorite, isFavorite, state } from "../state.js";
 import { CONFIG } from "../config.js";
 import { toast } from "./notifications.js";
 import { SCAN_MODE_META, resultMode } from "../scan-modes.js";
+import { crtSection } from "./crt-tbs.js";
 
 let panelEl = null;
 
@@ -63,13 +64,17 @@ export function initDetailPanel() {
 }
 
 export function closeDetail() {
-  if (panelEl) panelEl.classList.remove("open");
+  if (panelEl) {
+    panelEl.classList.remove("open");
+    panelEl.setAttribute("aria-hidden", "true");
+  }
 }
 
 export function showDetail(r) {
   if (!panelEl) return;
   panelEl.innerHTML = renderDetail(r);
   panelEl.classList.add("open");
+  panelEl.setAttribute("aria-hidden", "false");
 
   // 버튼 바인딩 (실제 클릭 이벤트 안에서 새 탭 — 팝업 차단 회피)
   panelEl.querySelector("[data-tv-open]")?.addEventListener("click", () => openTradingView(r.symbol));
@@ -120,6 +125,7 @@ function renderDetail(r) {
     </section>
 
     ${forecastSection(r)}
+    ${crtSection(r)}
 
     <section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>

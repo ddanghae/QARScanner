@@ -16,6 +16,7 @@ import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
 import { run as unifiedScan } from "./unified-scan.test.js";
 import { run as directionForecast } from "./direction-forecast.test.js";
+import { run as crtTbs } from "./crt-tbs.test.js";
 
 export function runAll() {
   reset();
@@ -34,6 +35,7 @@ export function runAll() {
   paperCorr();
   unifiedScan();
   directionForecast();
+  crtTbs();
   return report();
 }
 

@@ -5,9 +5,11 @@ import { state, updateSettings, resetSettings, emit } from "../state.js";
 import { CONFIG, minScoreFor, strictnessPreset } from "../config.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
 import { toast } from "./notifications.js";
+import { crtMatchesCandidate } from "../core/crt-tbs.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
 const CHECK_BINDINGS = [
+  { key: "crtTbsOnly", ids: ["filter-crt-tbs"] },
   { key: "showFavoritesOnly", ids: ["filter-favorites-only"] },
   { key: "excludeChaseBan", ids: ["filter-exclude-chase", "set-exclude-chase"] },
   { key: "excludeNewListing", ids: ["filter-exclude-new", "set-exclude-new"] },
@@ -30,6 +32,7 @@ function applyModeFilters(results, mode, s, unified) {
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
   let list = results.filter((r) => resultMode(r) === mode);
+  if (s.crtTbsOnly) list = list.filter(crtMatchesCandidate);
 
   // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
   if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);

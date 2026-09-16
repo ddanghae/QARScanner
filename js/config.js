@@ -4,6 +4,17 @@
 export const CONFIG = {
   version: 1,
 
+  // CRT + Turtle Body Soup: 연구용 규칙. 확률 모델/기존 점수와 독립.
+  crtTbs: {
+    reclaimBars: 6,          // 5m 몸통 이탈 후 30분 내 복귀
+    confirmationBars: 6,    // 복귀 후 30분 내 복귀 봉 반대편 돌파 마감
+    freshBars: 3,           // 확인 신호 유효 시간 15분
+    stopAtrRatio: 0.25,
+    minStopPct: 0.5,
+    maxStopPct: 8,
+    minNetRR: 1.5,          // 왕복 비용 차감 후 반대 경계까지 손익비
+  },
+
   // ---- Binance 공개 REST API ----
   api: {
     fapiBase: "https://fapi.binance.com",

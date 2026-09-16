@@ -49,6 +49,24 @@ const fixtureModel = {
 
 export function run() {
   suite("direction forecast");
+  test("진행 중 봉 설정과 관계없이 마지막 마감 봉으로 확률 계산", () => {
+    const c = candles(101), btc = candles(101, 1000, 1), now = 100 * 14400000;
+    const a = forecastDirection(c, btc, { now, provisional: true }, fixtureModel);
+    const b = forecastDirection(c.slice(0, 100), btc.slice(0, 100), { now }, fixtureModel);
+    assert(a.available); eq(a.provisional, false);
+    eq(a.referencePrice, c[99].close); eq(JSON.stringify(a), JSON.stringify(b));
+  });
+  test("누락·중복·BTC 시각 불일치·오래된 시세·가격 오류면 확률 보류", () => {
+    const now = 100 * 14400000;
+    const bad = candles(); bad.splice(90, 1);
+    assert(!forecastDirection(bad, candles(), { now }, fixtureModel).available);
+    const dup = candles(); dup[90] = dup[89];
+    assert(!forecastDirection(dup, candles(), { now }, fixtureModel).available);
+    assert(!forecastDirection(candles(), candles(99), { now }, fixtureModel).available);
+    assert(!forecastDirection(candles(), candles(), { now: now + 14400000 }, fixtureModel).available);
+    const broken = candles(); broken[95].low = -1;
+    assert(!forecastDirection(broken, candles(), { now }, fixtureModel).available);
+  });
   test("[direction] 특징 벡터는 현재까지의 4시간봉과 BTC만 사용한다", () => {
     const c = candles();
     const btc = candles(100, 1000, 1);
@@ -81,7 +99,7 @@ export function run() {
   });
 
   test("[direction] 세 확률은 100%이고 예측 근거·기간·경계를 제공한다", () => {
-    const f = forecastDirection(candles(), candles(100, 1000, 1), {}, fixtureModel);
+    const f = forecastDirection(candles(), candles(100, 1000, 1), { now: 100 * 14400000 }, fixtureModel);
     assert(f.available, "예측 가능");
     eq(f.up + f.down + f.neutral, 100, "확률 합");
     eq(f.lead, "up", "최대 확률 방향");
@@ -128,7 +146,7 @@ export function run() {
       },
     };
     for (const model of [factorized, gaussian, forest]) {
-      const f = forecastDirection(candles(), candles(100, 1000, 1), {}, model);
+      const f = forecastDirection(candles(), candles(100, 1000, 1), { now: 100 * 14400000 }, model);
       assert(f.available, `${model.type} 산출`);
       eq(f.up + f.down + f.neutral, 100, `${model.type} 확률 합`);
     }

@@ -117,6 +117,18 @@ export function evaluateCrtTbs(raw4h, raw5m, { now = Date.now(), config = CONFIG
   });
 }
 
-export function crtMatchesCandidate(r) {
-  return r?.crtTbs?.confirmed === true && r.crtTbs.direction === r.direction;
+export function currentCrtStatus(c, now = Date.now()) {
+  if (!c?.confirmed) return c;
+  const expiry = Math.min(c.range?.expiresAt ?? -Infinity,
+    (c.confirmationTime ?? -Infinity) + CONFIG.crtTbs.freshBars * M5);
+  if (now >= expiry || now - (c.asOf ?? -Infinity) > M5) {
+    return { ...c, confirmed: false, plan: null, status: "expired", label: labels.expired,
+      reason: "신호 유효시간 또는 시세 갱신 기한이 지났습니다. 재스캔해 주세요." };
+  }
+  return c;
+}
+
+export function crtMatchesCandidate(r, now = Date.now()) {
+  const c = currentCrtStatus(r?.crtTbs, now);
+  return c?.confirmed === true && c.direction === r.direction;
 }

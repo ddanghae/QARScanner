@@ -1,8 +1,8 @@
 import { fmtPrice, escapeHtml } from "./format.js";
-import { crtMatchesCandidate } from "../core/crt-tbs.js";
+import { crtMatchesCandidate, currentCrtStatus } from "../core/crt-tbs.js";
 
 export function crtBadge(r) {
-  const c = r.crtTbs;
+  const c = currentCrtStatus(r.crtTbs);
   if (!c) return "";
   const aligned = crtMatchesCandidate(r);
   const direction = c.direction === "long" ? "LONG" : c.direction === "short" ? "SHORT" : "";
@@ -12,7 +12,7 @@ export function crtBadge(r) {
 
 const time = (v) => new Date(v).toLocaleString("ko-KR", { hour12: false });
 export function crtSection(r) {
-  const c = r.crtTbs;
+  const c = currentCrtStatus(r.crtTbs);
   if (!c) return "";
   const range = c.range;
   const p = c.plan;

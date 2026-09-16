@@ -1,7 +1,7 @@
 // ui/dashboard.js — 상단 상태(§15) + 결과 카드/테이블 렌더.
 // 스캔 이벤트 구독 → 진행률/상태/결과 갱신. 모바일은 카드 UI.
 
-import { state, on, isFavorite, toggleFavorite } from "../state.js";
+import { state, on, emit, isFavorite, toggleFavorite } from "../state.js";
 import { CONFIG } from "../config.js";
 import { fmtPrice, fmtPct, fmtVolume, fmtTime, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { applyFilters, syncControls } from "./settings.js";
@@ -10,8 +10,10 @@ import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
 import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
 import { crtBadge } from "./crt-tbs.js";
+import { expireResult } from "../core/signal-freshness.js";
 
 let resultsEl, statusEl, progressEl;
+let expiryTimer;
 
 export function initDashboard() {
   resultsEl = document.getElementById("results");
@@ -32,6 +34,16 @@ export function initDashboard() {
   on("filters:apply", () => { syncControls(); renderResults(); });
   on("apihealth:changed", renderStatus);
   on("refresh:tick", renderCountdown);
+  clearInterval(expiryTimer);
+  expiryTimer = setInterval(() => {
+    let changed = false;
+    state.results = state.results.map((r) => {
+      const fresh = expireResult(r);
+      changed ||= fresh !== r;
+      return fresh;
+    });
+    if (changed) { renderResults(); emit("signals:expired"); }
+  }, 1000);
 
   renderStatus();
   renderResults();

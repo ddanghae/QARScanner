@@ -2,13 +2,32 @@
 // 각 시점에서 사용 가능한 과거 데이터만 잘라 계산 → 새 캔들 추가 전/후
 // 과거 인덱스의 신호가 부당하게 바뀌지 않아야 한다(미래 참조 없음).
 
-import { suite, test, approx, assert } from "./harness.js";
+import { suite, test, approx, assert, eq } from "./harness.js";
+import { closedOnly, crossedCandleClose } from "../js/api/binance.js";
 import { ema, rsi, atr, sma } from "../js/core/indicators.js";
 import { findPivots, detectStructureEvents } from "../js/core/market-structure.js";
 import { candlesFromCloses, uptrend } from "./fixtures.js";
 
 export function run() {
   suite("repaint");
+  test("시각 기반 마감 판정은 이미 닫힌 마지막 봉을 보존", () => {
+    const bars = [{openTime:0,closeTime:9}, {openTime:10,closeTime:19}];
+    eq(closedOnly(bars, false, 20).length, 2);
+    eq(closedOnly(bars, false, 15).length, 1);
+    eq(closedOnly(bars, false, 19).length, 1);
+    eq(closedOnly(bars, true, 15).length, 2);
+    eq(closedOnly(bars, true, 5).length, 1);
+  });
+  test("시각 없는 자료를 마감으로 추측하지 않는다", () => {
+    eq(closedOnly([{},null,{openTime:5,closeTime:4}], false, 10).length, 0);
+  });
+  test("캐시 속 진행 중 봉이 마감 경계를 넘으면 새 OHLC 필요", () => {
+    const raw = [[0,1,1,1,1,1,9]];
+    eq(crossedCandleClose(raw, 5, 9), false);
+    eq(crossedCandleClose(raw, 5, 10), true);
+    eq(crossedCandleClose(raw, 10, 11), false);
+    eq(crossedCandleClose([], 5, 10), false);
+  });
 
   const closes = uptrend.map((c) => c.close);
 

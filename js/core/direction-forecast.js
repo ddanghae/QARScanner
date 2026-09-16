@@ -278,6 +278,24 @@ function driverList(z, leadIndex, model) {
 
 export function forecastDirection(candles, btcCandles, options = {}, model = DIRECTION_MODEL) {
   if (!model?.ready) return { available: false, reason: "방향 모델이 준비되지 않았습니다." };
+  const now = options.now ?? Date.now();
+  const interval = 4 * 60 * 60 * 1000;
+  const closed = (list) => Array.isArray(list) ? list.filter((c) => c && c.closeTime < now) : [];
+  candles = closed(candles);
+  btcCandles = closed(btcCandles);
+  const valid = (list) => list.length >= 85 && list.every((c, i) =>
+    [c.openTime, c.closeTime, c.open, c.high, c.low, c.close, c.volume].every(finite)
+    && c.low > 0 && c.volume >= 0 && c.high >= Math.max(c.open, c.close)
+    && c.low <= Math.min(c.open, c.close) && c.high >= c.low
+    && c.closeTime === c.openTime + interval - 1
+    && (!i || c.openTime === list[i - 1].openTime + interval));
+  if (!finite(now) || !valid(candles) || !valid(btcCandles)) {
+    return { available: false, reason: "4시간봉 이력이 부족하거나 누락·가격 오류가 있습니다." };
+  }
+  const referenceTime = candles.at(-1).closeTime;
+  if (now - referenceTime > interval || btcCandles.at(-1).closeTime !== referenceTime) {
+    return { available: false, reason: "코인과 BTC의 최신 마감 시각이 다르거나 시세가 오래되었습니다. 재스캔해 주세요." };
+  }
   const f = extractDirectionFeatures(candles, btcCandles);
   if (!f) return { available: false, reason: "4시간봉 이력이 부족합니다." };
   if (model.featureNames.join("|") !== DIRECTION_FEATURE_NAMES.join("|") ||
@@ -296,20 +314,22 @@ export function forecastDirection(candles, btcCandles, options = {}, model = DIR
   const uncertain = entropy(probs) > 0.94 || Math.max(...probs) < 0.46;
   const ood = maxZ > 4.5;
   let confidence = uncertain ? "low" : Math.max(...probs) >= 0.6 ? "high" : "medium";
-  if (ood || options.provisional) confidence = "low";
+  if (ood) confidence = "low";
   return {
     available: true,
     modelVersion: model.version,
     dataAsOf: model.dataAsOf,
     horizonHours: model.horizonBars * 4,
     referencePrice: f.close,
+    referenceTime,
+    expiresAt: referenceTime + interval + 1,
     thresholdPct,
     upperBoundary: f.close * (1 + thresholdPct / 100),
     lowerBoundary: f.close * (1 - thresholdPct / 100),
     up, down, neutral,
     lead: DIRECTION_CLASSES[leadIndex],
     confidence,
-    provisional: Boolean(options.provisional),
+    provisional: false,
     outOfDistribution: ood,
     sampleCount: model.metrics?.sampleCount ?? null,
     testMetrics: model.metrics?.test ?? null,

@@ -94,7 +94,7 @@ async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
   setPhase("candidate");
   const evaluated = await mapWithProgress(midCaps, async (item) => {
     const k4h = await getKlines(item.symbol, "4h");
-    const closed = k4h.slice(0, settings.includeRealtimeCandle ? k4h.length : -1);
+    const closed = closedOnly(k4h, settings.includeRealtimeCandle);
     return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
   });
   let candidates = evaluated
@@ -198,7 +198,7 @@ async function runReversalPipeline(universe, now, tickers, settings, market4h) {
   const dir = settings.direction || "long";
   const evaluated = await mapWithProgress(prefiltered, async (item) => {
     const k1h = await getKlines(item.symbol, "1h");
-    const closed = k1h.slice(0, settings.includeRealtimeCandle ? k1h.length : -1);
+    const closed = closedOnly(k1h, settings.includeRealtimeCandle);
     const res = stage3Evaluate(item, closed, dir);
     return { item, res };
   });

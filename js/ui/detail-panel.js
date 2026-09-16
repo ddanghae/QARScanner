@@ -3,13 +3,15 @@
 
 import { fmtPrice, fmtPct, fmtVolume, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { openTradingView, copyTvLink, tvChartUrl, binanceFuturesUrl } from "./tradingview.js";
-import { toggleFavorite, isFavorite, state } from "../state.js";
+import { toggleFavorite, isFavorite, state, on } from "../state.js";
 import { CONFIG } from "../config.js";
 import { toast } from "./notifications.js";
-import { SCAN_MODE_META, resultMode } from "../scan-modes.js";
+import { SCAN_MODE_META, resultMode, resultKey } from "../scan-modes.js";
 import { crtSection } from "./crt-tbs.js";
+import { expireResult } from "../core/signal-freshness.js";
 
 let panelEl = null;
+let activeResultKey = null;
 
 // 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
@@ -38,10 +40,8 @@ function moneySection(p) {
     ? `<tr><td>TP1 에서 ${pct}% 빼고 본전에 걸리면</td><td class="up">+${fmtWon(m.partial)} <small>(+${m.partialPct.toFixed(1)}%)</small></td></tr>`
     : "";
   const how = on
-    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올리는 전제입니다 —
-       평균 수익은 낮지만 아픈 구간이 절반이고 승률이 37% → 49% 입니다.`
-    : `목표까지 통째로 버티는 전제입니다 — 평균 수익이 더 높은 대신 아픈 구간이 2배이고
-       10번 중 3.7번만 이깁니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
+    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올렸을 때의 계산입니다. 본전 청산에도 비용이 발생합니다.`
+    : `목표까지 전량 보유했을 때의 계산입니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
   return `<table class="plan-table money-table">
     <tr><td>넣는 금액</td><td>${fmtWon(s.seedMoney)}</td></tr>
     ${levRow}
@@ -57,6 +57,11 @@ function moneySection(p) {
 export function initDetailPanel() {
   panelEl = document.getElementById("detail-panel");
   if (!panelEl) return;
+  on("signals:expired", () => {
+    if (!panelEl.classList.contains("open")) return;
+    const r = state.results.find((r) => resultKey(r) === activeResultKey);
+    if (r) showDetail(r);
+  });
   panelEl.addEventListener("click", (e) => {
     if (e.target.dataset.close !== undefined || e.target === panelEl) closeDetail();
   });
@@ -72,6 +77,8 @@ export function closeDetail() {
 
 export function showDetail(r) {
   if (!panelEl) return;
+  r = expireResult(r);
+  activeResultKey = resultKey(r);
   panelEl.innerHTML = renderDetail(r);
   panelEl.classList.add("open");
   panelEl.setAttribute("aria-hidden", "false");

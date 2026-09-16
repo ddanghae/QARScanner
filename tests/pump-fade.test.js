@@ -225,7 +225,7 @@ export function run() {
 
   test("기본 경로는 마지막 진행 중 캔들을 제외하고 opt-in에서만 포함", () => {
     const candles = oneHourPump();
-    eq(closedOnly(candles, false).length, candles.length - 1, "기본 마감봉만");
+    eq(closedOnly(candles, false, candles.at(-1).openTime).length, candles.length - 1, "기본 마감봉만");
     eq(closedOnly(candles, true).length, candles.length, "실시간 opt-in");
   });
 

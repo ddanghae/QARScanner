@@ -1,11 +1,12 @@
 import { suite, test, eq, assert, approx } from "./harness.js";
-import { evaluateCrtTbs, crtMatchesCandidate } from "../js/core/crt-tbs.js";
+import { evaluateCrtTbs, crtMatchesCandidate, currentCrtStatus } from "../js/core/crt-tbs.js";
+import { expireResult } from "../js/core/signal-freshness.js";
 import { crtBadge, crtSection } from "../js/ui/crt-tbs.js";
 import { applyFilters } from "../js/ui/settings.js";
 import { state } from "../js/state.js";
 import { CONFIG } from "../js/config.js";
 
-const M5 = 300000, H4 = 48 * M5, start = 1700006400000;
+const M5 = 300000, H4 = 48 * M5, start = Math.floor(Date.now() / M5) * M5 - 3 * M5;
 function bar(t, o, h, l, c, interval = M5) {
   return { openTime: t, closeTime: t + interval - 1, open: o, high: h, low: l, close: c, volume: 100 };
 }
@@ -20,6 +21,23 @@ const mirror = (c) => ({ ...c, open: 220 - c.open, close: 220 - c.close, high: 2
 
 export function run() {
   suite("CRT + TBS");
+  test("재스캔 없이도 시세·확인 기한·범위 교체 시 필터와 계획 만료", () => {
+    const f = crtFixture(), c = evaluate(f);
+    eq(currentCrtStatus(c, f.now), c);
+    eq(currentCrtStatus(c, f.now + M5).confirmed, false);
+    eq(currentCrtStatus(c, c.range.expiresAt).plan, null);
+    const row = { direction: "long", crtTbs: c };
+    assert(!crtMatchesCandidate(row, f.now + M5));
+    const expired = expireResult(row, f.now + M5);
+    eq(expired.crtTbs.status, "expired");
+    eq(expireResult(expired, f.now + 2 * M5), expired);
+    eq(currentCrtStatus({ ...c, asOf: f.now + 3 * M5 }, c.confirmationTime + 3 * M5).confirmed, false);
+  });
+  test("새 4h 마감 시 방향 확률도 재스캔 전까지 보류", () => {
+    const row = { forecast: { available: true, expiresAt: 1000 } };
+    eq(expireResult(row, 999), row);
+    eq(expireResult(row, 1000).forecast.available, false);
+  });
   test("롱: 몸통 이탈 → 복귀 → 다음 봉 전환 및 비용 반영 계획", () => {
     const c = evaluate(crtFixture());
     eq(c.status, "confirmed"); eq(c.direction, "long");

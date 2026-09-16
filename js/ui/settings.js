@@ -32,7 +32,7 @@ function applyModeFilters(results, mode, s, unified) {
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
   let list = results.filter((r) => resultMode(r) === mode);
-  if (s.crtTbsOnly) list = list.filter(crtMatchesCandidate);
+  if (s.crtTbsOnly) list = list.filter((r) => crtMatchesCandidate(r));
 
   // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
   if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);

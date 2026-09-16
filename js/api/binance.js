@@ -33,6 +33,10 @@ const cache = new Map(); // key -> { at, ttl, data }
 function cacheGet(key) {
   const hit = cache.get(key);
   if (!hit) return undefined;
+  // 진행 중 봉을 받은 뒤 마감 경계를 넘으면 최종 OHLC를 다시 받아야 한다.
+  if (key.startsWith("k:") && crossedCandleClose(hit.data, hit.at, Date.now())) {
+    cache.delete(key); return undefined;
+  }
   if (Date.now() - hit.at > hit.ttl) { cache.delete(key); return undefined; }
   return hit.data;
 }
@@ -40,6 +44,11 @@ function cacheSet(key, data, ttl) {
   cache.set(key, { at: Date.now(), ttl, data });
 }
 export function clearCache() { cache.clear(); }
+
+export function crossedCandleClose(raw, fetchedAt, now) {
+  const closeTime = raw?.at?.(-1)?.[6];
+  return Number.isFinite(closeTime) && fetchedAt <= closeTime && now > closeTime;
+}
 
 // ---- 저수준 fetch: 타임아웃 + 재시도 + 백오프 ----
 async function rawFetch(path, { timeoutMs = CONFIG.api.requestTimeoutMs } = {}) {
@@ -192,9 +201,11 @@ export function parseKlines(raw) {
 }
 
 // 마감 캔들만 반환 (리페인트 방지). 마지막(진행 중) 캔들 제외 옵션.
-export function closedOnly(candles, includeRealtime) {
-  if (includeRealtime) return candles;
-  return candles.slice(0, -1);
+export function closedOnly(candles, includeRealtime, now = Date.now()) {
+  if (!Array.isArray(candles)) return [];
+  return candles.filter((c) => c && Number.isFinite(c.openTime) && Number.isFinite(c.closeTime)
+    && c.openTime <= now && c.closeTime >= c.openTime
+    && (includeRealtime || c.closeTime < now));
 }
 
 export default {

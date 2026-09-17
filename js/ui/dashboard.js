@@ -30,6 +30,7 @@ export function initDashboard() {
   on("scan:done", () => { setBusy(false); renderStatus(); renderResults(); });
   on("scan:error", () => { setBusy(false); renderStatus(); });
   on("scan:aborted", () => { setBusy(false); renderStatus(); });
+  on("market:regime", renderStatus);
   // 설정 변경 시 컨트롤(단계 라벨 등 부수효과 포함) 재동기화 후 결과 재렌더
   on("filters:apply", () => { syncControls(); renderResults(); });
   on("apihealth:changed", renderStatus);
@@ -74,11 +75,24 @@ function renderStatus() {
   const unifiedDone = state.settings.scanMode === "all" && sc.phase === "done";
   statusEl.innerHTML = `
     <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
+    ${marketRegimeCard()}
     <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
     <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 1차 통과" : "1차 통과"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("prefiltered") : state.prefiltered.length}</span></div>
     <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 후보" : "후보"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("candidates") : state.candidates.length}</span></div>
     <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
   `;
+}
+
+function marketRegimeCard() {
+  const regime = state.marketRegime;
+  if (!regime?.available) {
+    return `<div class="stat-card stat-card-regime"><span class="stat-label">BTC 시장국면</span><span class="stat-val stat-val-compact">산출 보류</span><small>${escapeHtml(regime?.reason || "스캔 후 표시")}</small></div>`;
+  }
+  const m = regime.metrics || {};
+  const ret = Number.isFinite(m.ret7d) ? `${m.ret7d >= 0 ? "+" : ""}${m.ret7d.toFixed(1)}%` : "—";
+  return `<div class="stat-card stat-card-regime regime-${regime.key}"><span class="stat-label">BTC 시장국면</span>`
+    + `<span class="stat-val stat-val-compact">${escapeHtml(regime.label)}</span>`
+    + `<small>7일 ${ret} · 점수 보정 없음</small></div>`;
 }
 
 function modeStatText(key) {
@@ -258,6 +272,13 @@ function noiseBadge(r) {
   return r.noise?.noisy ? `<span class="badge badge-noise">노이즈 · ${r.noise.reasons.join("/")}</span>` : "";
 }
 
+function regimeBadge(r) {
+  const fit = r?.regimeFit;
+  if (!fit || fit.key === "unknown") return "";
+  const title = r.marketRegime?.label ? `BTC ${r.marketRegime.label} · 아직 점수에는 반영하지 않음` : "시장국면 확인";
+  return `<span class="badge badge-regime-${fit.key}" title="${escapeHtml(title)}">${escapeHtml(fit.label)}</span>`;
+}
+
 function rowHtml(r) {
   const key = resultKey(r);
   return `<tr data-result-key="${key}">
@@ -268,7 +289,7 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${forecastCell(r)}</td>
     <td>${oddsCell(r)}</td>
@@ -289,7 +310,7 @@ function cardHtml(r) {
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>

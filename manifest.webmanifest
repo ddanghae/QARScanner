@@ -1,7 +1,7 @@
 {
-  "name": "QAR ICT Early Scanner",
+  "name": "QAR Scenario Scanner",
   "short_name": "QAR Scanner",
-  "description": "Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너",
+  "description": "시장국면과 실제 결과를 함께 추적하는 Binance Futures 후보 스캐너",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

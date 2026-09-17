@@ -4,6 +4,20 @@
 export const CONFIG = {
   version: 1,
 
+  // BTC 4시간 마감봉 시장국면. 아직 점수 보정에는 쓰지 않고 설명·기록에만 사용한다.
+  marketRegime: {
+    minBars: 84,            // 14일 수익률까지 계산
+    emaFast: 20,
+    emaSlow: 50,
+    trendReturnBars: 42,    // 4h × 42 = 7일
+    slopeBars: 6,           // EMA20의 최근 24시간 기울기
+    volLookback: 42,
+    lowVolRatio: 0.75,
+    highVolRatio: 1.35,
+    extremeVolRatio: 1.8,
+    staleMs: 8 * 60 * 60 * 1000,
+  },
+
   // CRT + Turtle Body Soup: 연구용 규칙. 확률 모델/기존 점수와 독립.
   crtTbs: {
     reclaimBars: 6,          // 5m 몸통 이탈 후 30분 내 복귀

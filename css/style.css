@@ -115,6 +115,9 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .stat-card-hero { background: var(--text); border-color: var(--text); }
 .stat-card-hero .stat-label { color: rgba(255,255,255,.6); }
 .stat-card-hero .stat-val { color: #fff; }
+.stat-card-regime small { color: var(--muted); font-size: 10px; }
+.stat-card-regime.regime-bull { border-color: rgba(18,153,91,.35); }
+.stat-card-regime.regime-bear { border-color: rgba(216,58,58,.35); }
 
 /* ---- 진행률 ---- */
 .progress-wrap { display: flex; align-items: center; gap: 12px; }
@@ -180,6 +183,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-corr { background: rgba(217,138,0,.15); color: var(--warn); }
 .paper-summary { margin: 0 0 10px; }
 .paper-table td, .paper-table th { font-size: 13px; }
+.paper-forward { min-width: 190px; font-variant-numeric: tabular-nums; }
 
 /* 점수/등급 pill */
 .score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 3px 8px; border-radius: 8px; font-weight: 700; color: #fff; }
@@ -196,6 +200,9 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-cross { background: #d6f0f6; color: #0c7488; }
 .badge-ema200 { background: #ffe6d0; color: #b5560a; }
 .badge-noise { background: #e6e8ec; color: #6b7280; }
+.badge-regime-aligned { background: rgba(18,153,91,.14); color: var(--up); }
+.badge-regime-neutral { background: var(--surface-2); color: var(--muted); }
+.badge-regime-counter { background: rgba(217,138,0,.15); color: var(--warn); }
 .badge-mode-reversal { background: #e0f2fe; color: #0369a1; }
 .badge-mode-early { background: #dcfce7; color: #15803d; }
 .badge-mode-pump-fade { background: #fee2e2; color: #b91c1c; }

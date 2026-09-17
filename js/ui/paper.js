@@ -1,71 +1,184 @@
-// ui/paper.js — 페이퍼 트레이딩 기록. 실제 주문 없음, 전부 localStorage.
-//
-// 백테스트는 과거고 이건 미래다. 이 도구 말대로 했으면 실제로 어땠는지 앞으로 쌓인다.
-// 3개월쯤 모이면 백테스트 숫자를 믿어도 되는지에 대한 진짜 답이 나온다.
-//
-// 결과 판정은 기록 시점의 계획(진입·손절·목표) 그대로. 4시간봉 마감가로만 판정한다
-// — 봉 안에서 손절과 목표가 같이 닿으면 손절을 먼저 본다(봉 내부 순서를 알 수 없다).
+// ui/paper.js — 신호 발생 시점의 계획·시장국면·전망을 고정하는 Forward Paper Ledger.
+// 실제 주문은 없으며 localStorage에만 저장한다. 기존 qar-paper 기록도 그대로 읽는다.
 
 import { getKlines } from "../api/binance.js";
+import { CONFIG } from "../config.js";
 import { state } from "../state.js";
 import { fmtPrice, fmtWon, escapeHtml } from "./format.js";
 import { toast } from "./notifications.js";
 
 const KEY = "qar-paper";
+const SCHEMA_VERSION = 2;
+const FORWARD_HOURS = [1, 3, 6, 24];
 let listEl = null;
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
-}
-function save(list) {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* 용량 초과 무시 */ }
+const finite = Number.isFinite;
+const directionOf = (rec) => rec?.direction === "short" || (rec?.stop > rec?.entry) ? "short" : "long";
+const sideOf = (rec) => directionOf(rec) === "short" ? -1 : 1;
+const startOf = (c) => Number(c?.openTime ?? c?.time ?? 0);
+const endOf = (c) => Number(c?.closeTime ?? c?.time ?? c?.openTime ?? 0);
+
+function normalizeRecord(rec) {
+  if (!rec || typeof rec !== "object") return null;
+  return {
+    ...rec,
+    schemaVersion: rec.schemaVersion ?? 1,
+    direction: directionOf(rec),
+    status: rec.status || (rec.settlement ? "closed" : "open"),
+  };
 }
 
-// 순수 함수 — 기록 + 진입 이후 캔들 → 결말. 테스트가 이걸 본다.
-// candles 는 진입 시각 이후 마감봉만 들어온다고 가정하지 않는다(여기서 자른다).
-export function resolveTrade(rec, candles) {
-  // api/binance.js 의 parseKlines 는 openTime/closeTime 을 쓴다(time 아님).
-  // 필드 이름을 잘못 보면 조용히 빈 배열이 되어 모든 기록이 영원히 "진행 중" 이 된다.
-  const startOf = (c) => c.openTime ?? c.time ?? 0;
-  const endOf = (c) => c.closeTime ?? startOf(c);
-  const now = Date.now();
-  // 기록 이후에 시작한 마감봉만. 진행 중인 봉은 고·저가 아직 안 굳어서 제외한다.
-  const after = (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
-  const risk = rec.entry - rec.stop;
-  const rOf = (px) => (risk > 0 ? (px - rec.entry) / risk : 0);
+function load() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(KEY));
+    return Array.isArray(parsed) ? parsed.map(normalizeRecord).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function save(list) {
+  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* 용량 초과 시 기존 기록 유지 */ }
+}
+
+function closedAfter(rec, candles, now = Date.now()) {
+  return (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
+}
+
+export function pathStats(rec, candles, now = Date.now()) {
+  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
+  if (!(risk > 0)) return { mfeR: 0, maeR: 0 };
+  const side = sideOf(rec);
+  let mfeR = 0;
+  let maeR = 0;
+  for (const c of closedAfter(rec, candles, now)) {
+    const favorablePx = side > 0 ? Number(c.high) : Number(c.low);
+    const adversePx = side > 0 ? Number(c.low) : Number(c.high);
+    if (finite(favorablePx)) mfeR = Math.max(mfeR, ((favorablePx - rec.entry) * side) / risk);
+    if (finite(adversePx)) maeR = Math.min(maeR, ((adversePx - rec.entry) * side) / risk);
+  }
+  return { mfeR, maeR };
+}
+
+// 기록 당시 계획과 이후 마감봉으로 결말을 판정한다. 같은 봉에서 양쪽 가격이 닿으면
+// 순서를 알 수 없으므로 승패에서 제외할 ambiguous로 보존한다.
+export function resolveTrade(rec, candles, now = Date.now()) {
+  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
+  const side = sideOf(rec);
+  const rOf = (px) => risk > 0 ? ((px - rec.entry) * side) / risk : 0;
+  const after = closedAfter(rec, candles, now);
+  const stats = pathStats(rec, after, now);
+
   for (const c of after) {
-    if (c.low <= rec.stop) return { status: "loss", exitPx: rec.stop, exitAt: c.time, r: rOf(rec.stop) };
-    if (c.high >= rec.tp2) return { status: "win", exitPx: rec.tp2, exitAt: c.time, r: rOf(rec.tp2) };
+    const high = Number(c.high), low = Number(c.low);
+    const stopHit = side > 0 ? low <= rec.stop : high >= rec.stop;
+    const targetHit = side > 0 ? high >= rec.tp2 : low <= rec.tp2;
+    const exitAt = endOf(c);
+    if (stopHit && targetHit) return { status: "ambiguous", exitPx: null, exitAt, r: null, ...stats };
+    if (stopHit) return { status: "loss", exitPx: rec.stop, exitAt, r: rOf(rec.stop), ...stats };
+    if (targetHit) return { status: "win", exitPx: rec.tp2, exitAt, r: rOf(rec.tp2), ...stats };
   }
   const last = after[after.length - 1];
-  return { status: "open", exitPx: last ? last.close : rec.entry, exitAt: null, r: rOf(last ? last.close : rec.entry) };
+  const exitPx = last && finite(Number(last.close)) ? Number(last.close) : rec.entry;
+  return { status: "open", exitPx, exitAt: null, r: rOf(exitPx), ...stats };
 }
 
-// 금액 = R 배수 × 리스크 금액. 기록 당시의 시드·레버리지를 그대로 쓴다.
-function moneyOf(rec, r) {
-  const riskPct = (rec.entry - rec.stop) / rec.entry;
-  return rec.seed * rec.leverage * riskPct * r;
+// 1/3/6/24시간 시점의 마감가를 신호 당시 진입가와 비교한다. 거래 방향 기준 R도 함께 남긴다.
+export function forwardSnapshots(rec, candles, horizons = FORWARD_HOURS, now = Date.now()) {
+  const after = closedAfter(rec, candles, now);
+  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
+  const riskPct = risk > 0 && rec.entry > 0 ? risk / rec.entry : null;
+  const side = sideOf(rec);
+  return horizons.map((hours) => {
+    const deadline = rec.at + hours * 60 * 60 * 1000;
+    if (now < deadline) return { hours, status: "pending" };
+    const eligible = after.filter((c) => endOf(c) <= deadline);
+    const candle = eligible[eligible.length - 1];
+    if (!candle || !finite(Number(candle.close))) return { hours, status: "unavailable" };
+    const price = Number(candle.close);
+    const changePct = ((price / rec.entry) - 1) * 100;
+    return {
+      hours,
+      status: "ready",
+      at: endOf(candle),
+      price,
+      changePct,
+      directionalR: riskPct > 0 ? (changePct / 100) * side / riskPct : null,
+    };
+  });
+}
+
+export function netRFor(rec, grossR) {
+  if (!finite(grossR)) return null;
+  const riskPct = Math.abs(Number(rec.entry) - Number(rec.stop)) / Number(rec.entry);
+  const costPct = Number(rec.costPct ?? 0) / 100;
+  return riskPct > 0 ? grossR - costPct / riskPct : grossR;
+}
+
+function moneyOf(rec, netR) {
+  if (!finite(netR)) return null;
+  const riskPct = Math.abs(rec.entry - rec.stop) / rec.entry;
+  return rec.seed * rec.leverage * riskPct * netR;
+}
+
+function copyForecast(forecast) {
+  if (!forecast || typeof forecast !== "object") return null;
+  const { available, up, down, neutral, lead, confidence, horizonHours, thresholdPct, asOf, reason } = forecast;
+  return { available, up, down, neutral, lead, confidence, horizonHours, thresholdPct, asOf, reason };
+}
+
+function copyRegime(regime) {
+  if (!regime || typeof regime !== "object") return null;
+  const { available, key, label, bias, volatility, confidence, asOf, reason } = regime;
+  return { available, key, label, bias, volatility, confidence, asOf, reason };
+}
+
+export function buildPaperRecord(result, settings = state.settings, now = Date.now()) {
+  const p = result?.plan;
+  if (!p?.valid) return null;
+  const direction = result.direction === "short" ? "short" : "long";
+  const entry = Number(p.entry), stop = Number(p.invalidation), tp2 = Number(p.tp2);
+  const risk = Math.abs(entry - stop);
+  if (!(entry > 0) || !(risk > 0) || !finite(tp2)) return null;
+  const geometryValid = direction === "long" ? stop < entry && tp2 > entry : stop > entry && tp2 < entry;
+  if (!geometryValid) return null;
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    id: `${result.symbol}-${now}`,
+    symbol: result.symbol,
+    at: now,
+    status: "open",
+    scanMode: result.scanMode || result.mode || "reversal",
+    direction,
+    entry,
+    stop,
+    tp1: finite(Number(p.tp1)) ? Number(p.tp1) : null,
+    tp2,
+    tp3: finite(Number(p.tp3)) ? Number(p.tp3) : null,
+    plannedRR: Math.abs(tp2 - entry) / risk,
+    score: Number(result.score),
+    stage: result.stage ? { stage: result.stage.stage, label: result.stage.label } : null,
+    grade: result.grade ? { key: result.grade.key, label: result.grade.label } : null,
+    topSignals: Array.isArray(result.topSignals) ? result.topSignals.slice(0, 5) : [],
+    forecast: copyForecast(result.forecast),
+    marketRegime: copyRegime(result.marketRegime || state.marketRegime),
+    regimeFit: result.regimeFit ? { ...result.regimeFit } : null,
+    costPct: CONFIG.tradeCostRoundTripPct,
+    seed: Number(settings.seedMoney) || 0,
+    leverage: Math.max(1, Number(settings.leverage) || 1),
+  };
 }
 
 export function recordTrade(result) {
-  const p = result.plan;
-  if (!p?.valid) { toast("계획이 유효하지 않아 기록할 수 없습니다.", "error"); return; }
+  const rec = buildPaperRecord(result);
+  if (!rec) { toast("계획이 유효하지 않아 기록할 수 없습니다.", "error"); return; }
   const list = load();
-  if (list.some((x) => x.symbol === result.symbol && x.status !== "closed")) {
+  if (list.some((x) => x.symbol === result.symbol && x.status !== "closed" && !x.settlement)) {
     toast(`${result.symbol} 은 이미 열린 기록이 있습니다.`, "info");
     return;
   }
-  list.unshift({
-    id: `${result.symbol}-${Date.now()}`,
-    symbol: result.symbol,
-    at: Date.now(),
-    entry: p.entry, stop: p.invalidation, tp2: p.tp2,
-    score: result.score,
-    // 기록 시점의 시드·레버리지를 박아둔다. 나중에 설정을 바꿔도 과거 기록의 금액은 안 흔들린다.
-    seed: state.settings.seedMoney, leverage: state.settings.leverage,
-  });
+  list.unshift(rec);
   save(list);
-  toast(`${result.symbol} 기록했습니다.`, "success");
+  toast(`${result.symbol} 신호 시점을 고정 기록했습니다.`, "success");
   render();
 }
 
@@ -85,61 +198,91 @@ export async function render() {
   if (!listEl) return;
   const list = load();
   if (!list.length) {
-    listEl.innerHTML = `<p class="muted">스캔 결과에서 <b>기록</b> 을 누르면 여기에 쌓입니다. 실제 주문은 없습니다.</p>`;
+    listEl.innerHTML = `<p class="muted">스캔 결과에서 <b>기록</b>을 누르면 신호 당시 계획·시장국면·24시간 경로가 여기에 쌓입니다. 실제 주문은 없습니다.</p>`;
     return;
   }
-  listEl.innerHTML = `<p class="muted">불러오는 중…</p>`;
+  listEl.innerHTML = `<p class="muted">과거 신호의 실제 경로를 확인하는 중…</p>`;
 
   const rows = [];
+  let changed = false;
   for (const rec of list) {
-    let res;
-    try {
-      const candles = await getKlines(rec.symbol, "4h", 200);
-      res = resolveTrade(rec, candles);
-    } catch {
-      res = { status: "open", exitPx: rec.entry, exitAt: null, r: 0 };
+    let candles = [];
+    try { candles = await getKlines(rec.symbol, "1h", 1000); } catch { /* 산출 보류 */ }
+    const liveResult = rec.settlement || resolveTrade(rec, candles);
+    const snapshots = forwardSnapshots(rec, candles);
+    if (!rec.settlement && ["win", "loss", "ambiguous"].includes(liveResult.status)) {
+      rec.settlement = {
+        status: liveResult.status,
+        exitPx: liveResult.exitPx,
+        exitAt: liveResult.exitAt,
+        grossR: liveResult.r,
+        netR: netRFor(rec, liveResult.r),
+        mfeR: liveResult.mfeR,
+        maeR: liveResult.maeR,
+      };
+      rec.status = "closed";
+      rec.closeTs = liveResult.exitAt;
+      changed = true;
     }
-    rows.push({ rec, res });
+    rows.push({ rec, res: rec.settlement || liveResult, snapshots });
   }
+  if (changed) save(list);
 
-  const closed = rows.filter((x) => x.res.status !== "open");
-  const wins = closed.filter((x) => x.res.status === "win").length;
-  const totalR = closed.reduce((s, x) => s + x.res.r, 0);
-  const totalWon = closed.reduce((s, x) => s + moneyOf(x.rec, x.res.r), 0);
-
-  const summary = closed.length
-    ? `닫힘 ${closed.length}건 · 승률 ${(wins / closed.length * 100).toFixed(0)}% · 합계 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)}`
-    : `닫힌 기록 없음 — 열린 ${rows.length}건`;
+  const decided = rows.filter((x) => ["win", "loss"].includes(x.res.status));
+  const ambiguous = rows.filter((x) => x.res.status === "ambiguous").length;
+  const wins = decided.filter((x) => x.res.status === "win").length;
+  const totalR = decided.reduce((sum, x) => sum + (x.res.netR ?? netRFor(x.rec, x.res.r) ?? 0), 0);
+  const totalWon = decided.reduce((sum, x) => sum + (moneyOf(x.rec, x.res.netR ?? netRFor(x.rec, x.res.r)) ?? 0), 0);
+  const open = rows.filter((x) => x.res.status === "open").length;
+  const summary = decided.length
+    ? `판정 ${decided.length}건 · 승률 ${(wins / decided.length * 100).toFixed(0)}% · 비용 후 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)} · 진행 ${open}건${ambiguous ? ` · 모호 ${ambiguous}건` : ""}`
+    : `판정 가능한 기록 없음 · 진행 ${open}건${ambiguous ? ` · 모호 ${ambiguous}건` : ""}`;
 
   listEl.innerHTML = `
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
     <table class="result-table paper-table">
-      <thead><tr><th>종목</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
+      <thead><tr><th>종목</th><th>전략·방향</th><th>기록 시각</th><th>시장국면</th><th>계획</th><th>결과</th><th>1·3·6·24h</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
     </table>
-    <p class="muted">4시간봉 마감가 기준 · 봉 안에서 손절·목표가 같이 닿으면 손절 우선 · 왕복 비용 미반영</p>`;
+    <p class="muted">1시간 마감봉 기준 · 같은 봉에서 손절/목표가가 모두 닿으면 모호 사례로 제외 · 왕복비용 ${CONFIG.tradeCostRoundTripPct}% 반영</p>`;
 }
 
-// 기록은 며칠씩 열려 있으므로 날짜가 있어야 한다 — format.js 의 fmtTime 은 시:분만 준다.
-const recAt = (ms) =>
-  new Date(ms).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+const recAt = (ms) => new Date(ms).toLocaleString("ko-KR", {
+  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+});
 
-function rowHtml({ rec, res }) {
-  const label = { open: "진행 중", win: "목표 도달", loss: "손절" }[res.status];
+function forwardText(snapshots) {
+  return snapshots.map((s) => {
+    if (s.status === "pending") return `${s.hours}h 대기`;
+    if (s.status !== "ready") return `${s.hours}h —`;
+    const sign = s.changePct >= 0 ? "+" : "";
+    return `${s.hours}h ${sign}${s.changePct.toFixed(1)}%`;
+  }).join(" · ");
+}
+
+function rowHtml({ rec, res, snapshots }) {
+  const label = { open: "진행 중", win: "목표 도달", loss: "손절", ambiguous: "동일 봉 모호" }[res.status] || "산출 보류";
   const cls = res.status === "win" ? "up" : res.status === "loss" ? "down" : "muted";
-  const money = moneyOf(rec, res.r);
+  const netR = res.netR ?? netRFor(rec, res.r);
+  const money = moneyOf(rec, netR);
+  const outcome = finite(netR)
+    ? `${label} · ${netR >= 0 ? "+" : ""}${netR.toFixed(2)}R${finite(money) ? ` · ${money >= 0 ? "+" : ""}${fmtWon(money)}` : ""}`
+    : label;
+  const mode = { early: "조기", pump_fade: "펌프페이드", reversal: "반등" }[rec.scanMode] || rec.scanMode || "기존";
+  const direction = directionOf(rec).toUpperCase();
+  const regime = rec.marketRegime?.label || "미기록";
   return `<tr>
     <td class="sym">${escapeHtml(rec.symbol)}</td>
+    <td>${escapeHtml(mode)} · ${direction}<br><span class="muted">점수 ${finite(rec.score) ? rec.score : "—"}</span></td>
     <td>${recAt(rec.at)}</td>
-    <td>${rec.score}</td>
-    <td>${fmtPrice(rec.entry)}</td>
-    <td>${fmtPrice(rec.stop)}</td>
-    <td>${fmtPrice(rec.tp2)}</td>
-    <td class="${cls}">${label}</td>
-    <td class="${res.r >= 0 ? "up" : "down"}">${res.r >= 0 ? "+" : ""}${res.r.toFixed(2)}R</td>
-    <td class="${money >= 0 ? "up" : "down"}">${money >= 0 ? "+" : ""}${fmtWon(money)}</td>
+    <td>${escapeHtml(regime)}<br><span class="muted">${escapeHtml(rec.regimeFit?.label || "")}</span></td>
+    <td>진입 ${fmtPrice(rec.entry)}<br>손절 ${fmtPrice(rec.stop)} · 목표 ${fmtPrice(rec.tp2)}<br><span class="muted">계획 ${finite(rec.plannedRR) ? rec.plannedRR.toFixed(2) : "—"}R</span></td>
+    <td class="${cls}">${escapeHtml(outcome)}</td>
+    <td class="paper-forward">${escapeHtml(forwardText(snapshots))}</td>
     <td><button class="btn-mini" data-paper-del="${rec.id}">삭제</button></td>
   </tr>`;
 }
 
-export default { initPaper, render, recordTrade, resolveTrade };
+export default {
+  initPaper, render, recordTrade, buildPaperRecord, resolveTrade, forwardSnapshots, pathStats, netRFor,
+};

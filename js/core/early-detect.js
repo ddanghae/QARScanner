@@ -208,7 +208,7 @@ export function earlyPlan(m, atrVal, price, cfg) {
 // ---- 지표 조립 ----
 // c4: 4시간봉 마감 캔들. oiSeries: [{time,oi}] (없으면 빈 배열). funding: number|null.
 // ticker: { change24h, quoteVolume }
-export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
+export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg, now = Date.now()) {
   const e = cfg.earlyDetect;
   const box = boxRange(c4, e.boxLookback);
   if (!box) return null;
@@ -227,7 +227,7 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
   // 펀딩도 방향 무관 — 롱 쏠림이든 숏 쏠림이든 둘 다 급등에 선행했다.
   const crowdAbs = funding == null ? null : Math.abs(funding);
   const ageDays = ticker?.onboardDate
-    ? (Date.now() - ticker.onboardDate) / 86_400_000 : null;
+    ? (now - ticker.onboardDate) / 86_400_000 : null;
 
   const relVolArr = relativeVolume(c4, 20);
   const recentRel = relVolArr.slice(-3).filter((x) => x != null);
@@ -270,8 +270,8 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg) {
 // ---- 결과 조립 ----
 // 기존 deepAnalyze 와 동일한 shape 을 반환한다(스펙 "결과 객체 호환").
 // 단계에 안 걸리거나 제외 사유가 있으면 null.
-export function buildEarlyResult(item, c4, oiSeries, funding, cfg) {
-  const m = buildEarlyMetrics(c4, oiSeries, funding, item, cfg);
+export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.now()) {
+  const m = buildEarlyMetrics(c4, oiSeries, funding, item, cfg, now);
   if (!m) return null;
   if (earlyExclusion(m, cfg)) return null;
   const stageInfo = classifyEarlyStage(m, cfg);

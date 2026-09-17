@@ -2,7 +2,7 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { returnsFrom, pearson, correlationMap } from "../js/core/correlation.js";
-import { resolveTrade } from "../js/ui/paper.js";
+import { buildPaperRecord, forwardSnapshots, netRFor, resolveTrade } from "../js/ui/paper.js";
 
 const bar = (o, h, l, c, t) => ({ time: t, open: o, high: h, low: l, close: c, volume: 1 });
 const fromCloses = (closes, t0 = 0) =>
@@ -71,11 +71,11 @@ export function run() {
     assert(Math.abs(open.r - 1.8) < 1e-9, `진행 중 평가손익도 R 로 (${open.r})`);
   });
 
-  test("결말 판정 — 같은 봉에서 둘 다 닿으면 손절 우선", () => {
+  test("결말 판정 — 같은 봉에서 둘 다 닿으면 승패에서 제외", () => {
     const rec = { at: 0, entry: 100, stop: 90, tp2: 140 };
     const r = resolveTrade(rec, [bar(100, 150, 85, 145, 1000)]);
-    eq(r.status, "loss", "봉 내부 순서를 모르므로 보수적으로 손절");
-    eq(r.r, -1);
+    eq(r.status, "ambiguous", "봉 내부 순서를 모르므로 모호 사례로 분리");
+    eq(r.r, null);
   });
 
   test("결말 판정 — 먼저 닿은 봉이 이긴다", () => {
@@ -83,5 +83,48 @@ export function run() {
     const win = resolveTrade(rec, [bar(100, 145, 99, 143, 1000), bar(143, 150, 80, 85, 2000)]);
     eq(win.status, "win", "목표를 먼저 친 뒤의 폭락은 이미 청산된 뒤다");
     eq(win.r, 4);
+  });
+
+  test("SHORT 기록은 위 손절·아래 목표를 올바르게 판정", () => {
+    const rec = { at: 0, direction: "short", entry: 100, stop: 110, tp2: 80 };
+    const win = resolveTrade(rec, [bar(100, 101, 79, 82, 1000)]);
+    eq(win.status, "win");
+    eq(win.r, 2);
+    const loss = resolveTrade(rec, [bar(100, 111, 95, 108, 1000)]);
+    eq(loss.status, "loss");
+    eq(loss.r, -1);
+  });
+
+  test("Forward snapshot은 1·3·6·24시간 가격 경로를 고정", () => {
+    const hour = 3600_000;
+    const rec = { at: 1000, direction: "long", entry: 100, stop: 90, tp2: 140 };
+    const candles = Array.from({ length: 24 }, (_, i) => ({
+      openTime: 1001 + i * hour,
+      closeTime: 1000 + (i + 1) * hour,
+      open: 100 + i,
+      high: 101 + i,
+      low: 99 + i,
+      close: 101 + i,
+    }));
+    const snap = forwardSnapshots(rec, candles, [1, 3, 6, 24], 1000 + 25 * hour);
+    eq(snap.length, 4);
+    eq(snap[0].status, "ready");
+    assert(Math.abs(snap[0].changePct - 1) < 1e-9, "1시간 수익률");
+    assert(Math.abs(snap[3].changePct - 24) < 1e-9, "24시간 수익률");
+  });
+
+  test("새 기록은 계획·국면·확률을 복사하고 비용 후 R을 계산", () => {
+    const rec = buildPaperRecord({
+      symbol: "TESTUSDT", scanMode: "early", direction: "long", score: 70,
+      plan: { valid: true, entry: 100, invalidation: 90, tp1: 110, tp2: 140 },
+      stage: { stage: 2, label: "임박" }, grade: { key: "strong", label: "강한 후보" },
+      forecast: { available: true, up: 55, down: 25, neutral: 20, lead: "up" },
+      marketRegime: { available: true, key: "bull", label: "상승 국면", bias: "long" },
+      regimeFit: { key: "aligned", label: "시장 흐름 우호" },
+    }, { seedMoney: 1_000_000, leverage: 1 }, 1234);
+    eq(rec.schemaVersion, 2);
+    eq(rec.plannedRR, 4);
+    eq(rec.marketRegime.key, "bull");
+    assert(netRFor(rec, 4) < 4, "왕복비용만큼 순 R이 줄어야 함");
   });
 }

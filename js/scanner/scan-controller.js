@@ -15,6 +15,7 @@ import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
 import { forecastDirection } from "../core/direction-forecast.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
 import { evaluateCrtTbs } from "../core/crt-tbs.js";
+import { analyzeMarketRegime, regimeAlignment } from "../core/market-regime.js";
 
 let abortToken = { aborted: false };
 
@@ -264,10 +265,13 @@ export async function runScan() {
     let market4h = [];
     try {
       const rawBtc4h = await getKlines("BTCUSDT", "4h");
-      market4h = closedOnly(rawBtc4h, Boolean(settings.includeRealtimeCandle));
+      // 시장국면은 항상 마감 봉 기준. 실시간 옵션이 켜져도 진행 중 BTC 봉은 사용하지 않는다.
+      market4h = closedOnly(rawBtc4h, false, now);
     } catch (error) {
       console.warn("방향 모델 BTC 4시간봉 조회 실패", error);
     }
+    state.marketRegime = analyzeMarketRegime(market4h, CONFIG.marketRegime, now);
+    emit("market:regime", state.marketRegime);
 
     const modes = modesForScan(requestedMode);
     const combined = [];
@@ -290,6 +294,12 @@ export async function runScan() {
         state.scan.modeStats[mode] = { prefiltered: 0, candidates: 0, results: 0 };
         emit("scan:mode-error", { mode, message: e.message });
       }
+    }
+    // 국면은 아직 검증된 가중치가 아니므로 점수를 바꾸지 않는다. 화면과 페이퍼 기록에만 고정한다.
+    for (const result of combined) {
+      if (!result || result.skipped || result.error) continue;
+      result.marketRegime = state.marketRegime;
+      result.regimeFit = regimeAlignment(state.marketRegime, result.direction);
     }
     // 후보만 추가 확인. 중복 심볼은 1회 분석하고 기존 캔들 캐시를 재사용한다.
     if (abortToken.aborted) return finishAborted();

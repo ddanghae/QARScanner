@@ -18,8 +18,8 @@ import { evaluateNoise } from "../core/noise-filter.js";
 import { forecastDirection } from "../core/direction-forecast.js";
 
 // 한 시간봉 분석 묶음
-function analyzeTf(candlesRaw, includeRealtime, tf) {
-  const candles = closedOnly(candlesRaw, includeRealtime);
+function analyzeTf(candlesRaw, includeRealtime, tf, now) {
+  const candles = closedOnly(candlesRaw, includeRealtime, now);
   if (candles.length < 40) return null;
   const ind = computeIndicators(candles, CONFIG.indicators);
   const atrVal = last(ind.atr);
@@ -299,12 +299,16 @@ function lowerHigh(a5) {
 
 // 최종: 종목 하나 정밀 분석
 export async function deepAnalyze(item, settings, market4h = []) {
+  return analyzeCandles(item, settings, await fetchAll(item.symbol), market4h);
+}
+
+// Live/research share one scoring path. Research supplies only candles available at now.
+export function analyzeCandles(item, settings, { k4h, k1h, k15m, k5m }, market4h = [], now = Date.now()) {
   const includeRt = settings.includeRealtimeCandle;
-  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol);
-  const a4 = analyzeTf(k4h, includeRt, "4h");
-  const a1 = analyzeTf(k1h, includeRt, "1h");
-  const a15 = analyzeTf(k15m, includeRt, "15m");
-  const a5 = analyzeTf(k5m, includeRt, "5m");
+  const a4 = analyzeTf(k4h, includeRt, "4h", now);
+  const a1 = analyzeTf(k1h, includeRt, "1h", now);
+  const a15 = analyzeTf(k15m, includeRt, "15m", now);
+  const a5 = analyzeTf(k5m, includeRt, "5m", now);
   if (!a4 || !a1 || !a15 || !a5) {
     return { symbol: item.symbol, error: "캔들 데이터 부족", skipped: true };
   }
@@ -373,7 +377,7 @@ export async function deepAnalyze(item, settings, market4h = []) {
       "5m": tfSummary(a5, side),
     },
   };
-  result.forecast = forecastDirection(a4.candles, market4h, { provisional: Boolean(includeRt) });
+  result.forecast = forecastDirection(a4.candles, market4h, { now, provisional: Boolean(includeRt) });
   return result;
 }
 

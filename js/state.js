@@ -60,6 +60,7 @@ export const state = {
   candidates: [],      // 2차 통과
   results: [],         // 최종 스코어링 결과
   newListings: [],     // 신규 상장 심볼
+  marketRegime: null,  // BTC 4h 기준 시장국면. 점수 보정 없이 후보 설명/기록에 사용
   scan: {
     running: false,
     phase: "idle",     // idle|universe|prefilter|candidate|deep|score|done|error

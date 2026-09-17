@@ -18,6 +18,7 @@ import { run as unifiedScan } from "./unified-scan.test.js";
 import { run as directionForecast } from "./direction-forecast.test.js";
 import { run as crtTbs } from "./crt-tbs.test.js";
 import { run as marketRegime } from "./market-regime.test.js";
+import { run as decisionGate } from "./decision-gate.test.js";
 
 export function runAll() {
   reset();
@@ -38,6 +39,7 @@ export function runAll() {
   directionForecast();
   crtTbs();
   marketRegime();
+  decisionGate();
   return report();
 }
 

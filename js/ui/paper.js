@@ -6,6 +6,7 @@ import { CONFIG } from "../config.js";
 import { state } from "../state.js";
 import { fmtPrice, fmtWon, escapeHtml } from "./format.js";
 import { toast } from "./notifications.js";
+import { buildDecisionGate } from "../core/decision-gate.js";
 
 const KEY = "qar-paper";
 const SCHEMA_VERSION = 2;
@@ -20,11 +21,15 @@ const endOf = (c) => Number(c?.closeTime ?? c?.time ?? c?.openTime ?? 0);
 
 function normalizeRecord(rec) {
   if (!rec || typeof rec !== "object") return null;
+  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
+  const plannedRR = finite(Number(rec.plannedRR)) ? Number(rec.plannedRR)
+    : risk > 0 && finite(Number(rec.tp2)) ? Math.abs(Number(rec.tp2) - Number(rec.entry)) / risk : null;
   return {
     ...rec,
     schemaVersion: rec.schemaVersion ?? 1,
     direction: directionOf(rec),
     status: rec.status || (rec.settlement ? "closed" : "open"),
+    plannedRR,
   };
 }
 
@@ -141,6 +146,7 @@ export function buildPaperRecord(result, settings = state.settings, now = Date.n
   const geometryValid = direction === "long" ? stop < entry && tp2 > entry : stop > entry && tp2 < entry;
   if (!geometryValid) return null;
 
+  const gate = buildDecisionGate(result, now);
   return {
     schemaVersion: SCHEMA_VERSION,
     id: `${result.symbol}-${now}`,
@@ -162,6 +168,13 @@ export function buildPaperRecord(result, settings = state.settings, now = Date.n
     forecast: copyForecast(result.forecast),
     marketRegime: copyRegime(result.marketRegime || state.marketRegime),
     regimeFit: result.regimeFit ? { ...result.regimeFit } : null,
+    decisionGate: {
+      status: gate.status,
+      label: gate.label,
+      blockers: gate.blockers,
+      warnings: gate.warnings,
+      checks: gate.checks.map(({ key, level, label }) => ({ key, level, label })),
+    },
     costPct: CONFIG.tradeCostRoundTripPct,
     seed: Number(settings.seedMoney) || 0,
     leverage: Math.max(1, Number(settings.leverage) || 1),
@@ -191,7 +204,85 @@ export function initPaper() {
     save(load().filter((x) => x.id !== del));
     render();
   });
+  document.getElementById("paper-export-json")?.addEventListener("click", exportPaperJson);
+  document.getElementById("paper-export-csv")?.addEventListener("click", exportPaperCsv);
   render();
+}
+
+export function computePaperMetrics(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const decided = list.filter((x) => ["win", "loss"].includes(x?.res?.status));
+  const ordered = decided.slice().sort((a, b) =>
+    Number(a.rec?.closeTs ?? a.res?.exitAt ?? a.rec?.at ?? 0)
+      - Number(b.rec?.closeTs ?? b.res?.exitAt ?? b.rec?.at ?? 0));
+  let equity = 0, peak = 0, maxDrawdownR = 0;
+  for (const row of ordered) {
+    equity += row.res.netR ?? netRFor(row.rec, row.res.r) ?? 0;
+    peak = Math.max(peak, equity);
+    maxDrawdownR = Math.min(maxDrawdownR, equity - peak);
+  }
+  const planned = list
+    .map((x) => x?.rec?.plannedRR)
+    .filter((value) => value != null && finite(Number(value)))
+    .map(Number);
+  const netR = decided.reduce((sum, x) => sum + (x.res.netR ?? netRFor(x.rec, x.res.r) ?? 0), 0);
+  return {
+    total: list.length,
+    decided: decided.length,
+    open: list.filter((x) => x?.res?.status === "open").length,
+    ambiguous: list.filter((x) => x?.res?.status === "ambiguous").length,
+    wins: decided.filter((x) => x.res.status === "win").length,
+    winRate: decided.length ? decided.filter((x) => x.res.status === "win").length / decided.length * 100 : null,
+    netR,
+    maxDrawdownR,
+    avgPlannedRR: planned.length ? planned.reduce((a, b) => a + b, 0) / planned.length : null,
+  };
+}
+
+function csvCell(value) {
+  const text = value == null ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+export function paperCsv(records) {
+  const headers = [
+    "id", "symbol", "recordedAt", "closedAt", "mode", "direction", "score", "gate",
+    "regime", "entry", "stop", "tp1", "tp2", "tp3", "plannedRR", "status", "grossR", "netR", "mfeR", "maeR",
+  ];
+  const lines = (records || []).map((raw) => {
+    const rec = normalizeRecord(raw);
+    const s = rec.settlement || {};
+    return [
+      rec.id, rec.symbol, rec.at ? new Date(rec.at).toISOString() : "", rec.closeTs ? new Date(rec.closeTs).toISOString() : "",
+      rec.scanMode, rec.direction, rec.score, rec.decisionGate?.label, rec.marketRegime?.label,
+      rec.entry, rec.stop, rec.tp1, rec.tp2, rec.tp3, rec.plannedRR,
+      s.status || rec.status, s.grossR, s.netR, s.mfeR, s.maeR,
+    ].map(csvCell).join(",");
+  });
+  return [headers.join(","), ...lines].join("\n");
+}
+
+function downloadText(filename, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exportPaperJson() {
+  const records = load();
+  const payload = { schemaVersion: SCHEMA_VERSION, exportedAt: new Date().toISOString(), records };
+  downloadText(`qar-paper-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload, null, 2), "application/json");
+  toast(`${records.length}건을 JSON으로 백업했습니다.`, "success");
+}
+
+function exportPaperCsv() {
+  const records = load();
+  downloadText(`qar-paper-${new Date().toISOString().slice(0, 10)}.csv`, `\uFEFF${paperCsv(records)}`, "text/csv;charset=utf-8");
+  toast(`${records.length}건을 CSV로 내보냈습니다.`, "success");
 }
 
 export async function render() {
@@ -228,18 +319,22 @@ export async function render() {
   }
   if (changed) save(list);
 
+  const metrics = computePaperMetrics(rows);
   const decided = rows.filter((x) => ["win", "loss"].includes(x.res.status));
-  const ambiguous = rows.filter((x) => x.res.status === "ambiguous").length;
-  const wins = decided.filter((x) => x.res.status === "win").length;
-  const totalR = decided.reduce((sum, x) => sum + (x.res.netR ?? netRFor(x.rec, x.res.r) ?? 0), 0);
+  const totalR = metrics.netR;
   const totalWon = decided.reduce((sum, x) => sum + (moneyOf(x.rec, x.res.netR ?? netRFor(x.rec, x.res.r)) ?? 0), 0);
-  const open = rows.filter((x) => x.res.status === "open").length;
-  const summary = decided.length
-    ? `판정 ${decided.length}건 · 승률 ${(wins / decided.length * 100).toFixed(0)}% · 비용 후 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)} · 진행 ${open}건${ambiguous ? ` · 모호 ${ambiguous}건` : ""}`
-    : `판정 가능한 기록 없음 · 진행 ${open}건${ambiguous ? ` · 모호 ${ambiguous}건` : ""}`;
+  const summary = metrics.decided
+    ? `판정 ${metrics.decided}건 · 승률 ${metrics.winRate.toFixed(0)}% · 비용 후 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)} · 진행 ${metrics.open}건${metrics.ambiguous ? ` · 모호 ${metrics.ambiguous}건` : ""}`
+    : `판정 가능한 기록 없음 · 진행 ${metrics.open}건${metrics.ambiguous ? ` · 모호 ${metrics.ambiguous}건` : ""}`;
 
   listEl.innerHTML = `
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
+    <div class="paper-kpis">
+      <div><span>평균 계획 손익비</span><b>${finite(metrics.avgPlannedRR) ? metrics.avgPlannedRR.toFixed(2) + "R" : "—"}</b></div>
+      <div><span>최대 낙폭</span><b class="${metrics.maxDrawdownR < 0 ? "down" : ""}">${metrics.decided ? metrics.maxDrawdownR.toFixed(2) + "R" : "—"}</b></div>
+      <div><span>판정 표본</span><b>${metrics.decided}건</b></div>
+      <div><span>진행·모호</span><b>${metrics.open} · ${metrics.ambiguous}</b></div>
+    </div>
     <table class="result-table paper-table">
       <thead><tr><th>종목</th><th>전략·방향</th><th>기록 시각</th><th>시장국면</th><th>계획</th><th>결과</th><th>1·3·6·24h</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
@@ -271,11 +366,12 @@ function rowHtml({ rec, res, snapshots }) {
   const mode = { early: "조기", pump_fade: "펌프페이드", reversal: "반등" }[rec.scanMode] || rec.scanMode || "기존";
   const direction = directionOf(rec).toUpperCase();
   const regime = rec.marketRegime?.label || "미기록";
+  const gate = rec.decisionGate?.label || "미기록";
   return `<tr>
     <td class="sym">${escapeHtml(rec.symbol)}</td>
     <td>${escapeHtml(mode)} · ${direction}<br><span class="muted">점수 ${finite(rec.score) ? rec.score : "—"}</span></td>
     <td>${recAt(rec.at)}</td>
-    <td>${escapeHtml(regime)}<br><span class="muted">${escapeHtml(rec.regimeFit?.label || "")}</span></td>
+    <td>${escapeHtml(regime)}<br><span class="muted">${escapeHtml(rec.regimeFit?.label || "")} · ${escapeHtml(gate)}</span></td>
     <td>진입 ${fmtPrice(rec.entry)}<br>손절 ${fmtPrice(rec.stop)} · 목표 ${fmtPrice(rec.tp2)}<br><span class="muted">계획 ${finite(rec.plannedRR) ? rec.plannedRR.toFixed(2) : "—"}R</span></td>
     <td class="${cls}">${escapeHtml(outcome)}</td>
     <td class="paper-forward">${escapeHtml(forwardText(snapshots))}</td>
@@ -285,4 +381,5 @@ function rowHtml({ rec, res, snapshots }) {
 
 export default {
   initPaper, render, recordTrade, buildPaperRecord, resolveTrade, forwardSnapshots, pathStats, netRFor,
+  computePaperMetrics, paperCsv,
 };

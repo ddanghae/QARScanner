@@ -9,6 +9,7 @@ import { toast } from "./notifications.js";
 import { SCAN_MODE_META, resultMode, resultKey } from "../scan-modes.js";
 import { crtSection } from "./crt-tbs.js";
 import { expireResult } from "../core/signal-freshness.js";
+import { buildDecisionGate } from "../core/decision-gate.js";
 
 let panelEl = null;
 let activeResultKey = null;
@@ -131,6 +132,8 @@ function renderDetail(r) {
       <p class="absorption">흡수 추정: <b>${escapeHtml(r.absorption.label)}</b></p>
     </section>
 
+    ${decisionGateSection(r)}
+
     ${forecastSection(r)}
     ${crtSection(r)}
 
@@ -166,6 +169,20 @@ function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
+}
+
+function decisionGateSection(r) {
+  const gate = buildDecisionGate(r);
+  const icon = { pass: "✓", warn: "!", block: "×", info: "·" };
+  return `<section class="detail-section decision-gate decision-gate-${gate.status}">
+    <div class="decision-gate-head">
+      <h3>후보 검토 체크리스트</h3>
+      <span class="badge badge-gate-${gate.status}">${escapeHtml(gate.label)}</span>
+    </div>
+    <ul class="decision-checks">${gate.checks.map((check) => `
+      <li class="decision-${check.level}"><b>${icon[check.level]} ${escapeHtml(check.label)}</b><span>${escapeHtml(check.detail)}</span></li>`).join("")}</ul>
+    <p class="plan-note">${escapeHtml(gate.note)} 점수와 정렬에는 반영하지 않습니다.</p>
+  </section>`;
 }
 
 function forecastSection(r) {

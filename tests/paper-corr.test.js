@@ -2,7 +2,9 @@
 
 import { suite, test, assert, eq } from "./harness.js";
 import { returnsFrom, pearson, correlationMap } from "../js/core/correlation.js";
-import { buildPaperRecord, forwardSnapshots, netRFor, resolveTrade } from "../js/ui/paper.js";
+import {
+  buildPaperRecord, computePaperMetrics, forwardSnapshots, netRFor, paperCsv, resolveTrade,
+} from "../js/ui/paper.js";
 
 const bar = (o, h, l, c, t) => ({ time: t, open: o, high: h, low: l, close: c, volume: 1 });
 const fromCloses = (closes, t0 = 0) =>
@@ -126,5 +128,32 @@ export function run() {
     eq(rec.plannedRR, 4);
     eq(rec.marketRegime.key, "bull");
     assert(netRFor(rec, 4) < 4, "왕복비용만큼 순 R이 줄어야 함");
+  });
+
+  test("저널 요약은 종료된 승패만 성과에 포함하고 최대 낙폭을 계산", () => {
+    const rows = [
+      { rec: { at: 1, closeTs: 10, plannedRR: 2 }, res: { status: "win", netR: 2 } },
+      { rec: { at: 2, closeTs: 20, plannedRR: 4 }, res: { status: "loss", netR: -1 } },
+      { rec: { at: 3, closeTs: 30, plannedRR: null }, res: { status: "loss", netR: -1 } },
+      { rec: { at: 4, plannedRR: null }, res: { status: "open", netR: 9 } },
+      { rec: { at: 5, plannedRR: null }, res: { status: "ambiguous", netR: 9 } },
+    ];
+    const metrics = computePaperMetrics(rows);
+    eq(metrics.decided, 3);
+    eq(metrics.open, 1);
+    eq(metrics.ambiguous, 1);
+    eq(metrics.netR, 0);
+    eq(metrics.maxDrawdownR, -2);
+    eq(metrics.avgPlannedRR, 3, "계획값이 없는 기존 기록을 0R로 세면 안 됨");
+  });
+
+  test("CSV 내보내기는 핵심 필드와 쉼표가 든 값을 안전하게 보존", () => {
+    const csv = paperCsv([{
+      id: "one", symbol: "TESTUSDT", at: 0, direction: "long", entry: 100, stop: 90, tp2: 120,
+      decisionGate: { label: "확인, 대기" }, settlement: { status: "win", netR: 2 },
+    }]);
+    assert(csv.startsWith("id,symbol,recordedAt"), "헤더가 있어야 함");
+    assert(csv.includes('"확인, 대기"'), "쉼표가 든 셀은 따옴표로 감싸야 함");
+    assert(csv.includes("TESTUSDT"), "종목이 포함돼야 함");
   });
 }

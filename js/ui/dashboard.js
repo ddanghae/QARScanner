@@ -11,6 +11,7 @@ import { recordTrade } from "./paper.js";
 import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
 import { crtBadge } from "./crt-tbs.js";
 import { expireResult } from "../core/signal-freshness.js";
+import { buildDecisionGate } from "../core/decision-gate.js";
 
 let resultsEl, statusEl, progressEl;
 let expiryTimer;
@@ -279,6 +280,12 @@ function regimeBadge(r) {
   return `<span class="badge badge-regime-${fit.key}" title="${escapeHtml(title)}">${escapeHtml(fit.label)}</span>`;
 }
 
+function decisionGateBadge(r) {
+  const gate = buildDecisionGate(r);
+  const title = `${gate.note} · 통과 ${gate.passes} / 주의 ${gate.warnings} / 차단 ${gate.blockers}`;
+  return `<span class="badge badge-gate-${gate.status}" title="${escapeHtml(title)}">${escapeHtml(gate.label)}</span>`;
+}
+
 function rowHtml(r) {
   const key = resultKey(r);
   return `<tr data-result-key="${key}">
@@ -289,7 +296,7 @@ function rowHtml(r) {
     <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
     <td>${fmtVolume(r.quoteVolume)}</td>
     <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
+    <td>${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
     <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
     <td>${forecastCell(r)}</td>
     <td>${oddsCell(r)}</td>
@@ -310,7 +317,7 @@ function cardHtml(r) {
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
       <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
+    <div class="rcard-stage">${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
       <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
       <span class="muted">${fmtPrice(r.price)}</span>
     </div>

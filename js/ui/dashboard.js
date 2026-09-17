@@ -74,13 +74,14 @@ function renderStatus() {
 
   if (!statusEl) return;
   const unifiedDone = state.settings.scanMode === "all" && sc.phase === "done";
+  const visibleCount = applyFilters(state.results).length;
+  const phase = `${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}`;
+  const firstPass = unifiedDone ? modeStatText("prefiltered") : `${state.prefiltered.length}개`;
   statusEl.innerHTML = `
-    <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
     ${marketRegimeCard()}
-    <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
-    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 1차 통과" : "1차 통과"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("prefiltered") : state.prefiltered.length}</span></div>
-    <div class="stat-card"><span class="stat-label">${unifiedDone ? "모드별 후보" : "후보"}</span><span class="stat-val ${unifiedDone ? "stat-val-compact" : ""}">${unifiedDone ? modeStatText("candidates") : state.candidates.length}</span></div>
-    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
+    <div class="stat-card"><span class="stat-label">스캔 상태</span><span class="stat-val stat-val-compact">${escapeHtml(phase)}</span><small>마지막 갱신 ${fmtTime(sc.lastUpdated)}</small></div>
+    <div class="stat-card"><span class="stat-label">검색 범위</span><span class="stat-val">${state.universe.length}</span><small>1차 통과 ${escapeHtml(firstPass)}</small></div>
+    <div class="stat-card stat-card-hero"><span class="stat-label">표시 후보</span><span class="stat-val">${visibleCount}</span><small>정밀 분석 ${state.candidates.length}개</small></div>
   `;
 }
 
@@ -147,7 +148,7 @@ function unifiedSummary(view) {
 function modeSection(mode, rows) {
   const meta = SCAN_MODE_META[mode];
   const error = state.scan.modeErrors?.[mode];
-  const body = rows.length ? resultTables(rows, mode)
+  const body = rows.length ? resultTables(rows)
     : `<div class="mode-empty">${error ? `실행 실패 · ${escapeHtml(error)}` : state.settings.crtTbsOnly ? "기존 후보와 방향이 같은 CRT + TBS 확인 신호가 없습니다. 재스캔으로 갱신하세요." : "조건을 만족하는 후보가 없습니다."}</div>`;
   return `<section class="mode-results mode-results-${meta.badge}">
     <div class="mode-results-head"><h3>${modeBadge(mode)}</h3><span>${rows.length}개</span></div>
@@ -155,14 +156,13 @@ function modeSection(mode, rows) {
   </section>`;
 }
 
-function resultTables(view, mode) {
-  // 데스크톱 테이블 + 모바일 카드 — CSS 로 전환. 둘 다 생성.
+function resultTables(view) {
+  // 데스크톱은 의미별 7개 열, 모바일은 같은 정보를 카드로 묶는다.
   return `
     <table class="result-table">
       <thead><tr>
-        <th>#</th><th>스캐너</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
-        <th>점수</th><th>단계</th><th>방향</th><th>24h 방향확률</th><th>${mode === "early" ? "급등확률" : "손익비"}</th>
-        <th>${partialOn() ? "손절 / 절반 / 끝까지" : "손절 / 목표"}</th><th></th><th></th>
+        <th>후보</th><th>검토 상태</th><th>시장</th><th>24h 전망</th>
+        <th>계획</th><th>예상 손익</th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
@@ -286,23 +286,21 @@ function decisionGateBadge(r) {
   return `<span class="badge badge-gate-${gate.status}" title="${escapeHtml(title)}">${escapeHtml(gate.label)}</span>`;
 }
 
+function candidateTags(r) {
+  return `${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>`
+    + `${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}`;
+}
+
 function rowHtml(r) {
   const key = resultKey(r);
   return `<tr data-result-key="${key}">
-    <td>${r.rank}</td>
-    <td>${modeBadge(resultMode(r))}</td>
-    <td class="sym"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>${escapeHtml(r.symbol)}</td>
-    <td>${fmtPrice(r.price)}</td>
-    <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
-    <td>${fmtVolume(r.quoteVolume)}</td>
-    <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
-    <td>${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}</td>
-    <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
+    <td class="candidate-cell"><div class="candidate-main"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button><b>${escapeHtml(r.symbol)}</b><span class="score-pill score-${r.grade.key}">${r.score}</span></div><div class="candidate-sub"><span>#${r.rank}</span>${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></div></td>
+    <td><div class="decision-stack">${candidateTags(r)}</div></td>
+    <td><div class="market-stack"><b>${fmtPrice(r.price)}</b><span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span><small>${fmtVolume(r.quoteVolume)}</small></div></td>
     <td>${forecastCell(r)}</td>
-    <td>${oddsCell(r)}</td>
-    <td>${moneyCell(r)}</td>
-    <td><button class="btn-mini" data-detail="${key}">상세</button><button class="btn-mini" data-paper="${key}">기록</button></td>
-    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
+    <td><div class="plan-stack"><span>진입 <b>${fmtPrice(r.plan.entry)}</b></span><span>손절 <b class="down">${fmtPrice(r.plan.invalidation)}</b></span><small>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</small></div></td>
+    <td class="risk-cell">${moneyCell(r)}</td>
+    <td><div class="row-actions"><button class="btn-mini" data-detail="${key}">상세</button><button class="btn-mini" data-paper="${key}">기록</button><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></div></td>
   </tr>`;
 }
 
@@ -313,26 +311,20 @@ function cardHtml(r) {
     <div class="rcard-top">
       <button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>
       <b class="rcard-sym">${escapeHtml(r.symbol)}</b>
-      ${modeBadge(resultMode(r))}
       <span class="score-pill score-${r.grade.key}">${r.score}</span>
-      <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-stage">${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${regimeBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}
-      <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
-      <span class="muted">${fmtPrice(r.price)}</span>
-    </div>
-    <ul class="rcard-signals">${r.goldenCrossRetest?.detected ? `<li>${goldenCrossBadge(r)}</li>` : ""}${r.topSignals.map((s) => `<li>· ${escapeHtml(s)}</li>`).join("")}</ul>
-    <div class="rcard-plan">
-      <span>진입 ${fmtPrice(p.entry)}</span>
-      <span>손절 ${fmtPrice(p.invalidation)}</span>
-      <span>24h 전망 ${forecastCell(r)}</span>
-      <span>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
-      <span>${moneyCell(r)}</span>
+    <div class="rcard-meta">${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span><span class="muted">#${r.rank}</span></div>
+    <div class="rcard-decision">${candidateTags(r)}</div>
+    <div class="rcard-grid">
+      <div class="rcard-metric"><small>현재 시장</small><b>${fmtPrice(r.price)}</b><span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)} · ${fmtVolume(r.quoteVolume)}</span></div>
+      <div class="rcard-metric"><small>24h 전망</small>${forecastCell(r)}</div>
+      <div class="rcard-metric"><small>계획</small><span>진입 ${fmtPrice(p.entry)}</span><span class="down">손절 ${fmtPrice(p.invalidation)}</span><span>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</span></div>
+      <div class="rcard-metric"><small>예상 손익</small>${moneyCell(r)}</div>
     </div>
     <div class="rcard-actions">
-      <button class="btn-mini" data-detail="${key}">상세 보기</button>
+      <button class="btn-mini btn-detail" data-detail="${key}">상세</button>
       <button class="btn-mini" data-paper="${key}">기록</button>
-      <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
+      <button class="btn-mini tv" data-tv="${r.symbol}">차트</button>
     </div>
   </div>`;
 }

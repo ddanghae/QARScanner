@@ -24,27 +24,11 @@
       <div class="side-nav">
         <button class="side-link active" data-nav="overview" aria-current="page">
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
-          <span>개요</span>
+          <span>스캐너</span>
         </button>
         <button class="side-link" data-nav="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>설정</span>
-        </button>
-        <button class="side-link" data-click="scan-btn">
-          <svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
-          <span>스캔 시작</span>
-        </button>
-        <button class="side-link" data-toggle="filter-favorites-only">
-          <svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6.1.6-4.6 4.1 1.3 6-5.4-3.2-5.4 3.2 1.3-6-4.6-4.1 6.1-.6z"/></svg>
-          <span>관심 종목</span>
-        </button>
-        <button class="side-link" data-toggle="filter-autorefresh">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
-          <span>자동 갱신</span>
-        </button>
-        <button class="side-link" id="settings-reset">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
-          <span>설정 초기화</span>
         </button>
       </div>
       <div class="side-foot">
@@ -63,8 +47,8 @@
       <!-- 톱바 -->
       <header class="topbar">
         <div class="topbar-title">
-          <h1>개요</h1>
-          <span class="tagline">시장국면 · 시나리오 · 리스크 후보 분석</span>
+          <h1>시장 스캐너</h1>
+          <span class="tagline">후보를 찾고 위험 조건을 먼저 확인합니다</span>
         </div>
         <div class="topbar-actions">
           <span id="conn-pill" class="conn-pill" aria-live="polite">미확인</span>
@@ -86,11 +70,14 @@
         </div>
 
         <!-- 필터 영역 (§15) -->
-        <section class="card filter-bar" aria-label="필터">
+        <section class="card filter-bar" aria-label="스캔 설정">
           <div class="card-head">
-            <h2>필터</h2>
+            <div>
+              <h2>스캔 설정</h2>
+              <p class="card-subtitle">핵심 조건을 고른 뒤 스캔을 시작하세요.</p>
+            </div>
           </div>
-          <div class="filter-grid">
+          <div class="filter-grid filter-grid-primary">
             <label>스캔 모드
               <select id="filter-scanmode">
                 <option value="all">전체 스캔 (3개 모드)</option>
@@ -124,62 +111,79 @@
                 <option value="100000000">100M</option>
               </select>
             </label>
-            <label>시드머니 (1종목당)
-              <input id="filter-seed" type="number" min="0" step="100000" inputmode="numeric">
-            </label>
-            <label>레버리지
-              <select id="filter-leverage"></select>
-            </label>
-            <label>파는 방식
-              <select id="filter-partial">
-                <option value="1">절반 먼저 (덜 아픔)</option>
-                <option value="0">끝까지 (더 벌기)</option>
-              </select>
-            </label>
-            <label>단계
-              <select id="filter-stage">
-                <option value="all">전체</option>
-                <option value="1">1 매집</option>
-                <option value="2">2 유동성 회수</option>
-                <option value="3">3 구조전환</option>
-                <option value="4">4 진입 구간</option>
-                <option value="5">5 추격 금지</option>
-              </select>
-            </label>
-            <label>정렬
-              <select id="filter-sort">
-                <option value="score">점수</option>
-                <option value="change">하락률</option>
-                <option value="volume">거래대금</option>
-              </select>
-            </label>
+            <div class="scan-actions">
+              <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
+              <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
+            </div>
           </div>
-          <div class="filter-checks">
+          <div class="quick-filters" aria-label="빠른 필터">
+            <label><input type="checkbox" id="filter-favorites-only" /> 관심 종목만</label>
             <label title="기존 후보와 방향이 같은 4h 범위 이탈·복귀 + 5m 전환 확인만 표시. 실험 규칙이며 재스캔 시 갱신됩니다.">
               <input type="checkbox" id="filter-crt-tbs" /> CRT + TBS 확인만
             </label>
-            <label><input type="checkbox" id="filter-favorites-only" /> 관심 종목만</label>
             <label><input type="checkbox" id="filter-exclude-chase" /> 추격 금지 제외</label>
-            <label><input type="checkbox" id="filter-exclude-new" /> 신규 종목 제외</label>
-            <label title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
-              <input type="checkbox" id="filter-golden-cross" /> 골든크로스 리테스트만
-            </label>
-            <label title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
-              <input type="checkbox" id="filter-near-ema200" /> 1h 200선 밀착만
-            </label>
             <label title="일정 주기로 자동 재스캔"><input type="checkbox" id="filter-autorefresh" /> 자동 갱신</label>
-            <div class="filter-checks-spacer"></div>
-            <button id="filter-apply" class="btn">필터 적용</button>
-            <button id="scan-btn" class="btn btn-primary">스캔 시작</button>
-            <button id="stop-btn" class="btn btn-danger" style="display:none">중단</button>
           </div>
-          <p class="hint">세부 조정과 각 기능 설명은 왼쪽 <b>설정</b> 탭에서 볼 수 있습니다. <b>전체 스캔</b>은 세 모드를 한 번씩 실행해 모드별로 묶어 보여줍니다. <b>급등 후 급락</b>은 SHORT 전용 실험 모드이며 점수는 급락 확률이 아닙니다.</p>
+          <details class="advanced-filters">
+            <summary>세부 필터 · 자금 설정</summary>
+            <div class="filter-grid filter-grid-advanced">
+              <label>시드머니 (1종목당)
+                <input id="filter-seed" type="number" min="0" step="100000" inputmode="numeric">
+              </label>
+              <label>레버리지
+                <select id="filter-leverage"></select>
+              </label>
+              <label>청산 방식
+                <select id="filter-partial">
+                  <option value="1">절반 먼저</option>
+                  <option value="0">목표까지 유지</option>
+                </select>
+              </label>
+              <label>단계
+                <select id="filter-stage">
+                  <option value="all">전체</option>
+                  <option value="1">1 매집</option>
+                  <option value="2">2 유동성 회수</option>
+                  <option value="3">3 구조전환</option>
+                  <option value="4">4 진입 구간</option>
+                  <option value="5">5 추격 금지</option>
+                </select>
+              </label>
+              <label>정렬
+                <select id="filter-sort">
+                  <option value="score">점수</option>
+                  <option value="change">하락률</option>
+                  <option value="volume">거래대금</option>
+                </select>
+              </label>
+            </div>
+            <div class="filter-checks">
+              <label><input type="checkbox" id="filter-exclude-new" /> 신규 종목 제외</label>
+              <label title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
+                <input type="checkbox" id="filter-golden-cross" /> 골든크로스 리테스트만
+              </label>
+              <label title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
+                <input type="checkbox" id="filter-near-ema200" /> 1h 200선 밀착만
+              </label>
+              <div class="filter-checks-spacer"></div>
+              <button id="filter-apply" class="btn">현재 결과에 적용</button>
+            </div>
+            <p class="hint">시드·레버리지·청산 방식은 표시 금액에만 반영됩니다. 자세한 기준 설명은 설정에서 확인할 수 있습니다.</p>
+          </details>
         </section>
 
         <!-- 결과 -->
         <section class="card results-card">
           <div class="card-head">
-            <h2>스캔 결과</h2>
+            <div>
+              <h2>후보</h2>
+              <p class="card-subtitle">상태를 먼저 확인하고, 상세에서 근거와 계획을 검토하세요.</p>
+            </div>
+            <div class="gate-legend" aria-label="검토 상태 설명">
+              <span class="badge badge-gate-review">검토 후보</span>
+              <span class="badge badge-gate-wait">확인 대기</span>
+              <span class="badge badge-gate-risk">리스크 높음</span>
+            </div>
           </div>
           <main id="results" class="results" aria-live="polite">
             <div class="empty">스캔을 시작하세요.</div>
@@ -189,7 +193,10 @@
         <!-- 페이퍼 트레이딩 (기록만 · 실제 주문 없음) -->
         <section class="card">
           <div class="card-head">
-            <h2>Forward Paper Ledger</h2>
+            <div>
+              <h2>모의 기록</h2>
+              <p class="card-subtitle">실제 주문 없이 후보 이후의 가격 경로를 기록합니다.</p>
+            </div>
             <div class="paper-actions">
               <button id="paper-export-json" class="btn-mini">JSON 백업</button>
               <button id="paper-export-csv" class="btn-mini">CSV 내보내기</button>

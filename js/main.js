@@ -22,14 +22,6 @@ function boot() {
   });
   document.getElementById("stop-btn")?.addEventListener("click", () => abortScan());
 
-  // 사이드바 — 기존 컨트롤을 대신 클릭/토글하는 얇은 위임 (중복 상태 없음)
-  document.querySelectorAll("[data-click]").forEach((btn) => {
-    btn.addEventListener("click", () => document.getElementById(btn.dataset.click)?.click());
-  });
-  document.querySelectorAll("[data-toggle]").forEach((btn) => {
-    btn.addEventListener("click", () => document.getElementById(btn.dataset.toggle)?.click());
-  });
-
   initTabs();
 
   // 오류 이벤트 → 토스트
@@ -65,7 +57,7 @@ function boot() {
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
 function initTabs() {
   const views = { overview: document.getElementById("view-overview"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "개요", settings: "설정" };
+  const titles = { overview: "시장 스캐너", settings: "설정" };
   const navBtns = document.querySelectorAll("[data-nav]");
   navBtns.forEach((btn) => btn.addEventListener("click", () => {
     const nav = btn.dataset.nav;

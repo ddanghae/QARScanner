@@ -32,7 +32,8 @@ function applyModeFilters(results, mode, s, unified) {
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
   let list = results.filter((r) => resultMode(r) === mode);
-  if (s.crtTbsOnly) list = list.filter((r) => crtMatchesCandidate(r));
+  // sweep_retest는 자체 5분 구조·BTC 확인을 포함하므로 별도 CRT 필터 대상이 아니다.
+  if (s.crtTbsOnly && mode !== "sweep_retest") list = list.filter((r) => crtMatchesCandidate(r));
 
   // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
   if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
@@ -66,7 +67,7 @@ function applyModeFilters(results, mode, s, unified) {
   // 사용자 정렬보다 먼저. 정렬 뒤에 자르면 "거래대금" 정렬이 순서가 아니라 보이는
   // 집합 자체를 바꿔(점수 최하위 5개만 남음) 정렬이 필터로 변한다.
   list.sort(sortFns.score);
-  const keepMax = pumpFade ? CONFIG.pumpFade.keepMax : early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop;
+  const keepMax = mode === "sweep_retest" ? CONFIG.sweepRetest.keepMax : pumpFade ? CONFIG.pumpFade.keepMax : early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop;
   list = list.slice(0, keepMax);
 
   // 정렬
@@ -81,16 +82,18 @@ export function modeControlModel(settings) {
   const all = mode === "all";
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
+  const sweep = mode === "sweep_retest";
   return {
     mode,
     all,
     early,
     pumpFade,
-    dedicated: early || pumpFade,
-    direction: pumpFade ? "short" : early ? "long" : String(settings?.direction || "long"),
+    sweep,
+    dedicated: early || pumpFade || sweep,
+    direction: pumpFade ? "short" : (early || sweep) ? "long" : String(settings?.direction || "long"),
     effectiveCut: minScoreFor(settings),
-    strictnessEnabled: all || (!early && !pumpFade),
-    moneyControlsEnabled: !pumpFade,
+    strictnessEnabled: all || (!early && !pumpFade && !sweep),
+    moneyControlsEnabled: !pumpFade && !sweep,
   };
 }
 
@@ -239,6 +242,7 @@ function setChk(id, v) { const el = document.getElementById(id); if (el) el.chec
 
 // 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계, 방향, 정렬, 점수/강도, 금액 표시.
 const STAGE_OPTIONS = {
+  sweep_retest: [["all", "전체"], ["1", "1 급락·매집"], ["2", "2 W·회수"], ["3", "3 구조전환"], ["4", "4 첫 눌림"], ["5", "5 확인 후보"]],
   all: [["all", "전체 모드 단계"]],
   reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
   early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 임박"], ["3", "3 돌파"]],
@@ -261,6 +265,7 @@ function syncModeControls(settings) {
     direction.disabled = model.dedicated;
     direction.value = model.direction;
     direction.title = model.pumpFade ? "급등 후 급락은 SHORT 전용입니다."
+      : model.sweep ? "스윕 후 첫 눌림은 LONG 전용입니다."
       : model.early ? "조기 포착은 LONG 전용입니다." : "";
   }
   const directionNote = document.getElementById("filter-direction-note");
@@ -271,11 +276,13 @@ function syncModeControls(settings) {
   }
 
   const sortEl = document.getElementById("filter-sort");
+  const scoreOpt = sortEl && [...sortEl.options].find((o) => o.value === "score");
   const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
+  if (scoreOpt) scoreOpt.textContent = model.all ? "모드별 기본 순위" : model.sweep ? "진행도" : "점수";
   if (changeOpt) {
-    changeOpt.disabled = model.early || model.all;
+    changeOpt.disabled = model.early || model.sweep || model.all;
     changeOpt.textContent = model.all ? "모드별 기본 순위" : model.pumpFade ? "급등률" : "하락률";
-    if (model.early && sortEl.value === "change") {
+    if ((model.early || model.sweep) && sortEl.value === "change") {
       sortEl.value = "score";
       updateSettings({ sort: "score" });
     }
@@ -288,11 +295,11 @@ function syncModeControls(settings) {
   const msEl = document.getElementById("filter-minscore");
   if (msEl) {
     msEl.disabled = model.dedicated;
-    msEl.title = model.dedicated ? `${model.mode} 전용 하한 ${model.effectiveCut}점을 씁니다.` : "";
+    msEl.title = model.sweep ? "점수 컷 없이 발생 순서를 판정합니다." : model.dedicated ? `${model.mode} 전용 하한 ${model.effectiveCut}점을 씁니다.` : "";
   }
   const msLabel = msEl?.closest("label");
   if (msLabel) {
-    msLabel.childNodes[0].nodeValue = model.all ? "급락 반등 최소 점수"
+    msLabel.childNodes[0].nodeValue = model.sweep ? "순서 판정 (점수 컷 없음)" : model.all ? "급락 반등 최소 점수"
       : model.dedicated
       ? `최소 점수 (${model.effectiveCut} 고정)` : "최소 점수";
   }
@@ -300,12 +307,13 @@ function syncModeControls(settings) {
   const strictness = document.getElementById("filter-strictness");
   if (strictness) {
     strictness.disabled = !model.strictnessEnabled;
-    strictness.title = model.strictnessEnabled ? "" : `${model.mode}는 검증된 고정 컷을 사용합니다.`;
+    strictness.title = model.sweep ? "실험적 고정 조건 · 수익성 미검증" : model.strictnessEnabled ? "" : `${model.mode}는 고정 컷을 사용합니다.`;
   }
   const strictnessNote = document.getElementById("filter-strictness-note");
   if (strictnessNote) {
     strictnessNote.hidden = model.strictnessEnabled;
-    strictnessNote.textContent = model.pumpFade
+    strictnessNote.textContent = model.sweep ? "마감봉만 사용 · 1~5는 순서 진행도이며 확률이 아닙니다."
+      : model.pumpFade
       ? "급등 후 급락은 실험 컷 45점을 고정 사용합니다."
       : "조기 포착은 검증 컷 40점을 고정 사용합니다.";
   }
@@ -314,7 +322,15 @@ function syncModeControls(settings) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.disabled = !model.moneyControlsEnabled;
-    el.title = model.moneyControlsEnabled ? "" : "pump_fade는 실험 신호만 제공하며 금액·레버리지 계산을 사용하지 않습니다.";
+    el.title = model.moneyControlsEnabled ? "" : model.sweep
+      ? "스윕 후 첫 눌림은 패턴 탐지 전용이며 진입·목표·금액 계산을 사용하지 않습니다."
+      : "pump_fade는 실험 신호만 제공하며 금액·레버리지 계산을 사용하지 않습니다.";
+  }
+
+  const crt = document.getElementById("filter-crt-tbs");
+  if (crt) {
+    crt.disabled = model.sweep;
+    crt.title = model.sweep ? "이 모드는 자체 5분 구조전환과 BTC 조건을 사용합니다." : "";
   }
 
   for (const id of [

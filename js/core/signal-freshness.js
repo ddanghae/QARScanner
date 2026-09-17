@@ -7,5 +7,15 @@ export function expireResult(r, now = Date.now()) {
   if (forecast?.available && (!Number.isFinite(forecast.expiresAt) || now >= forecast.expiresAt)) {
     forecast = { ...forecast, available: false, reason: "새 4시간 봉이 마감되었습니다. 재스캔 후 확률을 확인하세요." };
   }
-  return crtTbs === r.crtTbs && forecast === r.forecast ? r : { ...r, crtTbs, forecast };
+  let sweepRetest = r.sweepRetest;
+  let stage = r.stage;
+  let grade = r.grade;
+  if (sweepRetest?.confirmed && (!Number.isFinite(sweepRetest.expiresAt) || now >= sweepRetest.expiresAt)) {
+    sweepRetest = { ...sweepRetest, confirmed: false, status: "expired", label: "확인 신호 만료",
+      reason: "최초 5분봉 확인 후 15분이 지나 새 스캔이 필요합니다." };
+    stage = { ...stage, stage: 4, label: "확인 신호 만료", badge: "yellow" };
+    grade = { key: "watch", label: "확인 신호 만료" };
+  }
+  return crtTbs === r.crtTbs && forecast === r.forecast && sweepRetest === r.sweepRetest
+    ? r : { ...r, crtTbs, forecast, sweepRetest, stage, grade, score: sweepRetest ? stage.stage * 20 : r.score };
 }

@@ -16,6 +16,7 @@ import { forecastDirection } from "../core/direction-forecast.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
 import { evaluateCrtTbs } from "../core/crt-tbs.js";
 import { analyzeMarketRegime, regimeAlignment } from "../core/market-regime.js";
+import { findSweepBase, buildSweepResult } from "../core/sweep-retest.js";
 
 let abortToken = { aborted: false };
 
@@ -216,6 +217,32 @@ async function runReversalPipeline(universe, now, tickers, settings, market4h) {
   return mapWithProgress(candidates, (item) => deepAnalyze(item, settings, market4h));
 }
 
+async function runSweepPipeline(universe, now, tickers, settings, market4h) {
+  setPhase("prefilter");
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter, minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+  });
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  setPhase("candidate");
+  const evaluated = await mapWithProgress(prefiltered, async item => {
+    const h1 = await getKlines(item.symbol, "1h");
+    return { item, h1, base: findSweepBase(h1, now, CONFIG.sweepRetest) };
+  });
+  const candidates = evaluated.filter(x => x.base)
+    .sort((a, b) => b.base.endTime - a.base.endTime || a.item.symbol.localeCompare(b.item.symbol))
+    .slice(0, CONFIG.sweepRetest.keepMax);
+  state.candidates = candidates.map(x => x.item);
+  emit("scan:candidates", { count: candidates.length });
+  if (abortToken.aborted) return null;
+  setPhase("deep");
+  return mapWithProgress(candidates, async ({ item, h1 }) => {
+    const [m15, m5] = await Promise.all([getKlines(item.symbol, "15m", 260), getKlines(item.symbol, "5m", 200)]);
+    return buildSweepResult(item, { h1, m15, m5, btc4h: market4h, now, config: CONFIG.sweepRetest });
+  });
+}
+
 export function sortAndRankResults(results, requestedMode = "all") {
   return modesForScan(requestedMode).flatMap((mode) => {
     const comparator = mode === "pump_fade"
@@ -280,7 +307,9 @@ export async function runScan() {
       if (abortToken.aborted) return finishAborted();
       setCurrentMode(mode, i + 1, modes.length);
       try {
-        const results = mode === "early"
+        const results = mode === "sweep_retest"
+          ? await runSweepPipeline(universe, now, tickers, settings, market4h)
+          : mode === "early"
           ? await runEarlyPipeline(universe, now, tickers, settings, market4h)
           : mode === "pump_fade"
             ? await runPumpFadePipeline(universe, now, tickers, settings, market4h)
@@ -303,20 +332,24 @@ export async function runScan() {
     }
     // 후보만 추가 확인. 중복 심볼은 1회 분석하고 기존 캔들 캐시를 재사용한다.
     if (abortToken.aborted) return finishAborted();
-    setPhase("confirmation");
-    const symbolsToConfirm = [...new Set(combined.filter((r) => r && !r.skipped && !r.error).map((r) => r.symbol))];
+    const symbolsToConfirm = [...new Set(combined
+      .filter((r) => r && !r.skipped && !r.error && resultMode(r) !== "sweep_retest")
+      .map((r) => r.symbol))];
     const confirmations = new Map();
-    await mapWithProgress(symbolsToConfirm.map((symbol) => ({ symbol })), async ({ symbol }) => {
-      try {
-        const [h4, m5] = await Promise.all([getKlines(symbol, "4h"), getKlines(symbol, "5m")]);
-        confirmations.set(symbol, evaluateCrtTbs(h4, m5));
-      } catch {
-        confirmations.set(symbol, { available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "CRT 캔들 조회 실패" });
-      }
-      return { symbol };
-    });
+    if (symbolsToConfirm.length) {
+      setPhase("confirmation");
+      await mapWithProgress(symbolsToConfirm.map((symbol) => ({ symbol })), async ({ symbol }) => {
+        try {
+          const [h4, m5] = await Promise.all([getKlines(symbol, "4h"), getKlines(symbol, "5m")]);
+          confirmations.set(symbol, evaluateCrtTbs(h4, m5));
+        } catch {
+          confirmations.set(symbol, { available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "CRT 캔들 조회 실패" });
+        }
+        return { symbol };
+      });
+    }
     if (abortToken.aborted) return finishAborted();
-    for (const r of combined) if (r && !r.skipped && !r.error) r.crtTbs = confirmations.get(r.symbol);
+    for (const r of combined) if (r && !r.skipped && !r.error && resultMode(r) !== "sweep_retest") r.crtTbs = confirmations.get(r.symbol);
     return finishScan(combined, requestedMode);
   } catch (e) {
     console.error("스캔 실패", e);

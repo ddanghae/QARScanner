@@ -565,10 +565,26 @@
     - 라이브 reversal 스캔 523종목 → 정밀 후보 50 → 결과 3건에서 표와 상세창 확률·경계·
       주요 입력을 확인했고 콘솔 오류는 0건이었다.
 
+18. **선호 패턴 `sweep_retest` 통합 (2026-09-17)** — 사용자 매매 흐름을 네 번째 LONG 전용
+    스캐너로 구현했다. 과거 6시간 급락과 이후 20~40시간 저거래량 베이스를 분리한 뒤,
+    15분 W(스윕 또는 방어) → 3봉 이내 회수 → 거래량 동반 넥라인 돌파 → 정확한 첫 눌림 →
+    5분 직전 5봉 고점 돌파·거래량 재증가를 시간순으로만 인정한다.
+    - 모든 패턴 판정은 마감봉만 사용하고, 누락·중복·오래된 캔들은 추측하지 않는다.
+    - 회수 저점 재이탈, 거래량 없는 돌파, 첫 눌림 방어 실패, 두 번째 눌림 재사용,
+      추격 구간, BTC 최근 4시간 -3% 이하를 각각 명시적 제외 사유로 남긴다.
+    - EMA20/50·BB 중심·UTC 일간 VWAP·미충족 FVG·마지막 음봉 OB 후보는 보조 겹침으로만
+      표시한다. 캔들만으로 실제 세력 매집이나 기관 OB를 단정하지 않는다.
+    - 단계는 1~5 진행도이며 0~100 성공 점수와 분리했다. 진입·TP·금액·레버리지·페이퍼 기록은
+      만들지 않고, 최초 5분 확인은 15분 후 만료한다.
+    - 기존 전체 스캔을 4개 모드로 확장하고 1H 후보 선별 뒤에만 15m/5m를 요청한다.
+      sweep 후보는 자체 BTC/5분 확인을 사용하므로 별도 CRT 재조회에서 제외했다.
+    - 과거 백테스트나 수익성 검증은 수행하지 않았다. 결정적 합성 캔들로 순서, 방어형 W,
+      회수/거래량 실패, 두 번째 눌림, BTC 차단, 미래 봉 불변, 데이터 공백, TTL을 회귀 검사한다.
+
 ## 검증 상태
 
-- **현재 테스트 169/169 통과** — `node tests/run.js`. 기존 162개에 방향 전망 7개
-  (미래 참조 방지, 경계, 라벨 모호성, 확률 합, 실패-폐쇄, 후보 모델 추론, 배포 게이트)를 더했다.
+- **현재 테스트 216/216 통과** — `node tests/run.js`. 기존 회귀에 sweep_retest 10개
+  (발생 순서, 방어형 W, 실패-폐쇄, 첫 눌림 고정, BTC 차단, 미래 봉 불변, TTL)를 포함한다.
 - **통합 전 기준선 118/118 통과** — indicators, structure, liquidity, scoring,
   goldenCross, noise, early, repaint, refresh, correlation, paper 11개 스위트.
 - **재현 스크립트 2개** — 둘 다 `research/` 안에서 실행해야 한다(상대 경로).
@@ -602,7 +618,7 @@
 ```bash
 git clone https://github.com/ddanghae/QARScanner.git
 cd QARScanner
-node tests/run.js          # 테스트 확인 (169/169 나와야 정상)
+node tests/run.js          # 테스트 확인 (216/216 나와야 정상)
 python -m http.server 8123 # 로컬 미리보기 (ES 모듈이라 file://로는 안 열림)
 # 브라우저에서 http://localhost:8123/ 접속
 ```
@@ -619,7 +635,7 @@ js/
   api/binance.js
   core/  indicators.js volume-analysis.js market-structure.js liquidity.js
          fvg.js order-block.js risk-reward.js scoring.js
-         golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js correlation.js
+         golden-cross-retest.js noise-filter.js early-detect.js pump-fade.js sweep-retest.js correlation.js
          direction-forecast.js direction-model-params.js
   scanner/  prefilter.js deep-scanner.js scan-controller.js
   ui/  dashboard.js detail-panel.js settings.js notifications.js tradingview.js format.js
@@ -627,7 +643,7 @@ js/
 tests/
   harness.js fixtures.js run.js index.html
   indicators.test.js structure.test.js liquidity.test.js scoring.test.js
-  golden-cross.test.js noise.test.js early-detect.test.js
+  golden-cross.test.js noise.test.js early-detect.test.js sweep-retest.test.js
   repaint.test.js refresh.test.js paper-corr.test.js
 pine/  qar_scanner_sync_indicator.pine   (트레이딩뷰 동기화 지표. 모드 2 = early)
 docs/  펌프예측_연구정리.md               (11~12번의 원자료 정리 — 수치 출처)

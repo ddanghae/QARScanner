@@ -19,6 +19,7 @@ import { run as directionForecast } from "./direction-forecast.test.js";
 import { run as crtTbs } from "./crt-tbs.test.js";
 import { run as marketRegime } from "./market-regime.test.js";
 import { run as decisionGate } from "./decision-gate.test.js";
+import { run as sweepRetest } from "./sweep-retest.test.js";
 
 export function runAll() {
   reset();
@@ -40,6 +41,7 @@ export function runAll() {
   crtTbs();
   marketRegime();
   decisionGate();
+  sweepRetest();
   return report();
 }
 

@@ -96,11 +96,12 @@ export function showDetail(r) {
   });
 }
 
-function renderDetail(r) {
+export function renderDetail(r) {
   const p = r.plan;
   const mode = resultMode(r);
   const modeMeta = SCAN_MODE_META[mode];
   const isPumpFade = mode === "pump_fade";
+  const isSweep = mode === "sweep_retest";
   const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
   const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
@@ -113,7 +114,7 @@ function renderDetail(r) {
         <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
         <h2>${escapeHtml(r.symbol)}</h2>
         <span class="badge badge-mode badge-mode-${modeMeta.badge}">${modeMeta.label}</span>
-        <span class="score-pill score-${r.grade.key}">${isPumpFade ? "실험 점수 " : ""}${r.score}</span>
+        <span class="score-pill score-${r.grade.key}">${isSweep ? `진행 ${r.stage.stage}/5` : `${isPumpFade ? "실험 점수 " : ""}${r.score}`}</span>
         ${dirBadge}
       </div>
       <div class="detail-sub">
@@ -134,10 +135,10 @@ function renderDetail(r) {
 
     ${decisionGateSection(r)}
 
-    ${forecastSection(r)}
-    ${crtSection(r)}
+    ${isSweep ? "" : forecastSection(r)}
+    ${isSweep ? "" : crtSection(r)}
 
-    <section class="detail-section">
+    ${isSweep ? sweepRetestSection(r) : `<section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>
@@ -151,12 +152,12 @@ function renderDetail(r) {
       ${isPumpFade ? '<p class="muted">pump_fade는 공개 데이터 기반 실험 신호만 제공하며 금액·레버리지·청산 계산을 적용하지 않습니다.</p>' : moneySection(p)}
       ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
       ${isPumpFade ? '<p class="plan-note">초기 임계값과 가중치이며 성공 확률이나 기대수익률로 해석할 수 없습니다.</p>' : ""}
-    </section>
+    </section>`}
 
     ${tfSection(r)}
 
     <section class="detail-section">
-      <h3>점수 근거</h3>
+      <h3>${isSweep ? "패턴 순서" : "점수 근거"}</h3>
       <ul class="breakdown">
         ${r.breakdown.map((b) => `<li class="${b.hit ? "hit" : "miss"}"><span>${escapeHtml(b.label)}</span><span>${b.got}/${b.weight}</span></li>`).join("")}
         ${r.penalties.map((p) => `<li class="penalty"><span>${escapeHtml(p.label)}</span><span>${p.val}</span></li>`).join("")}
@@ -169,6 +170,33 @@ function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
+}
+
+export function sweepRetestSection(r) {
+  const s = r?.sweepRetest || {};
+  const b = s.base || {};
+  const levels = s.levels || {};
+  const time = value => Number.isFinite(value)
+    ? new Date(value).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "-";
+  const events = (s.events || []).map(event => `<li><b>${escapeHtml(event.label)}</b><span>${time(event.time)}</span></li>`).join("");
+  const confluence = (s.confluence || []).length
+    ? s.confluence.map(x => `<span class="badge badge-blue">${escapeHtml(x)}</span>`).join(" ")
+    : '<span class="muted">겹치는 보조 구간 없음 — 필수 조건은 아님</span>';
+  return `<section class="detail-section">
+    <h3>스윕 후 첫 눌림 탐지 <small>(마감봉 순서 판정)</small></h3>
+    <p><b>${escapeHtml(s.label || "판정 보류")}</b> · ${escapeHtml(s.reason || "자료가 부족합니다.")}</p>
+    <ul class="decision-checks">${events || '<li class="decision-info"><span>아직 확정된 이벤트가 없습니다.</span></li>'}</ul>
+    <table class="plan-table">
+      <tr><td>선행 급락</td><td>${Number.isFinite(b.drop) ? b.drop.toFixed(1) + "%" : "-"}</td></tr>
+      <tr><td>저거래량 횡보</td><td>${b.bars || "-"}시간 · 급락 구간 대비 ${Number.isFinite(b.volumeRatio) ? (b.volumeRatio * 100).toFixed(0) + "%" : "-"}</td></tr>
+      <tr><td>기준 지지</td><td>${fmtPrice(levels.support ?? b.support)}</td></tr>
+      <tr><td>W 넥라인</td><td>${fmtPrice(levels.neckline)}</td></tr>
+      <tr><td>스윕 저점</td><td>${fmtPrice(levels.sweepLow)}</td></tr>
+      <tr><td>확인 만료</td><td>${time(s.expiresAt)}</td></tr>
+    </table>
+    <p class="muted">보조 겹침: ${confluence}</p>
+    <p class="plan-note">초기 규칙: 6시간 -15% 이하 · 20~40시간 횡보 · 횡보 폭 8% 이하 · 거래량 65% 이하 · 3개 15분봉 내 회수 · 돌파/5분 거래량 1.5배. 수익성 검증값이 아니며 진입가·목표가·포지션 크기를 만들지 않습니다.</p>
+  </section>`;
 }
 
 function decisionGateSection(r) {

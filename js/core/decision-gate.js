@@ -24,6 +24,8 @@ export function buildDecisionGate(result, now = Date.now()) {
   const mode = resultMode(result);
   const direction = result?.direction === "short" ? "short" : "long";
 
+  if (mode === "sweep_retest") return buildSweepGate(result, now);
+
   if (validGeometry(result)) {
     checks.push(item("plan", "pass", "계획 유효", "진입·손절·목표의 방향과 거리가 유효합니다."));
   } else {
@@ -96,6 +98,28 @@ export function buildDecisionGate(result, now = Date.now()) {
     checks,
     note: "후보 검토 체크리스트이며 매수·매도 지시나 성공 확률이 아닙니다.",
   };
+}
+
+function buildSweepGate(result, now) {
+  const p = result?.sweepRetest || {};
+  const expired = p.confirmed && (!finite(p.expiresAt) || now >= p.expiresAt);
+  const stage = expired ? 4 : Number(p.stage || result?.stage?.stage || 0);
+  const labels = ["급락 뒤 저거래량 매집", "15분 W·스윕·회수", "넥라인 돌파·거래량", "첫 눌림·Higher Low", "5분 전환·BTC 방어"];
+  const checks = labels.map((label, i) => item(`pattern-${i + 1}`, stage > i ? "pass" : i === stage ? "warn" : "info",
+    stage > i ? label : `${label} 대기`, stage > i ? "발생 순서와 마감봉 조건을 충족했습니다." : "앞 단계가 끝난 뒤에만 판정합니다."));
+  const statusKey = expired ? "expired" : p.status;
+  if (["invalid", "blocked"].includes(statusKey)) {
+    checks.push(item("pattern-state", "block", p.label || "패턴 제외", p.reason || "무효화 조건이 발생했습니다."));
+  } else if (["unavailable", "expired"].includes(statusKey)) {
+    checks.push(item("pattern-state", "warn", p.label || "판정 보류", p.reason || "새 마감봉으로 다시 스캔해야 합니다."));
+  }
+  const blockers = checks.filter(x => x.level === "block").length;
+  const warnings = checks.filter(x => x.level === "warn").length;
+  const passes = checks.filter(x => x.level === "pass").length;
+  const status = blockers ? "risk" : p.confirmed && !expired ? "review" : "wait";
+  return { status, label: status === "risk" ? "패턴 제외" : status === "review" ? "검토 후보" : "순서 대기",
+    blockers, warnings, passes, checks,
+    note: "1~5는 패턴 진행도이며 점수·성공 확률·매수 지시가 아닙니다." };
 }
 
 export default { buildDecisionGate };

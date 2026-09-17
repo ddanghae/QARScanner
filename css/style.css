@@ -219,7 +219,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 @media (max-width: 640px) { .paper-kpis { grid-template-columns:repeat(2, 1fr); } }
 
 /* 점수/등급 pill */
-.score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 3px 8px; border-radius: 8px; font-weight: 700; color: #fff; }
+.score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 3px 8px; border-radius: 8px; font-weight: 700; color: #fff; white-space: nowrap; }
 .score-strong { background: var(--strong); } .score-watch { background: var(--watch); }
 .score-observe { background: var(--observe); } .score-weak { background: var(--weak); } .score-excluded { background: var(--excluded); }
 
@@ -242,6 +242,7 @@ svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
 .badge-mode-reversal { background: #e0f2fe; color: #0369a1; }
 .badge-mode-early { background: #dcfce7; color: #15803d; }
 .badge-mode-pump-fade { background: #fee2e2; color: #b91c1c; }
+.badge-mode-sweep { background: #ede9fe; color: #6d28d9; }
 html.dark .badge-blue { background: #2a2864; color: #b3adff; }
 html.dark .badge-green { background: #113d2a; color: #63e0a5; }
 html.dark .badge-yellow { background: #3d3413; color: #ffcf6b; }
@@ -253,6 +254,10 @@ html.dark .badge-noise { background: #2a2e36; color: #9aa3af; }
 html.dark .badge-mode-reversal { background: #12344a; color: #7dd3fc; }
 html.dark .badge-mode-early { background: #153c27; color: #86efac; }
 html.dark .badge-mode-pump-fade { background: #472020; color: #fca5a5; }
+html.dark .badge-mode-sweep { background: #30245a; color: #c4b5fd; }
+
+.plan-stack.plan-stack-wrap { white-space: normal; min-width: 150px; }
+.plan-stack.plan-stack-wrap small { line-height: 1.45; }
 
 .dir { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
 .dir-long { background: rgba(18,153,91,.15); color: var(--up); }

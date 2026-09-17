@@ -9,8 +9,8 @@ const defaultSettings = {
   minScore: 30,              // 채점 강도 3(기본)과 같은 값 — grades 의 "관찰 후보" 경계
   minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
   direction: "long",         // "long" | "short" | "both"
-  scanMode: "reversal",      // "all" | "reversal" | "early" | "pump_fade"(SHORT 전용)
-  stageFilter: "all",        // reversal 1~5, early/pump_fade 1~3 또는 all
+  scanMode: "reversal",      // "all" | "reversal" | "early" | "pump_fade" | "sweep_retest"
+  stageFilter: "all",        // 모드별 단계 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
   favorites: [],             // 관심 종목 심볼 배열

@@ -239,6 +239,26 @@ export const CONFIG = {
     { min: 0, label: "제외", key: "excluded" },
   ],
 
+  // ---- 스윕 후 첫 눌림 (LONG 전용, 순서 탐지) ----
+  // 성과 최적화값이 아니라 사용자가 설명한 패턴을 수치화한 초기 가정이다.
+  // 점수 대신 단계 진행도로 표시하며, 진입가·목표가·포지션 크기는 만들지 않는다.
+  sweepRetest: {
+    crashPct: -15,
+    baseMin: 20,
+    baseMax: 40,
+    baseRangePct: 8,
+    quietRatio: 0.65,
+    sweepDepthPct: 2,
+    defendPct: 1,
+    reclaimBars: 3,
+    volumeRatio: 1.5,
+    retestBandPct: 0.8,
+    setupHours: 12,
+    triggerMinutes: 15,
+    btcDropPct: -3,
+    keepMax: 20,
+  },
+
   // 손익 금액 표시에 빼는 왕복 비용 %. 백테스트와 같은 값(테이커 0.05% + 슬리피지 0.05%, 양쪽).
   // 빼지 않으면 화면 금액이 백테스트보다 좋게 나와 두 숫자가 서로 안 맞는다.
   tradeCostRoundTripPct: 0.2,
@@ -417,6 +437,7 @@ export function strictnessPreset(level) {
 
 // 모드별 점수 척도가 다르므로 표시 하한을 한 곳에서 결정한다.
 export function minScoreFor(settings) {
+  if (settings?.scanMode === "sweep_retest") return 0; // 순서 진행도이며 점수 컷 아님
   if (settings?.scanMode === "early") return CONFIG.earlyMinScore;
   if (settings?.scanMode === "pump_fade") return CONFIG.pumpFade.minScore;
   return Number.isFinite(settings?.minScore) ? settings.minScore : strictnessPreset(3).minScore;

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quality,aggregate,STEP,DAY,validateConfig } from './data.mjs';
 import { simulate,summarize,splits } from './engine.mjs';
-import { prefix,windows,candidates } from './strategies.mjs';
+import { prefix,windows,candidates,isNew4hClose } from './strategies.mjs';
 import { CONFIG } from '../../js/config.js';
 import { buildEarlyMetrics } from '../../js/core/early-detect.js';
 import { analyzeCandles } from '../../js/scanner/deep-scanner.js';
@@ -96,6 +96,12 @@ test('early freshness uses the simulated clock, not current date',()=>{
   const now=240*48*STEP;
   const m=buildEarlyMetrics(rows,[],null,{onboardDate:1,change24h:5,quoteVolume:1e8},CONFIG,now);
   assert.ok(Math.abs(m.ageDays-(now-1)/DAY)<1e-9);
+});
+test('early candidates only fire once at a new 4h close',()=>{
+  const rows=Array.from({length:240*48},(_,i)=>bar(i));
+  const k4h=aggregate(rows,48*STEP),close=k4h.at(-1).closeTime;
+  assert.equal(isNew4hClose(k4h,close+1),true);
+  assert.equal(isNew4hClose(k4h,close+1+STEP),false);
 });
 test('reversal core remains deterministic with explicitly supplied time',()=>{
   const rows=Array.from({length:240*48},(_,i)=>bar(i,100+Math.sin(i/50),106+Math.sin(i/50),95+Math.sin(i/50),101+Math.sin(i/50)));

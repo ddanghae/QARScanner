@@ -1,0 +1,30 @@
+{
+  "name": "altcoin-15-2026h1",
+  "symbols": [
+    "ADAUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
+    "LTCUSDT",
+    "NEARUSDT",
+    "APTUSDT",
+    "ARBUSDT",
+    "OPUSDT",
+    "INJUSDT",
+    "SUIUSDT",
+    "UNIUSDT",
+    "ATOMUSDT",
+    "FILUSDT",
+    "SEIUSDT"
+  ],
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-09-01T00:00:00Z",
+  "warmupDays": 40,
+  "evaluationMinutes": 5,
+  "holdHours": 24,
+  "feeBpsPerSide": 5,
+  "slippageBpsPerSide": 5,
+  "splitFractions": [0.6, 0.2, 0.2],
+  "reversalMinScore": 30,
+  "minResolvedTrades": 30
+}

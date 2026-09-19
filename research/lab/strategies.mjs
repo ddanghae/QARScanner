@@ -15,9 +15,16 @@ export function windows(series,now) {
   return Object.fromEntries(['5m','15m','1h','4h'].map(tf=>['k'+tf,prefix(series['k'+tf],now,CONFIG.klinesLimit[tf])]));
 }
 
+export function isNew4hClose(k4h,now) {
+  return k4h.at(-1)?.closeTime + 1 === now;
+}
+
 export function candidates(symbol,meta,w,now,config) {
   const {k4h,k1h,k15m,k5m}=w;
   if(k4h.length<220 || k1h.length<25) return [];
+  // 조기포착은 4시간 마감봉의 정보로 계산한다. 같은 마감봉이 남아 있는
+  // 다음 5분 평가에서 같은 신호를 다시 만들면 과거 성능과 거래 수가 부풀려진다.
+  const new4hClose = isNew4hClose(k4h,now);
   const bars=k1h.slice(-24), price=k5m.at(-1)?.close;
   const onboard=meta.onboardDate;
   const item={symbol,baseAsset:symbol.replace(/USDT$/,''),onboardDate:onboard,
@@ -36,7 +43,7 @@ export function candidates(symbol,meta,w,now,config) {
     const pump=buildPumpFadeResult(item,k1h,k15m,k5m,CONFIG);
     if(pump?.score>=CONFIG.pumpFade.minScore && pump.plan.valid) base.push(pump);
   }
-  if(liquid && item.quoteVolume>=CONFIG.earlyDetect.minQuoteVolume && !CONFIG.earlyDetect.excludeMajors.includes(item.baseAsset)) {
+  if(new4hClose && liquid && item.quoteVolume>=CONFIG.earlyDetect.minQuoteVolume && !CONFIG.earlyDetect.excludeMajors.includes(item.baseAsset)) {
     const early=buildEarlyResult(item,k4h,[],null,CONFIG,now);
     if(early?.score>=CONFIG.earlyMinScore) base.push(early);
   }

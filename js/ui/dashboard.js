@@ -178,13 +178,7 @@ function emptyMessage() {
   // 단계 이름은 모드마다 달라 라벨을 붙이면 한쪽이 거짓이 된다(reversal 은 압축·박스가 아니라 급락·RSI).
   const funnel = `깔때기 ${state.universe.length} → ${state.prefiltered.length}`
     + ` → ${state.candidates.length} → ${state.results.length}`;
-  const why = state.settings.scanMode === "early"
-    ? `조기 포착은 14일 추세·24시간 변동·최근 상장으로 채점해 ${CONFIG.earlyMinScore}점 이상만 보여줍니다.`
-    : state.settings.scanMode === "pump_fade"
-      ? `급등 후 급락은 1h 급등 뒤 거절·소진·구조 붕괴 근거가 ${CONFIG.pumpFade.minScore}점 이상인 SHORT 후보만 보여줍니다.`
-      : state.settings.scanMode === "sweep_retest"
-        ? "마감봉 기준으로 급락 → 20~40시간 매집 → 15분 W·회수 → 넥라인 돌파 → 첫 눌림 → 5분 확인 순서를 기다립니다."
-      : "필터를 완화하거나 채점 강도를 낮춰보세요.";
+  const why = `조기 포착은 잠재력 ${CONFIG.earlyMinScore}점 이상만 보여주고, 준비도와 위험도를 따로 확인합니다.`;
   return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
 }
 
@@ -196,7 +190,7 @@ const isSweep = (r) => resultMode(r) === "sweep_retest";
 const scoreLabel = (r) => isSweep(r) ? `진행 ${r.stage.stage}/5` : String(r.score);
 
 function modeBadge(mode) {
-  const meta = SCAN_MODE_META[mode] || SCAN_MODE_META.reversal;
+  const meta = SCAN_MODE_META[mode] || SCAN_MODE_META.early;
   return `<span class="badge badge-mode badge-mode-${meta.badge}">${meta.label}</span>`;
 }
 
@@ -307,9 +301,24 @@ function decisionGateBadge(r) {
   return `<span class="badge badge-gate-${gate.status}" title="${escapeHtml(title)}">${escapeHtml(gate.label)}</span>`;
 }
 
+function earlyAxisBadges(r) {
+  const a = r?.earlyAxes;
+  if (!a) return "";
+  const riskKey = a.risk.score >= 75 ? "green" : a.risk.score >= 50 ? "yellow" : "red";
+  return `<span class="badge badge-blue" title="검증된 7일 급등 잠재력 점수">잠재력 ${a.potential.score}</span>`
+    + `<span class="badge badge-purple" title="방향·상단 접근·거래량·변동성의 현재 준비 상태이며 확률이 아닙니다">준비도 ${a.readiness.score}</span>`
+    + `<span class="badge badge-${riskKey}" title="100에 가까울수록 관찰 위험이 낮습니다. 성공 확률이 아닙니다">위험 ${a.risk.label}</span>`;
+}
+
+function sweepConfirmationBadge(r) {
+  const s = r?.earlyConfirmation?.sweepRetest;
+  if (!s?.confirmed) return "";
+  return `<span class="badge badge-green" title="${escapeHtml(s.reason || "발생 순서를 충족했습니다.")}">첫 눌림 확인</span>`;
+}
+
 function candidateTags(r) {
   return `${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>`
-    + `${regimeBadge(r)}${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}${crtBadge(r)}`;
+    + `${earlyAxisBadges(r)}${regimeBadge(r)}${sweepConfirmationBadge(r)}${corrBadge(r)}${crtBadge(r)}`;
 }
 
 function rowHtml(r) {

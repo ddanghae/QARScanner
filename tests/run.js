@@ -10,7 +10,6 @@ import { run as noise } from "./noise.test.js";
 import { run as earlyDetect } from "./early-detect.test.js";
 import { run as pumpFade } from "./pump-fade.test.js";
 import { run as pumpFadeResearch } from "./pump-fade-research.test.js";
-import { run as pumpFadeUi } from "./pump-fade-ui.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
@@ -32,7 +31,6 @@ export function runAll() {
   earlyDetect();
   pumpFade();
   pumpFadeResearch();
-  pumpFadeUi();
   repaint();
   refresh();
   paperCorr();

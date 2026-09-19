@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0b1220" />
   <meta name="description" content="시장국면과 실제 결과를 함께 추적하는 Binance USDⓈ-M Futures 후보 스캐너" />
-  <title>QAR Scenario Scanner</title>
+  <title>QAR Early Scanner</title>
   <link rel="stylesheet" href="./css/style.css" />
   <link rel="manifest" href="./manifest.webmanifest" />
 </head>
@@ -18,7 +18,7 @@
         <span class="side-logo">Q</span>
         <div class="side-brand-text">
           <strong>QAR</strong>
-          <small>Scenario Scanner</small>
+          <small>Early Scanner</small>
         </div>
       </div>
       <div class="side-nav">
@@ -47,7 +47,7 @@
       <!-- 톱바 -->
       <header class="topbar">
         <div class="topbar-title">
-          <h1>시장 스캐너</h1>
+          <h1>조기포착 스캐너</h1>
           <span class="tagline">후보를 찾고 위험 조건을 먼저 확인합니다</span>
         </div>
         <div class="topbar-actions">
@@ -80,32 +80,23 @@
           <div class="filter-grid filter-grid-primary">
             <label>스캔 모드
               <select id="filter-scanmode">
-                <option value="all">전체 스캔 (4개 모드)</option>
-                <option value="reversal">급락 반등 (기본)</option>
-                <option value="early">조기 포착 (오르기 전)</option>
-                <option value="pump_fade">급등 후 급락 (숏)</option>
-                <option value="sweep_retest">스윕 후 첫 눌림 (롱)</option>
+                <option value="early">조기 포착</option>
               </select>
             </label>
             <label>방향
               <select id="filter-direction">
                 <option value="long">롱 후보</option>
-                <option value="short">숏 후보</option>
-                <option value="both">양방향</option>
               </select>
               <small id="filter-direction-note" hidden></small>
             </label>
-            <label>최소 점수
+            <label>잠재력 하한
               <select id="filter-minscore">
-                <option value="20">20+ (조건 부족)</option>
-                <option value="25">25+</option>
-                <option value="30">30+ (관찰 후보)</option>
-                <option value="40">40+ (관심 후보)</option>
-                <option value="55">55+ (강한 후보)</option>
+                <option value="40">40+ (검증값 고정)</option>
               </select>
             </label>
             <label>최소 거래대금
               <select id="filter-minvolume">
+                <option value="5000000">5M</option>
                 <option value="10000000">10M</option>
                 <option value="20000000">20M</option>
                 <option value="50000000">50M</option>
@@ -119,7 +110,7 @@
           </div>
           <div class="quick-filters" aria-label="빠른 필터">
             <label><input type="checkbox" id="filter-favorites-only" /> 관심 종목만</label>
-            <label title="기존 후보와 방향이 같은 4h 범위 이탈·복귀 + 5m 전환 확인만 표시. 실험 규칙이며 재스캔 시 갱신됩니다.">
+            <label title="조기포착 후보와 같은 LONG 방향의 4h 범위 이탈·복귀 + 5m 전환 확인만 표시. 실험 규칙이며 재스캔 시 갱신됩니다.">
               <input type="checkbox" id="filter-crt-tbs" /> CRT + TBS 확인만
             </label>
             <label><input type="checkbox" id="filter-exclude-chase" /> 추격 금지 제외</label>
@@ -143,29 +134,22 @@
               <label>단계
                 <select id="filter-stage">
                   <option value="all">전체</option>
-                  <option value="1">1 매집</option>
-                  <option value="2">2 유동성 회수</option>
-                  <option value="3">3 구조전환</option>
-                  <option value="4">4 진입 구간</option>
+                  <option value="1">1 관찰</option>
+                  <option value="2">2 준비</option>
+                  <option value="3">3 임박</option>
+                  <option value="4">4 확인 후보</option>
                   <option value="5">5 추격 금지</option>
                 </select>
               </label>
               <label>정렬
                 <select id="filter-sort">
                   <option value="score">점수</option>
-                  <option value="change">하락률</option>
                   <option value="volume">거래대금</option>
                 </select>
               </label>
             </div>
             <div class="filter-checks">
               <label><input type="checkbox" id="filter-exclude-new" /> 신규 종목 제외</label>
-              <label title="4시간봉 골든크로스 후 50·200선 리테스트에서 거부 캔들까지 확인된 것만">
-                <input type="checkbox" id="filter-golden-cross" /> 골든크로스 리테스트만
-              </label>
-              <label title="1시간봉 종가가 200일선(EMA200)에 붙어있는 종목만">
-                <input type="checkbox" id="filter-near-ema200" /> 1h 200선 밀착만
-              </label>
               <div class="filter-checks-spacer"></div>
               <button id="filter-apply" class="btn">현재 결과에 적용</button>
             </div>
@@ -220,51 +204,11 @@
               <span class="set-label">현재 모드</span>
               <span class="tagline">위 필터 바의 "스캔 모드"에서 변경</span>
             </div>
-            <p class="set-help"><b>전체 스캔</b>은 네 모드를 한 번씩 순차 실행합니다. <b>급락 반등</b>은 크게 떨어진 코인의 되돌림, <b>조기 포착</b>은 관찰 → 임박 → 돌파, <b>급등 후 급락</b>은 SHORT 전환을 찾습니다. <b>스윕 후 첫 눌림</b>은 급락·매집 → 15분 W·회수 → 구조전환 → 첫 눌림 → 5분 확인을 순서대로 판정하는 LONG 전용 실험 모드입니다.</p>
+            <p class="set-help"><b>조기 포착</b>은 상승 가능성이 있는 소수 후보를 관찰 → 준비 → 임박 → 확인 → 추격 금지로 나눕니다. 첫 눌림과 CRT + TBS는 별도 스캐너가 아니라 후보를 검토하는 추가 확인으로 표시합니다.</p>
           </div>
         </section>
-        <section class="card settings-group">
-          <div class="card-head"><h2>채점 강도</h2></div>
-          <div class="set-row">
-            <div class="set-control">
-              <label for="filter-strictness">강도 (1~5)</label>
-              <select id="filter-strictness">
-                <option value="1">1 · 아주 널널하게 (코인 많이)</option>
-                <option value="2">2 · 널널하게</option>
-                <option value="3">3 · 기본 (권장)</option>
-                <option value="4">4 · 엄격하게</option>
-                <option value="5">5 · 아주 엄격하게 (확실한 것만)</option>
-              </select>
-              <small id="filter-strictness-note" hidden></small>
-            </div>
-            <p class="set-help">채점을 얼마나 깐깐하게 할지 정합니다. <b>숫자가 낮을수록</b> 조건을 느슨하게 봐서 <b>더 많은 코인</b>이 목록에 나오고, <b>높을수록</b> 확실한 것만 남겨 <b>적게</b> 나옵니다. 스캔 결과가 너무 적으면 숫자를 내리세요.</p>
-          </div>
-        </section>
-
         <section class="card settings-group">
           <div class="card-head"><h2>특별 조건 켜기 / 끄기</h2></div>
-
-          <div class="set-row">
-            <div class="set-control">
-              <label class="switch-label"><input type="checkbox" id="set-golden-cross" /> 골든크로스 리테스트만 보기</label>
-            </div>
-            <p class="set-help">4시간봉에서 <b>50일선이 200일선을 위로 뚫은 뒤</b>, 되돌림에서 그 선을 다시 밟고 <b>위로 찔렀다 꺾이는 거부 캔들</b>이 나온 자리만 보여줍니다. 상승 추세 초입을 노릴 때 켜세요. (조건이 까다로워 매우 적게 나옵니다.)</p>
-          </div>
-
-          <div class="set-row">
-            <div class="set-control">
-              <label class="switch-label"><input type="checkbox" id="set-near-ema200" /> 1시간봉 200일선 밀착만 보기</label>
-            </div>
-            <p class="set-help">1시간봉 가격이 <b>200일선에 딱 붙어있는</b> 코인만 보여줍니다. 200일선에서 튕기는 지지·저항 반응을 노릴 때 켜세요.</p>
-          </div>
-
-          <div class="set-row">
-            <div class="set-control">
-              <label for="set-ema200-ratio">200선 밀착 민감도</label>
-              <input type="number" id="set-ema200-ratio" min="0.1" max="3" step="0.1" />
-            </div>
-            <p class="set-help">위 "200선 밀착"을 얼마나 넓게 볼지입니다(ATR 배수). <b>숫자가 크면</b> 조금 멀어도 밀착으로 봐서 <b>코인이 많아지고</b>, <b>작으면</b> 아주 딱 붙은 것만 봅니다. 기본 0.5.</p>
-          </div>
 
           <div class="set-row">
             <div class="set-control">
@@ -280,12 +224,6 @@
             <p class="set-help">상장한 지 얼마 안 돼 <b>과거 데이터가 부족한</b> 코인을 뺍니다. 계산이 불안정한 신규 코인을 피할 때 켜세요.</p>
           </div>
 
-          <div class="set-row">
-            <div class="set-control">
-              <label class="switch-label"><input type="checkbox" id="set-filter-noise" /> 잡신호(노이즈) 걸러내기</label>
-            </div>
-            <p class="set-help">방향 없이 <b>톱니처럼 오르내리는 횡보 구간</b>이나 <b>거래가 거의 없는</b> 코인의 신호를 뺍니다. 후보 조건을 넉넉하게 잡는 대신, 되돌림에 쉽게 뒤집히는 <b>믿기 어려운 신호를 제거</b>하는 장치입니다. 켜두는 걸 권장합니다(기본 켜짐).</p>
-          </div>
         </section>
 
         <section class="card settings-group">

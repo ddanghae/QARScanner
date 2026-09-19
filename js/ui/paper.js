@@ -153,7 +153,7 @@ export function buildPaperRecord(result, settings = state.settings, now = Date.n
     symbol: result.symbol,
     at: now,
     status: "open",
-    scanMode: result.scanMode || result.mode || "reversal",
+    scanMode: result.scanMode || result.mode || "early",
     direction,
     entry,
     stop,
@@ -363,7 +363,7 @@ function rowHtml({ rec, res, snapshots }) {
   const outcome = finite(netR)
     ? `${label} · ${netR >= 0 ? "+" : ""}${netR.toFixed(2)}R${finite(money) ? ` · ${money >= 0 ? "+" : ""}${fmtWon(money)}` : ""}`
     : label;
-  const mode = { early: "조기", pump_fade: "펌프페이드", reversal: "반등" }[rec.scanMode] || rec.scanMode || "기존";
+  const mode = { early: "조기포착" }[rec.scanMode] || rec.scanMode || "조기포착";
   const direction = directionOf(rec).toUpperCase();
   const regime = rec.marketRegime?.label || "미기록";
   const gate = rec.decisionGate?.label || "미기록";

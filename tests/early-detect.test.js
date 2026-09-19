@@ -4,7 +4,7 @@ import { suite, test, assert, eq } from "./harness.js";
 import { CONFIG } from "../js/config.js";
 import {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
-  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
+  classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan, assessEarlyAxes,
   buildEarlyMetrics, buildEarlyResult,
 } from "../js/core/early-detect.js";
 import { ema } from "../js/core/indicators.js";
@@ -213,31 +213,32 @@ export function run() {
     eq(s.key, "accumulation");
   });
 
-  test("2단계 임박 — 14일 추세 + 24시간 변동 동시 성립", () => {
+  test("3단계 임박 — 상승 방향·상단 접근과 두 잠재력 조건 성립", () => {
     const s = classifyEarlyStage(baseMetrics({ mom14Abs: 30, change24h: 12 }), CONFIG);
-    eq(s.stage, 2, "임박 단계");
+    eq(s.stage, 3, "임박 단계");
     eq(s.key, "imminent");
   });
 
-  test("2단계 임박 — 하락 쪽 움직임도 동일하게 잡힌다(U자)", () => {
+  test("하락 쪽 잠재력은 유지하되 상승 임박으로 올리지 않는다", () => {
     const up = classifyEarlyStage(baseMetrics({ mom14: 30, mom14Abs: 30, change24h: 12 }), CONFIG);
     const down = classifyEarlyStage(baseMetrics({ mom14: -30, mom14Abs: 30, change24h: -12 }), CONFIG);
-    eq(up.stage, down.stage, "부호가 반대여도 같은 단계");
+    eq(up.stage, 3, "상승 회복은 임박");
+    eq(down.stage, 2, "하락 중이면 준비 단계에 머묾");
   });
 
-  test("3단계 돌파 — 상단 종가돌파 + 거래량 급증 + ATR 상승 + 초입", () => {
+  test("4단계 확인 — 상단 종가돌파 + 거래량 급증 + ATR 상승 + 초입", () => {
     const s = classifyEarlyStage(baseMetrics({
       breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 5,
     }), CONFIG);
-    eq(s.stage, 3, "돌파 단계");
-    eq(s.key, "breakout");
+    eq(s.stage, 4, "확인 단계");
+    eq(s.key, "confirmed");
   });
 
-  test("돌파했지만 이미 많이 오름 → 단계 없음", () => {
+  test("돌파했지만 이미 많이 오름 → 추격 금지로 보존", () => {
     const s = classifyEarlyStage(baseMetrics({
       breakoutClose: true, relVol3: 2.5, atrRising: true, runFromBreakoutPct: 30,
     }), CONFIG);
-    eq(s, null, "초입 아니면 제외");
+    eq(s.stage, 5, "늦은 후보를 숨기지 않고 경고");
   });
 
   test("죽은 구간(움직임 0개) 이면 단계 없음", () => {
@@ -260,6 +261,16 @@ export function run() {
 
   test("제외 — 이미 급등", () => {
     assert(earlyExclusion(baseMetrics({ change24h: 60 }), CONFIG) !== null, "24h +60% 제외");
+  });
+
+  test("3축 — 잠재력과 현재 준비도·위험도를 섞지 않는다", () => {
+    const bullish = assessEarlyAxes(baseMetrics({ mom14: 35, mom14Abs: 35, change24h: 12,
+      rangePos: 0.85, relVol3: 1.5, atrRising: true }), 70, CONFIG);
+    const falling = assessEarlyAxes(baseMetrics({ mom14: -35, mom14Abs: 35, change24h: -12,
+      rangePos: 0.1, closeAboveEma200: false, ema200SlopeOk: false }), 70, CONFIG);
+    eq(bullish.potential.score, falling.potential.score, "같은 잠재력 점수");
+    assert(bullish.readiness.score > falling.readiness.score, "상승 회복 쪽 준비도가 높음");
+    assert(bullish.risk.score > falling.risk.score, "하락 중인 후보의 안전 점수가 낮음");
   });
 
   // 아래 둘은 예전에 "제외" 였다. 실측에서 방향이 반대이거나(펀딩 쏠림 = 1순위 신호)
@@ -456,7 +467,8 @@ export function run() {
       assert(r[k] !== undefined, `결과에 ${k} 필요`);
     }
     eq(r.direction, "long", "early 는 롱 전용");
-    assert(r.stage.stage >= 1 && r.stage.stage <= 3, "단계는 1~3");
+    assert(r.stage.stage >= 1 && r.stage.stage <= 5, "단계는 1~5");
+    assert(r.earlyAxes?.potential && r.earlyAxes?.readiness && r.earlyAxes?.risk, "3축 필요");
   });
 
   test("펀딩·OI 조회 실패해도 후보는 살아있다 — 엔드포인트 하나로 0건이 되면 안 된다", () => {

@@ -1,5 +1,5 @@
 {
-  "name": "QAR Scenario Scanner",
+  "name": "QAR Early Scanner",
   "short_name": "QAR Scanner",
   "description": "시장국면과 실제 결과를 함께 추적하는 Binance Futures 후보 스캐너",
   "start_url": "./index.html",

@@ -6,10 +6,10 @@ const SETTINGS_KEY = "qar-ict-settings";
 
 const defaultSettings = {
   version: CONFIG.version,
-  minScore: 30,              // 채점 강도 3(기본)과 같은 값 — grades 의 "관찰 후보" 경계
-  minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
-  direction: "long",         // "long" | "short" | "both"
-  scanMode: "reversal",      // "all" | "reversal" | "early" | "pump_fade" | "sweep_retest"
+  minScore: CONFIG.earlyMinScore, // 조기포착 검증 하한. UI에서는 고정값으로 설명한다.
+  minQuoteVolume: CONFIG.earlyDetect.minQuoteVolume,
+  direction: "long",         // 조기포착 LONG 후보 전용
+  scanMode: "early",         // 단일 제품 모드. 이전 저장값은 loadSettings 에서 마이그레이션한다.
   stageFilter: "all",        // 모드별 단계 또는 all
   strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
   penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
@@ -41,10 +41,15 @@ function loadSettings() {
     if (!raw) return { ...defaultSettings };
     const parsed = JSON.parse(raw);
     // 버전 마이그레이션: 필드 누락 시 기본값 병합
-    if (parsed.version !== CONFIG.version) {
-      return { ...defaultSettings, ...parsed, version: CONFIG.version };
-    }
-    return { ...defaultSettings, ...parsed };
+    const migrating = parsed.version !== CONFIG.version;
+    const merged = migrating
+      ? { ...defaultSettings, ...parsed, version: CONFIG.version }
+      : { ...defaultSettings, ...parsed };
+    // 제거된 all/reversal/pump_fade/sweep_retest 저장값이 단일 스캐너를 되살리지 않게 한다.
+    merged.scanMode = "early";
+    merged.direction = "long";
+    if (migrating) merged.minQuoteVolume = CONFIG.earlyDetect.minQuoteVolume;
+    return merged;
   } catch {
     return { ...defaultSettings };
   }

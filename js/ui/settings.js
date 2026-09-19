@@ -23,7 +23,7 @@ const REALTIME_IDS = ["set-realtime-candle"];
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
-  const selectedMode = s.scanMode || "reversal";
+  const selectedMode = "early";
   return modesForScan(selectedMode).flatMap((mode) => applyModeFilters(results, mode, s, selectedMode === "all"));
 }
 
@@ -41,7 +41,7 @@ function applyModeFilters(results, mode, s, unified) {
   // 관심 종목만
   if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
-  if (reversal && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  if ((reversal || early) && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
   // 신규 종목 제외
   if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
@@ -78,11 +78,11 @@ function applyModeFilters(results, mode, s, unified) {
 
 // 모드 UI가 실제 필터 계약과 같은지 테스트 가능한 순수 모델.
 export function modeControlModel(settings) {
-  const mode = settings?.scanMode || "reversal";
-  const all = mode === "all";
-  const early = mode === "early";
-  const pumpFade = mode === "pump_fade";
-  const sweep = mode === "sweep_retest";
+  const mode = "early";
+  const all = false;
+  const early = true;
+  const pumpFade = false;
+  const sweep = false;
   return {
     mode,
     all,
@@ -91,7 +91,7 @@ export function modeControlModel(settings) {
     sweep,
     dedicated: early || pumpFade || sweep,
     direction: pumpFade ? "short" : (early || sweep) ? "long" : String(settings?.direction || "long"),
-    effectiveCut: minScoreFor(settings),
+    effectiveCut: minScoreFor({ ...settings, scanMode: "early" }),
     strictnessEnabled: all || (!early && !pumpFade && !sweep),
     moneyControlsEnabled: !pumpFade && !sweep,
   };
@@ -245,14 +245,14 @@ const STAGE_OPTIONS = {
   sweep_retest: [["all", "전체"], ["1", "1 급락·매집"], ["2", "2 W·회수"], ["3", "3 구조전환"], ["4", "4 첫 눌림"], ["5", "5 확인 후보"]],
   all: [["all", "전체 모드 단계"]],
   reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
-  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 임박"], ["3", "3 돌파"]],
+  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 준비"], ["3", "3 임박"], ["4", "4 확인 후보"], ["5", "5 추격 금지"]],
   pump_fade: [["all", "전체"], ["1", "1 과열 감시"], ["2", "2 고점 거절"], ["3", "3 급락 확인"]],
 };
 function syncModeControls(settings) {
   const model = modeControlModel(settings);
   const stageEl = document.getElementById("filter-stage");
   if (stageEl) {
-    const options = STAGE_OPTIONS[model.mode] || STAGE_OPTIONS.reversal;
+    const options = STAGE_OPTIONS[model.mode] || STAGE_OPTIONS.early;
     stageEl.innerHTML = options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
     const wanted = options.some(([value]) => value === String(settings.stageFilter))
       ? String(settings.stageFilter) : "all";
@@ -264,15 +264,12 @@ function syncModeControls(settings) {
   if (direction) {
     direction.disabled = model.dedicated;
     direction.value = model.direction;
-    direction.title = model.pumpFade ? "급등 후 급락은 SHORT 전용입니다."
-      : model.sweep ? "스윕 후 첫 눌림은 LONG 전용입니다."
-      : model.early ? "조기 포착은 LONG 전용입니다." : "";
+    direction.title = "조기 포착은 LONG 후보 전용입니다.";
   }
   const directionNote = document.getElementById("filter-direction-note");
   if (directionNote) {
     directionNote.hidden = !model.dedicated && !model.all;
-    directionNote.textContent = model.all ? "급락 반등 결과에만 적용"
-      : model.pumpFade ? "SHORT 전용" : "LONG 전용";
+    directionNote.textContent = "LONG 후보 전용";
   }
 
   const sortEl = document.getElementById("filter-sort");
@@ -315,7 +312,7 @@ function syncModeControls(settings) {
     strictnessNote.textContent = model.sweep ? "마감봉만 사용 · 1~5는 순서 진행도이며 확률이 아닙니다."
       : model.pumpFade
       ? "급등 후 급락은 실험 컷 45점을 고정 사용합니다."
-      : "조기 포착은 검증 컷 40점을 고정 사용합니다.";
+      : "잠재력 순위는 검증 컷 40점을 사용하고, 준비도·위험도는 별도 체크합니다.";
   }
 
   for (const id of ["filter-seed", "filter-leverage", "filter-partial"]) {
@@ -339,9 +336,8 @@ function syncModeControls(settings) {
   ]) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.disabled = model.dedicated;
-    el.title = model.dedicated ? "급락 반등 전용 조건입니다."
-      : model.all ? "전체 스캔에서는 급락 반등 결과에만 적용됩니다." : "";
+    el.disabled = !id.includes("exclude-chase");
+    el.title = id.includes("exclude-chase") ? "추격 금지 후보를 목록에서 숨깁니다." : "이전 전략 전용 설정이라 조기 포착에서는 사용하지 않습니다.";
   }
 }
 

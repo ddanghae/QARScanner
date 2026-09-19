@@ -1,4 +1,4 @@
-// tests/unified-scan.test.js — 4개 모드 통합 실행/표시 계약 회귀.
+// tests/unified-scan.test.js — 조기포착 단일 실행/표시 계약 회귀.
 
 import { suite, test, assert, eq } from "./harness.js";
 import { modesForScan, resultKey, resultMode } from "../js/scan-modes.js";
@@ -6,98 +6,58 @@ import { sortAndRankResults } from "../js/scanner/scan-controller.js";
 import { applyFilters, modeControlModel } from "../js/ui/settings.js";
 import { state } from "../js/state.js";
 
-function row(mode, symbol, score, stage = 2, direction = mode === "pump_fade" ? "short" : "long") {
+function row(symbol, score, stage = 2) {
   return {
-    scanMode: mode,
-    symbol,
-    score,
-    direction,
+    scanMode: "early", symbol, score, direction: "long",
     stage: { stage, label: `${stage} 테스트`, badge: "blue" },
-    change6h: mode === "pump_fade" ? 20 : -10,
-    quoteVolume: 100_000_000,
-    newListing: false,
-    noise: { noisy: true },
-    goldenCrossRetest: { detected: false, hasRejection: false },
-    near1hEma200: false,
+    change6h: 0, quoteVolume: 100_000_000, newListing: false,
+    noise: { noisy: false },
   };
 }
 
 function withSettings(patch, fn) {
   const previous = state.settings;
   state.settings = {
-    ...previous,
-    scanMode: "all",
-    direction: "long",
-    minScore: 30,
-    favorites: [],
-    excluded: [],
-    showFavoritesOnly: false,
-    excludeNewListing: false,
-    excludeChaseBan: false,
-    goldenCrossOnly: false,
-    near1hEma200Only: false,
-    filterNoise: false,
-    stageFilter: "all",
-    sort: "volume",
-    ...patch,
+    ...previous, scanMode: "early", minScore: 40, favorites: [], excluded: [],
+    showFavoritesOnly: false, excludeNewListing: false, excludeChaseBan: false,
+    stageFilter: "all", sort: "score", ...patch,
   };
   try { fn(); } finally { state.settings = previous; }
 }
 
 export function run() {
-  suite("unified scan");
+  suite("single early scan");
 
-  test("전체 스캔은 네 모드를 고정 순서로 정확히 한 번 포함한다", () => {
-    const modes = modesForScan("all");
-    eq(modes.join(","), "reversal,early,pump_fade,sweep_retest", "실행 순서");
-    eq(new Set(modes).size, 4, "중복 실행 없음");
+  test("제거된 모드 저장값도 조기포착 하나만 실행한다", () => {
+    for (const old of ["all", "reversal", "pump_fade", "sweep_retest", undefined]) {
+      eq(modesForScan(old).join(","), "early", `${old} 마이그레이션`);
+    }
   });
 
-  test("기존 결과의 모드 기본값은 reversal이고 키는 모드+심볼이다", () => {
-    eq(resultMode({ symbol: "SAMEUSDT" }), "reversal", "레거시 결과 호환");
-    assert(resultKey(row("early", "SAMEUSDT", 50)) !== resultKey(row("pump_fade", "SAMEUSDT", 60)), "중복 심볼 키 분리");
+  test("모드 없는 옛 결과도 조기포착으로 읽는다", () => {
+    eq(resultMode({ symbol: "SAMEUSDT" }), "early");
+    eq(resultKey({ symbol: "SAMEUSDT" }), "early:SAMEUSDT");
   });
 
-  test("통합 결과는 모드별 순서와 모드 내부 순위를 유지한다", () => {
-    const ranked = sortAndRankResults([
-      row("pump_fade", "P2", 90, 2),
-      row("early", "E1", 50, 1),
-      row("reversal", "R1", 40, 2),
-      row("pump_fade", "P3", 50, 3),
-      row("sweep_retest", "S1", 80, 4),
-      row("reversal", "R2", 60, 2),
-    ], "all");
-    eq(ranked.map((r) => r.symbol).join(","), "R2,R1,E1,P3,P2,S1", "모드 그룹과 pump 단계 우선");
-    eq(ranked.map((r) => r.rank).join(","), "1,2,1,1,2,1", "모드별 순위 재시작");
+  test("결과는 잠재력 점수 순으로 한 번만 순위를 매긴다", () => {
+    const ranked = sortAndRankResults([row("B", 50), row("A", 70), row("C", 60)], "all");
+    eq(ranked.map((r) => r.symbol).join(","), "A,C,B");
+    eq(ranked.map((r) => r.rank).join(","), "1,2,3");
   });
 
-  test("전체 필터는 모드별 점수 컷과 reversal 전용 조건을 분리한다", () => {
-    withSettings({ filterNoise: true }, () => {
-      const view = applyFilters([
-        row("reversal", "SAMEUSDT", 55, 2, "long"),
-        row("reversal", "NOISY", 55, 2, "long"),
-        row("early", "SAMEUSDT", 50),
-        row("early", "EARLY_LOW", 39),
-        row("pump_fade", "SAMEUSDT", 60, 3),
-        row("pump_fade", "PUMP_LOW", 44, 3),
-        row("sweep_retest", "SWEEP", 20, 1),
-      ].map((r) => r.symbol === "NOISY" || r.symbol === "SAMEUSDT" && r.scanMode === "reversal"
-        ? r : { ...r, noise: { noisy: false } }));
-      // reversal SAMEUSDT는 noisy라 제외되지만 전용 필터가 early/pump 결과를 죽이면 안 된다.
-      eq(view.map((r) => resultKey(r)).join(","), "early:SAMEUSDT,pump_fade:SAMEUSDT,sweep_retest:SWEEP", "모드별 필터 분리");
+  test("추격 금지 후보를 선택적으로 숨긴다", () => {
+    withSettings({ excludeChaseBan: true }, () => {
+      const view = applyFilters([row("SAFE", 70, 3), row("CHASE", 80, 5)]);
+      eq(view.map((r) => r.symbol).join(","), "SAFE");
     });
   });
 
-  test("전체 모드 UI는 reversal 조정은 허용하고 공통 정렬은 잠근다", () => {
-    const model = modeControlModel({ scanMode: "all", direction: "both", minScore: 40 });
-    eq(model.all, true, "전체 모드");
-    eq(model.direction, "both", "reversal 방향 유지");
-    eq(model.strictnessEnabled, true, "reversal 강도 사용 가능");
-    eq(model.moneyControlsEnabled, true, "일반 모드 금액 표시 유지");
-    const sweep = modeControlModel({ scanMode: "sweep_retest", direction: "short", minScore: 99 });
-    eq(sweep.direction, "long", "패턴 모드 LONG 고정");
-    eq(sweep.dedicated, true, "전용 컨트롤");
-    eq(sweep.effectiveCut, 0, "점수 컷 없음");
-    eq(sweep.moneyControlsEnabled, false, "계획 없는 모드는 금액 잠금");
+  test("단일 모드 UI는 LONG과 검증 컷을 고정한다", () => {
+    const model = modeControlModel({ scanMode: "reversal", direction: "short", minScore: 99 });
+    eq(model.mode, "early");
+    eq(model.direction, "long");
+    eq(model.dedicated, true);
+    eq(model.effectiveCut, 40);
+    assert(model.moneyControlsEnabled, "후보 계획의 손실 크기 표시는 유지");
   });
 }

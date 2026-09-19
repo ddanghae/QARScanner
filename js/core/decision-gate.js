@@ -21,7 +21,8 @@ function validGeometry(result) {
 
 export function buildDecisionGate(result, now = Date.now()) {
   const checks = [];
-  const mode = resultMode(result);
+  // 제거된 모드의 과거 테스트/기록은 원래 의미로 읽되, 새 스캔 모드는 resultMode가 early로 고정한다.
+  const mode = result?.scanMode === "sweep_retest" ? "sweep_retest" : resultMode(result);
   const direction = result?.direction === "short" ? "short" : "long";
 
   if (mode === "sweep_retest") return buildSweepGate(result, now);
@@ -37,8 +38,10 @@ export function buildDecisionGate(result, now = Date.now()) {
     checks.push(item("stage", "block", "추격 위험", "이미 늦은 구간으로 분류됐습니다."));
   } else if (mode === "pump_fade" && stage < 3) {
     checks.push(item("stage", "warn", "급락 확인 전", "고점 거절 뒤 구조 붕괴 확인이 아직 부족합니다."));
-  } else if (mode === "early" && stage === 1) {
-    checks.push(item("stage", "warn", "초기 관찰", "아직 임박·돌파 단계가 아닙니다."));
+  } else if (mode === "early" && stage === 5) {
+    checks.push(item("stage", "block", "추격 금지", "좋은 잠재력 후보여도 이미 많이 움직여 현재 가격의 위험이 큽니다."));
+  } else if (mode === "early" && stage <= 2) {
+    checks.push(item("stage", "warn", "확인 대기", "잠재력은 있지만 상승 방향과 타이밍 확인이 아직 부족합니다."));
   } else {
     checks.push(item("stage", "pass", "단계 확인", result?.stage?.label || "현재 단계를 확인했습니다."));
   }
@@ -78,6 +81,17 @@ export function buildDecisionGate(result, now = Date.now()) {
     checks.push(item("crt", "warn", "CRT 방향 충돌", `CRT는 ${crt.direction.toUpperCase()} 방향입니다.`));
   } else {
     checks.push(item("crt", "info", "CRT 추가 확인 없음", crt?.reason || crt?.label || "독립 확인 신호가 없습니다."));
+  }
+
+  if (mode === "early") {
+    const risk = result?.earlyAxes?.risk;
+    if (risk?.score < 50) checks.push(item("early-risk", "block", "관찰 위험 높음", (risk.reasons || []).join(" · ") || "하락·추격 위험을 확인하세요."));
+    else if (risk?.score < 75) checks.push(item("early-risk", "warn", "관찰 위험 주의", (risk.reasons || []).join(" · ") || "위험 조건이 있습니다."));
+    else if (risk) checks.push(item("early-risk", "pass", "관찰 위험 낮음", "현재 체크리스트에서 큰 하락·추격 위험이 적습니다."));
+
+    const sweep = result?.earlyConfirmation?.sweepRetest;
+    if (sweep?.confirmed) checks.push(item("sweep-retest", "pass", "첫 눌림 확인", sweep.reason || "발생 순서를 충족했습니다."));
+    else checks.push(item("sweep-retest", "info", "첫 눌림 확인 없음", sweep?.reason || sweep?.label || "추가 확인 패턴이 없습니다."));
   }
 
   if ((result?.correlatedWith || []).length) {

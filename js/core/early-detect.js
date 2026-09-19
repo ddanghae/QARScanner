@@ -77,24 +77,30 @@ export function earlyExclusion(m, cfg) {
   return null;
 }
 
-// 3단계 분류. 위 단계부터 판정하고, 어디에도 안 걸리면 null(결과에서 제외).
+// 5단계 분류. 잠재력 점수와 별도로 "지금 움직일 준비가 됐는가"만 판단한다.
 // 매집(압축+거래량 고갈) 게이트는 제거했다. 표본 외 검증에서 리프트가 0.64~1.72x 로
 // 흩어졌다(기준선 미만인 구간 존재) — 신호로 볼 근거가 없는데 하드 게이트로 쓰고 있었다.
 // 대신 채점의 움직임 요인 2개(14일 추세·24시간 변동)의 히트 수로 단계를 나눈다.
 export function classifyEarlyStage(m, cfg) {
   const e = cfg.earlyDetect;
 
-  // 3단계 돌파 — 박스 상단을 종가로 뚫고, 거래량 급증 + 변동성 확장. 단 아직 초입일 때만.
+  // 이미 크게 달렸다면 좋은 잠재력 후보라도 숨기지 않고 추격 금지로 보여준다.
+  if ((m.change24h ?? 0) > e.pumpedMaxPct
+    || (m.breakoutClose && m.runFromBreakoutPct > e.breakoutMaxRunPct)) {
+    return stage(5, "chase", "5 추격 금지", "red");
+  }
+
+  // 4단계 확인 — 박스 상단 종가 돌파에 거래량과 변동성 확장이 함께 있어야 한다.
   if (m.breakoutClose && m.relVol3 >= e.breakoutRelVol && m.atrRising) {
-    return m.runFromBreakoutPct <= e.breakoutMaxRunPct
-      ? stage(3, "breakout", "3 돌파", "purple")
-      : null; // 이미 많이 감 → 추격 방지
+    return stage(4, "confirmed", "4 확인 후보", "green");
   }
 
   const hits = coreHits(m, e);
   if (hits === 0) return null;
-  // 2단계 임박 — 둘 다 성립. 14일 추세와 24시간 변동이 동시에 크면 재적합 점수도 최상위권.
-  if (hits >= 2) return stage(2, "imminent", "2 임박", "yellow");
+  const readiness = assessEarlyAxes(m, 0, cfg).readiness.score;
+  // 하락 폭의 크기만으로 임박 판정을 주지 않는다. 상승 방향 회복과 상단 접근이 필요하다.
+  if (hits >= 2 && readiness >= 55) return stage(3, "imminent", "3 임박", "purple");
+  if (hits >= 2) return stage(2, "preparing", "2 준비", "yellow");
   return stage(1, "accumulation", "1 관찰", "blue");
 }
 
@@ -157,6 +163,47 @@ export function scoreEarly(m, cfg) {
 function mkItem(key, label, weight, got) {
   const g = Math.round(got * 100) / 100;
   return { key, label, weight, got: g, hit: g > 0 };
+}
+
+// 잠재력(검증 점수), 준비도(현재 방향/확장), 위험도(추격·하락 위험)를 분리한다.
+// 준비도와 위험도는 아직 확률이 아닌 설명용 체크리스트 점수다. 후보 순위는 검증된
+// scoreEarly만 사용해 새 휴리스틱이 몰래 성과 숫자로 보이지 않게 한다.
+export function assessEarlyAxes(m, potentialScore, cfg) {
+  const reasons = { readiness: [], risk: [] };
+  let readiness = 0;
+  const addReady = (cond, points, label) => {
+    if (cond) { readiness += points; reasons.readiness.push(label); }
+  };
+  addReady((m.mom14 ?? 0) > 0, 20, "14일 방향 상승");
+  addReady((m.change24h ?? 0) > 0, 15, "24시간 상승");
+  addReady(Boolean(m.closeAboveEma200), 15, "4시간 EMA200 위");
+  addReady(Boolean(m.ema200SlopeOk), 10, "EMA200 기울기 방어");
+  addReady((m.rangePos ?? 0) >= 0.65, 15, "박스 상단 접근");
+  addReady((m.relVol3 ?? 0) >= 1.2, 10, "거래량 확인");
+  addReady(Boolean(m.atrRising), 5, "변동성 확장");
+  addReady(Boolean(m.breakoutClose), 10, "종가 돌파");
+
+  let risk = 100;
+  const subtractRisk = (cond, points, label) => {
+    if (cond) { risk -= points; reasons.risk.push(label); }
+  };
+  subtractRisk((m.mom14 ?? 0) <= -30, 25, "14일 하락이 큼");
+  subtractRisk((m.change24h ?? 0) <= -10, 20, "24시간 하락 중");
+  subtractRisk(!m.closeAboveEma200, 15, "4시간 EMA200 아래");
+  subtractRisk(!m.ema200SlopeOk, 10, "EMA200 하락 기울기");
+  subtractRisk((m.rangePos ?? 0.5) < 0.25, 15, "박스 하단 근처");
+  subtractRisk((m.change24h ?? 0) > cfg.earlyDetect.pumpedMaxPct, 40, "이미 크게 상승");
+  subtractRisk(Boolean(m.breakoutClose) && (m.runFromBreakoutPct ?? 0) > cfg.earlyDetect.breakoutMaxRunPct,
+    30, "돌파 뒤 추격 구간");
+  subtractRisk((m.quoteVolume ?? 0) < cfg.earlyDetect.minQuoteVolume, 15, "거래대금 부족");
+
+  readiness = Math.max(0, Math.min(100, readiness));
+  risk = Math.max(0, Math.min(100, risk));
+  return {
+    potential: { score: potentialScore, label: potentialScore >= 70 ? "강함" : potentialScore >= 55 ? "관심" : "관찰" },
+    readiness: { score: readiness, label: readiness >= 70 ? "확인" : readiness >= 45 ? "준비" : "대기", reasons: reasons.readiness },
+    risk: { score: risk, label: risk >= 75 ? "낮음" : risk >= 50 ? "주의" : "높음", reasons: reasons.risk },
+  };
 }
 
 // ---- 진입 계획 ----
@@ -273,11 +320,11 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg, now = Date
 export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.now()) {
   const m = buildEarlyMetrics(c4, oiSeries, funding, item, cfg, now);
   if (!m) return null;
-  if (earlyExclusion(m, cfg)) return null;
   const stageInfo = classifyEarlyStage(m, cfg);
   if (!stageInfo) return null;
 
   const scored = scoreEarly(m, cfg);
+  const earlyAxes = assessEarlyAxes(m, scored.score, cfg);
   const plan = earlyPlan(m, m.atrVal, m.price, cfg);
 
   return {
@@ -291,6 +338,7 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.no
     newListing: item.newListing,
     direction: "long",
     score: scored.score,
+    earlyAxes,
     // 등급만 early 전용 밴드로 (gradeFor 는 cfg.grades 만 읽는다).
     grade: gradeFor(scored.score, { grades: cfg.earlyGrades }),
     stage: stageInfo,
@@ -301,7 +349,10 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.no
     goldenCrossRetest: { detected: false, reason: "조기 포착 모드" },
     near1hEma200: false,
     noise: { noisy: false, ci: null, relVol: m.relVol3, reasons: [] },
-    early: { squeezePct: m.squeezePct, volExpand: m.volExpand, mom14: m.mom14, ageDays: m.ageDays,
+    early: { squeezePct: m.squeezePct, volExpand: m.volExpand, relVol3: m.relVol3,
+      mom14: m.mom14, ageDays: m.ageDays, rangePos: m.rangePos,
+      closeAboveEma200: m.closeAboveEma200, ema200SlopeOk: m.ema200SlopeOk,
+      breakoutClose: m.breakoutClose, runFromBreakoutPct: m.runFromBreakoutPct,
       oi: m.oi, funding: m.funding, boxHigh: m.boxHigh, boxLow: m.boxLow },
     plan,
     rsi1h: null,
@@ -312,5 +363,5 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.no
 export default {
   boxRange, squeezePercentile, volDryRatio, analyzeOi,
   classifyEarlyStage, earlyExclusion, scoreEarly, earlyPlan,
-  buildEarlyMetrics, buildEarlyResult,
+  assessEarlyAxes, buildEarlyMetrics, buildEarlyResult,
 };

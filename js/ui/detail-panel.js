@@ -133,6 +133,8 @@ export function renderDetail(r) {
       <p class="absorption">흡수 추정: <b>${escapeHtml(r.absorption.label)}</b></p>
     </section>
 
+    ${earlyAxesSection(r)}
+
     ${decisionGateSection(r)}
 
     ${isSweep ? "" : forecastSection(r)}
@@ -170,6 +172,24 @@ export function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
+}
+
+function earlyAxesSection(r) {
+  const a = r?.earlyAxes;
+  if (!a) return "";
+  const list = (items) => items?.length ? items.map(escapeHtml).join(" · ") : "추가 확인 없음";
+  const sweep = r?.earlyConfirmation?.sweepRetest;
+  const sweepText = sweep?.confirmed ? `확인 · ${sweep.reason}` : (sweep?.label || "확인 없음");
+  return `<section class="detail-section">
+    <h3>조기포착 3축 <small>(한 숫자로 섞지 않음)</small></h3>
+    <table class="plan-table">
+      <tr><td>급등 잠재력</td><td><b>${a.potential.score} · ${escapeHtml(a.potential.label)}</b><br><small>과거 검증 점수 · ${CONFIG.earlyHitLabel}</small></td></tr>
+      <tr><td>현재 준비도</td><td><b>${a.readiness.score} · ${escapeHtml(a.readiness.label)}</b><br><small>${list(a.readiness.reasons)}</small></td></tr>
+      <tr><td>관찰 위험도</td><td><b>${a.risk.score} · ${escapeHtml(a.risk.label)}</b><br><small>${list(a.risk.reasons)}</small></td></tr>
+      <tr><td>첫 눌림 확인</td><td>${escapeHtml(sweepText)}</td></tr>
+    </table>
+    <p class="plan-note">잠재력만 과거 급등 라벨로 검증된 점수입니다. 준비도와 위험도는 현재 상태를 놓치지 않기 위한 체크리스트이며 성공 확률이나 매수 지시가 아닙니다.</p>
+  </section>`;
 }
 
 export function sweepRetestSection(r) {

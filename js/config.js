@@ -2,7 +2,7 @@
 // GitHub Pages 정적 실행. 빌드 과정 없음. ES Module.
 
 export const CONFIG = {
-  version: 1,
+  version: 2,
 
   // BTC 4시간 마감봉 시장국면. 아직 점수 보정에는 쓰지 않고 설명·기록에만 사용한다.
   marketRegime: {
@@ -150,7 +150,7 @@ export const CONFIG = {
     // research/backtest.mjs 의 배포 규칙 재현치(+0.094R)와 일치한다.
     partialAtR: 1,          // 이 R 배수에 도달하면 부분 익절(tp1)
     partialFrac: 0.5,       // 그때 청산하는 비중. 나머지는 손절을 본전으로 올리고 tp2 를 노린다.
-    // 3단계 돌파
+    // 4단계 확인 / 5단계 추격 금지
     breakoutRelVol: 2.0,    // 돌파 시 상대거래량
     breakoutMaxRunPct: 15,  // 돌파 후 상승폭 이 % 이하만 (초입)
     // 제외

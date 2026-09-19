@@ -98,8 +98,15 @@ export function classifyEarlyStage(m, cfg) {
   const hits = coreHits(m, e);
   if (hits === 0) return null;
   const readiness = assessEarlyAxes(m, 0, cfg).readiness.score;
-  // 하락 폭의 크기만으로 임박 판정을 주지 않는다. 상승 방향 회복과 상단 접근이 필요하다.
-  if (hits >= 2 && readiness >= 55) return stage(3, "imminent", "3 임박", "purple");
+  // 점수는 상승·하락 양쪽의 "큰 움직임"을 잡는다. 그러나 3단계는 지금 상승 쪽으로
+  // 되돌아온 후보만 뜻한다. 장기 추세/거래량이 좋아도 24시간 하락 중이면 임박으로
+  // 승격하지 않는다. 다만 14일 추세는 아직 음수여도, 현재 24시간 반등 + EMA200 위면
+  // 회복 초입일 수 있으므로 허용한다.
+  const positiveRecovery = (m.change24h ?? 0) > 0
+    && ((m.mom14 ?? 0) > 0 || Boolean(m.closeAboveEma200));
+  if (hits >= 2 && positiveRecovery && readiness >= 55) {
+    return stage(3, "imminent", "3 임박", "purple");
+  }
   if (hits >= 2) return stage(2, "preparing", "2 준비", "yellow");
   return stage(1, "accumulation", "1 관찰", "blue");
 }
@@ -208,30 +215,81 @@ export function assessEarlyAxes(m, potentialScore, cfg) {
 
 // ---- 진입 계획 ----
 // R 배수 기반. 기존 plan 필드명을 그대로 채워 UI/상세패널이 수정 없이 동작하게 한다.
-// 손절은 반드시 진입 아래로 clamp (risk-reward.js 의 RR 폭발 버그와 동일한 방어).
+// 손절은 반드시 진입 아래의 양수 가격이어야 한다. 그 범위를 벗어나거나 지나치게
+// 멀면 계획을 만들지 않는다. 임의로 그럴듯한 손절가를 만들어 내는 것보다 안전하다.
 //
 // 예전에는 박스 하단 = 손절, 박스 상단 + 박스폭 배수 = 목표였다. 후보군이 "좁은 횡보"
 // 뿐일 때는 성립했지만, 지금은 폭락 후 반등(예: 14일 -88%)이 정식 후보라 박스 폭이
 // 수백 % 가 된다. 실측에서 그대로 손익비 1:24 가 찍혔다 — 도달 불가능한 목표를 기준으로
 // 계산한 숫자라 필터로도 표시로도 쓸 수 없다.
 // 손절은 ATR 배수로 상한을 걸고, 목표는 그 리스크의 배수로 잡는다.
-// ponytail: 목표가 R 배수 고정이라 riskReward 는 항상 tp2 기준 1:2 다. 종목별 저항선을
+// 목표가 R 배수 고정이라 riskReward 는 tp2 기준 targetR로 고정된다. 종목별 저항선을
 // 반영하려면 여기서 박스 상단·직전 스윙고점을 tp 후보로 섞어야 한다.
 export function earlyPlan(m, atrVal, price, cfg) {
-  const entry = price;
-  const atr = atrVal > 0 ? atrVal : 0;
+  const entry = Number.isFinite(Number(price)) ? Number(price) : null;
+  const atr = Number.isFinite(Number(atrVal)) && Number(atrVal) > 0 ? Number(atrVal) : 0;
   const stopAtr = cfg?.earlyDetect?.stopAtr ?? 4;
   const targetR = cfg?.earlyDetect?.targetR ?? 4;
+  // 설정을 아직 가진 배포본도 안전하게 동작하도록 기본 상한을 둔다. config 에 값을
+  // 추가하면 그 값으로 조정할 수 있다.
+  const configuredMaxRiskPct = Number(cfg?.earlyDetect?.maxPlanRiskPct);
+  const maxRiskPct = Number.isFinite(configuredMaxRiskPct) && configuredMaxRiskPct > 0
+    ? configuredMaxRiskPct : 25;
+  const configuredMaxDriftPct = Number(cfg?.earlyDetect?.maxSignalPriceDriftPct);
+  const maxDriftPct = Number.isFinite(configuredMaxDriftPct) && configuredMaxDriftPct > 0
+    ? configuredMaxDriftPct : 8;
+  const partialAtR = cfg?.earlyDetect?.partialAtR ?? 1;
+  const partialFrac = cfg?.earlyDetect?.partialFrac ?? 0.5;
+
+  const invalidPlan = (warning, riskPct = null) => ({
+    entry,
+    stop: null,
+    tp1: null,
+    tp2: null,
+    tp3: null,
+    invalidation: null,
+    partialAtR,
+    partialFrac,
+    riskPct,
+    riskReward: 0,
+    rrText: "계획 보류",
+    valid: false,
+    warning,
+    // 되돌림 실측은 채점 모델과 무관해 병렬 갈래(origin/main)의 결과를 그대로 가져왔다.
+    // 파는 방식(부분 익절 여부)은 사용자가 고르므로 여기서 단정하지 않는다 — 상세 패널이 설명한다.
+    note: "급등 141건 추적 결과 고점 이후 중앙 82% 를 반납했고(31%는 전량 반납) " +
+          "상승폭의 절반 미만만 반납한 경우는 10.6% 였습니다.",
+  });
+
+  if (!(entry > 0)) return invalidPlan("현재 시세가 올바르지 않아 진입 계획을 보류합니다.");
+  // 지표는 마지막 4시간 마감봉에서 계산한다. 현재 시세가 그 마감가와 너무 멀면
+  // 진행 중 봉의 정보가 빠진 계획이 되므로, 새 마감봉이 나오기 전까지 가격 계획을 내지 않는다.
+  const marketDriftPct = Number(m?.marketDriftPct);
+  if (Number.isFinite(marketDriftPct) && Math.abs(marketDriftPct) > maxDriftPct) {
+    return invalidPlan(`현재 시세가 4시간 신호 기준가에서 ${marketDriftPct.toFixed(1)}% 벗어나 계획을 보류합니다. 새 마감봉 뒤 재스캔해 주세요.`);
+  }
 
   // 순수 ATR 배수. 예전에는 박스 하단(-0.5 ATR)과 ATR 배수 중 좁은 쪽이 채택됐는데,
   // 격자 탐색에서 그게 손해였다(위 config 주석). ATR 이 없을 때만 박스로 되돌아간다.
   let stop = atr > 0 ? entry - atr * stopAtr : Math.min(m.boxLow, entry) - entry * 1e-3;
-  // 그래도 진입 위/같음이면(비정상 입력) 최소 리스크를 준다.
+  // 진입 위/같음이면(비정상 입력) 최소 리스크만 준다. 음수/0 손절은 절대 보정해
+  // 실행 가능한 것처럼 보이게 하지 않고 아래에서 계획 자체를 보류한다.
   if (!(stop < entry)) stop = entry * (1 - 1e-3);
 
+  if (!Number.isFinite(stop) || !(stop > 0)) {
+    return invalidPlan("손절가가 0 이하라 계획을 보류합니다.");
+  }
+
   const risk = entry - stop;
-  const partialAtR = cfg?.earlyDetect?.partialAtR ?? 1;
-  const partialFrac = cfg?.earlyDetect?.partialFrac ?? 0.5;
+  const riskPct = (risk / entry) * 100;
+  if (!(risk > 0) || !Number.isFinite(riskPct)) {
+    return invalidPlan("손절 폭을 계산할 수 없어 계획을 보류합니다.");
+  }
+  // 부동소수점 오차로 정확히 25%인 계획이 "25.0% > 25%"로 보류되지 않게 한다.
+  if (riskPct > maxRiskPct + 1e-9) {
+    return invalidPlan(`손절 거리 ${riskPct.toFixed(2)}%가 최대 ${maxRiskPct.toFixed(2)}%를 넘습니다. 후보 관찰만 하고 계획은 보류합니다.`, riskPct);
+  }
+
   // tp1 은 "여기서 일부 빼고 손절을 본전으로 올리는 지점" 이다 — 측정으로 정한 값(config 주석).
   // tp2 는 나머지의 목표. tp3 은 그 위 참고선(측정 안 됨).
   const tp1 = entry + risk * partialAtR;
@@ -242,6 +300,7 @@ export function earlyPlan(m, atrVal, price, cfg) {
     entry, stop, tp1, tp2, tp3,
     invalidation: stop,
     partialAtR, partialFrac,
+    riskPct,
     riskReward: rr,
     rrText: `1:${rr.toFixed(2)}`,
     valid: rr > 0 && entry > stop,
@@ -282,6 +341,7 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg, now = Date
 
   const ema200 = ema(closes, 200);
   const price = closes[closes.length - 1];
+  const signalTime = Number(c4.at(-1)?.closeTime);
   const ema200Now = last(ema200);
   const ema200Idx = ema200.length - 1;
   const ema200Prev = ema200Idx - 20 >= 0 ? ema200[ema200Idx - 20] : null;
@@ -310,7 +370,7 @@ export function buildEarlyMetrics(c4, oiSeries, funding, ticker, cfg, now = Date
     quoteVolume: ticker?.quoteVolume ?? null,
     closeAboveEma200, ema200SlopeOk,
     breakoutClose, atrRising, runFromBreakoutPct,
-    price, atrVal: atrNow,
+    price, signalTime: Number.isFinite(signalTime) ? signalTime : null, atrVal: atrNow,
   };
 }
 
@@ -325,14 +385,26 @@ export function buildEarlyResult(item, c4, oiSeries, funding, cfg, now = Date.no
 
   const scored = scoreEarly(m, cfg);
   const earlyAxes = assessEarlyAxes(m, scored.score, cfg);
-  const plan = earlyPlan(m, m.atrVal, m.price, cfg);
+  const tickerPrice = Number(item?.lastPrice);
+  // 화면의 현재가는 24시간 티커가 수집된 순간의 시장가다. 마지막 4시간 마감가는
+  // 지표/신호 기준가로 따로 보존해, 둘을 같은 값처럼 보여 주지 않는다.
+  const marketPrice = Number.isFinite(tickerPrice) && tickerPrice > 0 ? tickerPrice : m.price;
+  const marketDriftPct = m.price > 0 ? ((marketPrice - m.price) / m.price) * 100 : null;
+  const signalExpiresAt = Number.isFinite(m.signalTime) ? m.signalTime + 4 * 60 * 60 * 1000 + 1 : null;
+  const plan = earlyPlan({ ...m, signalPrice: m.price, marketPrice, marketDriftPct }, m.atrVal, marketPrice, cfg);
 
   return {
     scanMode: "early",
     symbol: item.symbol,
     baseAsset: item.baseAsset,
-    price: m.price,
-    change6h: 0,
+    price: marketPrice,
+    signalPrice: m.price,
+    signalTime: m.signalTime,
+    signalExpiresAt,
+    signalInterval: "4h",
+    marketPriceAt: now,
+    marketDriftPct,
+    change6h: null,
     change24h: m.change24h ?? 0,
     quoteVolume: item.quoteVolume,
     newListing: item.newListing,

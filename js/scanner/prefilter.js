@@ -4,7 +4,7 @@
 import { CONFIG, STABLE_BASES, LEVERAGED_RE } from "../config.js";
 import { rsi } from "../core/indicators.js";
 import { relativeVolume } from "../core/volume-analysis.js";
-import { boxRange, volDryRatio } from "../core/early-detect.js";
+import { boxRange, volDryRatio, scoreEarly } from "../core/early-detect.js";
 
 // ---- Stage 1: 거래 가능한 USDT 무기한 선물만 ----
 export function stage1Universe(symbols) {
@@ -146,7 +146,7 @@ export function excludeMajors(list, majors) {
 // 이제 유일한 게이트는 14일 수익률 크기. 죽은 구간(±15%)은 리프트 0.54~1.01x 라
 // 유니버스의 상당 부분을 OI·펀딩 조회 전에 싸게 걸러낸다.
 // OI 호출 전에 걸러내는 것이 목적이므로 여기서는 OI 를 보지 않는다.
-export function stage3EvaluateEarly(item, k4h, cfg) {
+export function stage3EvaluateEarly(item, k4h, cfg, now = Date.now()) {
   const e = cfg.earlyDetect;
   const box = boxRange(k4h, e.boxLookback);
   if (!box) return { pass: false, reason: "데이터 부족" };
@@ -158,12 +158,25 @@ export function stage3EvaluateEarly(item, k4h, cfg) {
     ? ((closes[closes.length - 1] - closes[momIdx]) / closes[momIdx]) * 100 : null;
   const pass = mom14 == null || Math.abs(mom14) >= e.prefilterDeadZonePct;
 
+  // 이 단계의 순서는 "압축" 같은 폐기된 휴리스틱이 아니라 최종 화면과 같은
+  // 검증 점수만 쓴다. OI/펀딩은 아직 조회하지 않으므로 점수에도 넣지 않는다.
+  // now 를 받으면 1차 후보 순위와 최종 결과의 신규상장 가점 기준 시각도 맞출 수 있다.
+  const ageDays = item?.onboardDate
+    ? (now - item.onboardDate) / 86_400_000 : null;
+  const priority = scoreEarly({
+    mom14Abs: mom14 == null ? null : Math.abs(mom14),
+    change24h: item?.change24h ?? null,
+    ageDays,
+    quoteVolume: item?.quoteVolume ?? null,
+  }, cfg).score;
+
   return {
     pass,
     reason: pass ? "후보" : "추세 없는 구간",
     boxWidthPct: box.boxWidthPct,
     mom14,
     volExpand: volDryRatio(k4h, e.volRecentN, e.volPriorN),
+    priority,
   };
 }
 

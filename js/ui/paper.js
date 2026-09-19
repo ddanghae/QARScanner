@@ -7,10 +7,14 @@ import { state } from "../state.js";
 import { fmtPrice, fmtWon, escapeHtml } from "./format.js";
 import { toast } from "./notifications.js";
 import { buildDecisionGate } from "../core/decision-gate.js";
+import { expireResult } from "../core/signal-freshness.js";
+import { currentCrtStatus } from "../core/crt-tbs.js";
 
 const KEY = "qar-paper";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const FORWARD_HOURS = [1, 3, 6, 24];
+const H4 = 4 * 60 * 60 * 1000;
+const M5 = 5 * 60 * 1000;
 let listEl = null;
 
 const finite = Number.isFinite;
@@ -18,6 +22,206 @@ const directionOf = (rec) => rec?.direction === "short" || (rec?.stop > rec?.ent
 const sideOf = (rec) => directionOf(rec) === "short" ? -1 : 1;
 const startOf = (c) => Number(c?.openTime ?? c?.time ?? 0);
 const endOf = (c) => Number(c?.closeTime ?? c?.time ?? c?.openTime ?? 0);
+const numberOrNull = (value) => value == null || value === "" ? null
+  : finite(Number(value)) ? Number(value) : null;
+const textOrNull = (value) => typeof value === "string" ? value : null;
+
+function firstNumber(...values) {
+  for (const value of values) {
+    const number = numberOrNull(value);
+    if (number != null) return number;
+  }
+  return null;
+}
+
+function textList(values, max = 8) {
+  return Array.isArray(values) ? values.filter((value) => typeof value === "string").slice(0, max) : [];
+}
+
+function copyAxis(axis) {
+  if (!axis || typeof axis !== "object") return null;
+  return {
+    score: numberOrNull(axis.score),
+    label: textOrNull(axis.label),
+    reasons: textList(axis.reasons),
+  };
+}
+
+// 후보를 나중에 다시 평가할 때 "어떤 축이 켜져 있었는가"를 재현할 수 있도록,
+// 표시용 점수와 이유만 고정한다. 원본 결과 객체를 참조하지 않아 이후 재스캔도 기록을 바꾸지 않는다.
+function copyEarlyAxes(axes) {
+  if (!axes || typeof axes !== "object") return null;
+  return {
+    potential: copyAxis(axes.potential),
+    readiness: copyAxis(axes.readiness),
+    risk: copyAxis(axes.risk),
+  };
+}
+
+function copyScoreSources(result) {
+  const breakdown = Array.isArray(result?.breakdown)
+    ? result.breakdown.slice(0, 12).map((item) => ({
+      key: textOrNull(item?.key), label: textOrNull(item?.label),
+      weight: numberOrNull(item?.weight), got: numberOrNull(item?.got), hit: Boolean(item?.hit),
+    })) : [];
+  const penalties = Array.isArray(result?.penalties)
+    ? result.penalties.slice(0, 12).map((item) => ({
+      key: textOrNull(item?.key), label: textOrNull(item?.label), val: numberOrNull(item?.val),
+    })) : [];
+  if (!breakdown.length && !penalties.length && !Array.isArray(result?.topSignals)) return null;
+  return { breakdown, penalties, topSignals: textList(result?.topSignals, 6) };
+}
+
+function copyEarlyMetrics(early) {
+  if (!early || typeof early !== "object") return null;
+  const copied = {};
+  const numeric = [
+    "squeezePct", "volExpand", "relVol3", "mom14", "ageDays", "rangePos",
+    "runFromBreakoutPct", "funding", "boxHigh", "boxLow",
+  ];
+  const flags = ["closeAboveEma200", "ema200SlopeOk", "breakoutClose"];
+  for (const key of numeric) if (Object.hasOwn(early, key)) copied[key] = numberOrNull(early[key]);
+  for (const key of flags) if (Object.hasOwn(early, key)) copied[key] = Boolean(early[key]);
+  if (early.oi && typeof early.oi === "object") {
+    copied.oi = {
+      change72h: numberOrNull(early.oi.change72h),
+      change12h: numberOrNull(early.oi.change12h),
+      prev12h: numberOrNull(early.oi.prev12h),
+    };
+  }
+  return Object.keys(copied).length ? copied : null;
+}
+
+function freshSweep(source, now) {
+  if (!source || typeof source !== "object") return source;
+  const expiresAt = numberOrNull(source.expiresAt);
+  if (expiresAt == null || now < expiresAt) return source;
+  return {
+    ...source,
+    confirmed: false,
+    status: "expired",
+    label: "확인 신호 만료",
+    reason: "확인 출처의 유효 시간이 지나 기록 시점에는 재스캔이 필요합니다.",
+  };
+}
+
+// 화면에서 만료 처리되기 전 바로 기록을 눌러도, 당시 실제로 유효한 확인만
+// 의사결정 게이트에 쓰도록 한다. 입력 result 자체는 변경하지 않는다.
+function freshResultForRecord(result, now) {
+  const current = expireResult(result, now);
+  const rawSweep = current?.earlyConfirmation?.sweepRetest;
+  const sweep = freshSweep(rawSweep, now);
+  if (sweep === rawSweep) return current;
+  return {
+    ...current,
+    earlyConfirmation: { ...current.earlyConfirmation, sweepRetest: sweep },
+  };
+}
+
+function copyRange(range) {
+  if (!range || typeof range !== "object") return null;
+  return {
+    high: numberOrNull(range.high), low: numberOrNull(range.low), mid: numberOrNull(range.mid),
+    openTime: numberOrNull(range.openTime), closeTime: numberOrNull(range.closeTime),
+    expiresAt: numberOrNull(range.expiresAt),
+  };
+}
+
+function copyPlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  return {
+    entry: numberOrNull(plan.entry), invalidation: numberOrNull(plan.invalidation),
+    tp1: numberOrNull(plan.tp1), tp2: numberOrNull(plan.tp2),
+    riskReward: numberOrNull(plan.riskReward), netRR: numberOrNull(plan.netRR),
+  };
+}
+
+function crtExpiry(source) {
+  const rangeExpiry = numberOrNull(source?.range?.expiresAt);
+  const confirmationTime = numberOrNull(source?.confirmationTime);
+  const confirmationExpiry = confirmationTime == null ? null
+    : confirmationTime + (CONFIG.crtTbs.freshBars * M5);
+  if (rangeExpiry != null && confirmationExpiry != null) return Math.min(rangeExpiry, confirmationExpiry);
+  return rangeExpiry ?? confirmationExpiry;
+}
+
+function copyCrtConfirmation(source, now) {
+  if (!source || typeof source !== "object") return null;
+  const current = currentCrtStatus(source, now) || source;
+  const asOf = numberOrNull(source.asOf);
+  const asOfAgeMs = asOf == null ? null : Math.max(0, now - asOf);
+  const expiresAt = crtExpiry(source);
+  const expired = current.status === "expired" || (expiresAt != null && now >= expiresAt);
+  return {
+    source: "CRT + Turtle Body Soup",
+    available: current.available === true,
+    confirmed: current.confirmed === true,
+    status: textOrNull(current.status), label: textOrNull(current.label), reason: textOrNull(current.reason),
+    originalStatus: textOrNull(source.status), originalConfirmed: source.confirmed === true,
+    direction: textOrNull(current.direction), asOf, confirmationTime: numberOrNull(source.confirmationTime),
+    sweepTime: numberOrNull(source.sweepTime), reclaimTime: numberOrNull(source.reclaimTime),
+    expiresAt, range: copyRange(source.range), plan: copyPlan(current.plan),
+    freshness: {
+      evaluatedAt: now, expiresAt, expired,
+      asOfAgeMs, asOfFresh: asOfAgeMs == null ? null : asOfAgeMs <= M5,
+      fresh: !expired && current.available !== false && (asOfAgeMs == null || asOfAgeMs <= M5),
+    },
+  };
+}
+
+function copySweepConfirmation(source, now) {
+  if (!source || typeof source !== "object") return null;
+  const current = freshSweep(source, now);
+  const expiresAt = numberOrNull(source.expiresAt);
+  const expired = expiresAt != null && now >= expiresAt;
+  return {
+    source: "첫 눌림 재확인",
+    available: current.available !== false,
+    confirmed: current.confirmed === true,
+    status: textOrNull(current.status), label: textOrNull(current.label), reason: textOrNull(current.reason),
+    originalStatus: textOrNull(source.status), originalConfirmed: source.confirmed === true,
+    direction: textOrNull(current.direction), expiresAt,
+    stage: numberOrNull(source.stage), base: source.base ? {
+      startTime: numberOrNull(source.base.startTime), endTime: numberOrNull(source.base.endTime),
+      crashTime: numberOrNull(source.base.crashTime), drop: numberOrNull(source.base.drop),
+    } : null,
+    freshness: { evaluatedAt: now, expiresAt, expired, fresh: !expired && current.available !== false },
+  };
+}
+
+function copySignalSources(result, now) {
+  const signalTime = firstNumber(result?.signalTime, result?.early?.signalTime);
+  const signalExpiresAt = firstNumber(result?.signalExpiresAt, result?.early?.signalExpiresAt);
+  const marketPriceAt = firstNumber(result?.marketPriceAt, result?.early?.marketPriceAt);
+  const signalPrice = firstNumber(result?.signalPrice, result?.early?.signalPrice, result?.price);
+  const marketPrice = firstNumber(result?.marketPrice, result?.price);
+  const signalAgeMs = signalTime == null ? null : Math.max(0, now - signalTime);
+  const marketAgeMs = marketPriceAt == null ? null : Math.max(0, now - marketPriceAt);
+  const signalExpired = signalExpiresAt == null
+    ? signalAgeMs == null ? null : signalAgeMs > H4 + 2 * M5
+    : now >= signalExpiresAt;
+  return {
+    capturedAt: now,
+    price: {
+      signalPrice, marketPrice, signalTime, signalExpiresAt, marketPriceAt,
+      candleInterval: textOrNull(result?.signalInterval) || (result?.scanMode === "early" ? "4h" : null),
+      signalAgeMs, marketAgeMs,
+      signalExpired,
+      signalFresh: signalExpired == null ? null : !signalExpired,
+      marketFresh: marketAgeMs == null ? null : marketAgeMs <= M5,
+    },
+    score: copyScoreSources(result),
+    earlyMetrics: copyEarlyMetrics(result?.early),
+  };
+}
+
+function copyConfirmationSources(result, now) {
+  return {
+    capturedAt: now,
+    crtTbs: copyCrtConfirmation(result?.crtTbs, now),
+    sweepRetest: copySweepConfirmation(result?.earlyConfirmation?.sweepRetest ?? result?.sweepRetest, now),
+  };
+}
 
 function normalizeRecord(rec) {
   if (!rec || typeof rec !== "object") return null;
@@ -137,23 +341,24 @@ function copyRegime(regime) {
 }
 
 export function buildPaperRecord(result, settings = state.settings, now = Date.now()) {
-  const p = result?.plan;
+  const current = freshResultForRecord(result, now);
+  const p = current?.plan;
   if (!p?.valid) return null;
-  const direction = result.direction === "short" ? "short" : "long";
+  const direction = current.direction === "short" ? "short" : "long";
   const entry = Number(p.entry), stop = Number(p.invalidation), tp2 = Number(p.tp2);
   const risk = Math.abs(entry - stop);
   if (!(entry > 0) || !(risk > 0) || !finite(tp2)) return null;
   const geometryValid = direction === "long" ? stop < entry && tp2 > entry : stop > entry && tp2 < entry;
   if (!geometryValid) return null;
 
-  const gate = buildDecisionGate(result, now);
+  const gate = buildDecisionGate(current, now);
   return {
     schemaVersion: SCHEMA_VERSION,
-    id: `${result.symbol}-${now}`,
-    symbol: result.symbol,
+    id: `${current.symbol}-${now}`,
+    symbol: current.symbol,
     at: now,
     status: "open",
-    scanMode: result.scanMode || result.mode || "early",
+    scanMode: current.scanMode || current.mode || "early",
     direction,
     entry,
     stop,
@@ -161,13 +366,18 @@ export function buildPaperRecord(result, settings = state.settings, now = Date.n
     tp2,
     tp3: finite(Number(p.tp3)) ? Number(p.tp3) : null,
     plannedRR: Math.abs(tp2 - entry) / risk,
-    score: Number(result.score),
-    stage: result.stage ? { stage: result.stage.stage, label: result.stage.label } : null,
-    grade: result.grade ? { key: result.grade.key, label: result.grade.label } : null,
-    topSignals: Array.isArray(result.topSignals) ? result.topSignals.slice(0, 5) : [],
-    forecast: copyForecast(result.forecast),
-    marketRegime: copyRegime(result.marketRegime || state.marketRegime),
-    regimeFit: result.regimeFit ? { ...result.regimeFit } : null,
+    score: Number(current.score),
+    stage: current.stage ? { stage: current.stage.stage, label: current.stage.label } : null,
+    grade: current.grade ? { key: current.grade.key, label: current.grade.label } : null,
+    topSignals: Array.isArray(current.topSignals) ? current.topSignals.slice(0, 5) : [],
+    // 새 필드는 선택 사항이다. schemaVersion 1~2의 localStorage 레코드는 normalizeRecord에서
+    // 그대로 읽고, 이후 새 기록만 이 스냅샷을 갖는다.
+    signalSources: copySignalSources(current, now),
+    earlyAxes: copyEarlyAxes(current.earlyAxes),
+    confirmationSources: copyConfirmationSources(result, now),
+    forecast: copyForecast(current.forecast),
+    marketRegime: copyRegime(current.marketRegime || state.marketRegime),
+    regimeFit: current.regimeFit ? { ...current.regimeFit } : null,
     decisionGate: {
       status: gate.status,
       label: gate.label,
@@ -247,14 +457,24 @@ function csvCell(value) {
 export function paperCsv(records) {
   const headers = [
     "id", "symbol", "recordedAt", "closedAt", "mode", "direction", "score", "gate",
-    "regime", "entry", "stop", "tp1", "tp2", "tp3", "plannedRR", "status", "grossR", "netR", "mfeR", "maeR",
+    "regime", "signalAt", "signalExpiresAt", "signalPrice", "signalFresh", "marketPriceAt", "marketPrice", "readiness", "risk",
+    "crtStatus", "crtFresh", "sweepStatus", "sweepFresh",
+    "entry", "stop", "tp1", "tp2", "tp3", "plannedRR", "status", "grossR", "netR", "mfeR", "maeR",
   ];
   const lines = (records || []).map((raw) => {
     const rec = normalizeRecord(raw);
     const s = rec.settlement || {};
+    const price = rec.signalSources?.price || {};
+    const confirmations = rec.confirmationSources || {};
     return [
       rec.id, rec.symbol, rec.at ? new Date(rec.at).toISOString() : "", rec.closeTs ? new Date(rec.closeTs).toISOString() : "",
       rec.scanMode, rec.direction, rec.score, rec.decisionGate?.label, rec.marketRegime?.label,
+      price.signalTime ? new Date(price.signalTime).toISOString() : "", price.signalExpiresAt ? new Date(price.signalExpiresAt).toISOString() : "",
+      price.signalPrice, price.signalFresh,
+      price.marketPriceAt ? new Date(price.marketPriceAt).toISOString() : "", price.marketPrice,
+      rec.earlyAxes?.readiness?.score, rec.earlyAxes?.risk?.score,
+      confirmations.crtTbs?.status, confirmations.crtTbs?.freshness?.fresh,
+      confirmations.sweepRetest?.status, confirmations.sweepRetest?.freshness?.fresh,
       rec.entry, rec.stop, rec.tp1, rec.tp2, rec.tp3, rec.plannedRR,
       s.status || rec.status, s.grossR, s.netR, s.mfeR, s.maeR,
     ].map(csvCell).join(",");

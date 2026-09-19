@@ -17,6 +17,7 @@ import { modesForScan, resultMode } from "../scan-modes.js";
 import { evaluateCrtTbs } from "../core/crt-tbs.js";
 import { analyzeMarketRegime, regimeAlignment } from "../core/market-regime.js";
 import { findSweepBase, buildSweepResult } from "../core/sweep-retest.js";
+import { selectEarlyConfirmationTargets } from "../core/early-selection.js";
 
 let abortToken = { aborted: false };
 
@@ -97,11 +98,15 @@ async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
   const evaluated = await mapWithProgress(midCaps, async (item) => {
     const k4h = await getKlines(item.symbol, "4h");
     const closed = closedOnly(k4h, settings.includeRealtimeCandle);
-    return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
+    return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG, now) };
   });
   let candidates = evaluated
     .filter((x) => x.res?.pass)
-    .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
+    // 최종 조기포착 점수와 같은 입력으로 우선순위를 매긴다. 예전 squeezePct 는
+    // 이 단계에서 만들지도 않는 값이어서 사실상 티커 원래 순서를 따르고 있었다.
+    .sort((a, b) => (b.res.priority ?? -Infinity) - (a.res.priority ?? -Infinity)
+      || (b.item.quoteVolume ?? 0) - (a.item.quoteVolume ?? 0)
+      || String(a.item.symbol).localeCompare(String(b.item.symbol)))
     .slice(0, e.keepMax);
   state.candidates = candidates.map((x) => x.item);
   emit("scan:candidates", { count: candidates.length });
@@ -119,32 +124,6 @@ async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
     return result;
   });
   const results = analyzed.filter(Boolean);
-
-  // 첫 눌림은 별도 스캐너가 아니라 최종 소수 후보의 추가 확인으로만 계산한다.
-  // 모든 심볼에 1h/15m/5m를 요청하지 않아 API 예산을 지킨다.
-  const confirmationTargets = [...results]
-    .filter((r) => r.score >= CONFIG.earlyMinScore)
-    .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))
-    .slice(0, CONFIG.earlyKeepTop);
-  if (confirmationTargets.length) {
-    setPhase("confirmation");
-    await mapWithProgress(confirmationTargets, async (result) => {
-      try {
-        const [h1, m15, m5] = await Promise.all([
-          getKlines(result.symbol, "1h"), getKlines(result.symbol, "15m", 260), getKlines(result.symbol, "5m", 200),
-        ]);
-        const sweep = buildSweepResult(result, { h1, m15, m5, btc4h: market4h, now, config: CONFIG.sweepRetest });
-        result.earlyConfirmation = {
-          sweepRetest: sweep?.sweepRetest || { status: "none", confirmed: false, label: "첫 눌림 확인 없음", reason: "패턴의 시작 조건이 없습니다." },
-        };
-      } catch {
-        result.earlyConfirmation = {
-          sweepRetest: { status: "unavailable", confirmed: false, label: "첫 눌림 산출 보류", reason: "확인용 캔들 조회에 실패했습니다." },
-        };
-      }
-      return result;
-    });
-  }
 
   // 후보끼리 같이 움직이는지 — k4h 가 아직 손에 있을 때 여기서 계산한다.
   // 화면에 3개가 떠도 셋이 같이 움직이면 분산이 아니라 한 종목에 3배 실은 것이다.
@@ -356,28 +335,43 @@ export async function runScan() {
       result.marketRegime = state.marketRegime;
       result.regimeFit = regimeAlignment(state.marketRegime, result.direction);
     }
-    // 후보만 추가 확인. 중복 심볼은 1회 분석하고 기존 캔들 캐시를 재사용한다.
+    // 화면 기본 필터를 먼저 통과한 상위 소수만 CRT·첫 눌림을 함께 확인한다.
+    // CRT/TBS 자체는 이 단계에서 처음 계산되므로 선택 규칙에 넣지 않는다.
     if (abortToken.aborted) return finishAborted();
-    const symbolsToConfirm = [...new Set(combined
-      .filter((r) => r && !r.skipped && !r.error && r.score >= CONFIG.earlyMinScore)
-      .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))
-      .slice(0, CONFIG.earlyKeepTop)
-      .map((r) => r.symbol))];
-    const confirmations = new Map();
-    if (symbolsToConfirm.length) {
+    const confirmationTargets = selectEarlyConfirmationTargets(combined, settings, CONFIG);
+    if (confirmationTargets.length) {
       setPhase("confirmation");
-      await mapWithProgress(symbolsToConfirm.map((symbol) => ({ symbol })), async ({ symbol }) => {
+      await mapWithProgress(confirmationTargets, async (result) => {
         try {
-          const [h4, m5] = await Promise.all([getKlines(symbol, "4h"), getKlines(symbol, "5m")]);
-          confirmations.set(symbol, evaluateCrtTbs(h4, m5));
+          // 1h/15m/5m/4h를 각각 후보 3개에만 요청한다. 앞 단계의 4h 결과는 API 캐시가
+          // 재사용하며, 같은 시세 묶음에서 CRT와 첫 눌림 근거를 함께 고정한다.
+          const [h4, h1, m15, m5] = await Promise.all([
+            getKlines(result.symbol, "4h"), getKlines(result.symbol, "1h"),
+            getKlines(result.symbol, "15m", 260), getKlines(result.symbol, "5m", 200),
+          ]);
+          result.crtTbs = evaluateCrtTbs(h4, m5, { now, config: CONFIG });
+          const sweep = buildSweepResult(result, {
+            h1, m15, m5, btc4h: market4h, now, config: CONFIG.sweepRetest,
+          });
+          result.earlyConfirmation = {
+            sweepRetest: sweep?.sweepRetest || {
+              status: "none", confirmed: false, label: "첫 눌림 확인 없음", reason: "패턴의 시작 조건이 없습니다.",
+            },
+          };
         } catch {
-          confirmations.set(symbol, { available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "CRT 캔들 조회 실패" });
+          result.crtTbs = {
+            available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "확인용 CRT 캔들 조회 실패",
+          };
+          result.earlyConfirmation = {
+            sweepRetest: {
+              status: "unavailable", confirmed: false, label: "첫 눌림 산출 보류", reason: "확인용 캔들 조회에 실패했습니다.",
+            },
+          };
         }
-        return { symbol };
+        return result;
       });
     }
     if (abortToken.aborted) return finishAborted();
-    for (const r of combined) if (r && !r.skipped && !r.error) r.crtTbs = confirmations.get(r.symbol);
     return finishScan(combined, requestedMode);
   } catch (e) {
     console.error("스캔 실패", e);

@@ -33,6 +33,11 @@ export function buildDecisionGate(result, now = Date.now()) {
     checks.push(item("plan", "block", "계획 무효", "진입·손절·목표를 다시 계산해야 합니다."));
   }
 
+  const signalExpiresAt = Number(result?.signalExpiresAt);
+  if (mode === "early" && Number.isFinite(signalExpiresAt) && now >= signalExpiresAt) {
+    checks.push(item("signal-freshness", "block", "4시간 신호 만료", "새 4시간 마감봉이 나와 가격·ATR·신호를 재계산해야 합니다."));
+  }
+
   const stage = Number(result?.stage?.stage);
   if (mode === "reversal" && stage === 5) {
     checks.push(item("stage", "block", "추격 위험", "이미 늦은 구간으로 분류됐습니다."));

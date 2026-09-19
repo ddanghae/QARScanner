@@ -18,6 +18,7 @@ let activeResultKey = null;
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
 function moneySection(p) {
   const s = state.settings;
+  if (!p?.valid) return `<p class="muted">계획이 보류되어 손익 금액도 계산하지 않습니다.</p>`;
   const on = s.partialTake !== false;
   const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, on ? undefined : 0);
@@ -102,9 +103,18 @@ export function renderDetail(r) {
   const modeMeta = SCAN_MODE_META[mode];
   const isPumpFade = mode === "pump_fade";
   const isSweep = mode === "sweep_retest";
+  const isEarly = mode === "early";
+  const marketChange = isEarly
+    ? { label: "24h", value: r.change24h }
+    : { label: "6h", value: r.change6h };
   const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
   const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
+  const planSection = !p?.valid ? `<section class="detail-section">
+      <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
+      <p class="warn"><b>계획 보류</b> · ${escapeHtml(p?.warning || "새 마감봉 뒤 다시 계산해 주세요.")}</p>
+      <p class="muted">이 후보의 잠재력 점수와 관찰 체크리스트는 남지만, 손절·목표·예상 손익은 유효한 가격 계획이 생길 때만 표시합니다.</p>
+    </section>` : null;
 
   return `
   <div class="detail-card" role="dialog" aria-modal="true">
@@ -119,8 +129,9 @@ export function renderDetail(r) {
       </div>
       <div class="detail-sub">
         ${stageBadge}
-        <span>현재가 ${fmtPrice(r.price)}</span>
-        <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
+        <span>스캔 시세 ${fmtPrice(r.price)}</span>
+        <span class="${pctClass(marketChange.value)}">${marketChange.label} ${fmtPct(marketChange.value)}</span>
+        ${isEarly && Number.isFinite(r.signalPrice) ? `<span>신호 기준(4h 마감) ${fmtPrice(r.signalPrice)}</span>` : ""}
         <span>거래대금 ${fmtVolume(r.quoteVolume)}</span>
         ${r.newListing ? '<span class="badge badge-blue">신규</span>' : ""}
         ${r.provisional ? '<span class="badge badge-yellow">진행 중 캔들 포함 · 변경 가능</span>' : ""}
@@ -140,7 +151,7 @@ export function renderDetail(r) {
     ${isSweep ? "" : forecastSection(r)}
     ${isSweep ? "" : crtSection(r)}
 
-    ${isSweep ? sweepRetestSection(r) : `<section class="detail-section">
+    ${isSweep ? sweepRetestSection(r) : planSection || `<section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>

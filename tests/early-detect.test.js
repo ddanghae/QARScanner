@@ -47,13 +47,15 @@ export function run() {
     for (const k of ["boxLookback", "squeezeLookback", "momentumBars", "deadZonePct",
       "momentumFullPct", "chg24MinPct", "chg24FullPct",
       "freshFullDays", "freshZeroDays", "minQuoteVolume",
-      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "prefilterDeadZonePct"]) {
+      "breakoutRelVol", "breakoutMaxRunPct", "pumpedMaxPct", "prefilterDeadZonePct",
+      "maxPlanRiskPct", "maxSignalPriceDriftPct"]) {
       assert(e[k] !== undefined, `earlyDetect.${k} 필요`);
     }
     // 램프 문턱은 반드시 lo < hi 여야 한다(뒤집히면 clamp 가 조용히 전부 0/만점을 준다).
     assert(e.deadZonePct < e.momentumFullPct, "deadZonePct < momentumFullPct");
     assert(e.chg24MinPct < e.chg24FullPct, "chg24MinPct < chg24FullPct");
     assert(e.freshFullDays < e.freshZeroDays, "freshFullDays < freshZeroDays");
+    assert(e.maxPlanRiskPct > 0 && e.maxSignalPriceDriftPct > 0, "가격 안전 상한은 양수");
   });
 
   // config 경계값 회귀 방지 — 아래 둘은 계산식이 아니라 "표본이 1개 모자라" 죽었던 버그다.
@@ -221,7 +223,13 @@ export function run() {
 
   test("하락 쪽 잠재력은 유지하되 상승 임박으로 올리지 않는다", () => {
     const up = classifyEarlyStage(baseMetrics({ mom14: 30, mom14Abs: 30, change24h: 12 }), CONFIG);
-    const down = classifyEarlyStage(baseMetrics({ mom14: -30, mom14Abs: 30, change24h: -12 }), CONFIG);
+    // 장기 EMA·박스 상단·거래량·ATR 이 모두 좋아 준비도가 55점이어도, 실제 방향이
+    // 하락이면 "임박"으로 보이면 안 된다.
+    const down = classifyEarlyStage(baseMetrics({
+      mom14: -30, mom14Abs: 30, change24h: -12,
+      closeAboveEma200: true, ema200SlopeOk: true,
+      rangePos: 0.8, relVol3: 2, atrRising: true,
+    }), CONFIG);
     eq(up.stage, 3, "상승 회복은 임박");
     eq(down.stage, 2, "하락 중이면 준비 단계에 머묾");
   });
@@ -359,6 +367,36 @@ export function run() {
     assert(noAtr.stop < noAtr.entry && noAtr.valid, `ATR 없을 때 폴백 (stop ${noAtr.stop})`);
   });
 
+  test("plan — 0 이하 또는 과도하게 먼 손절은 계획을 보류한다", () => {
+    // entry 100, ATR×4 = 120 이라 손절이 -20 이 된다. 예전에는 -20 과 큰 목표가가
+    // 정상 계획처럼 노출됐다.
+    const nonPositiveStop = earlyPlan(baseMetrics(), 30, 100, CONFIG);
+    eq(nonPositiveStop.valid, false, "0 이하 손절은 무효");
+    eq(nonPositiveStop.invalidation, null, "실행 가능한 손절가를 만들지 않음");
+    eq(nonPositiveStop.tp2, null, "목표가도 함께 보류");
+    assert(nonPositiveStop.warning?.includes("0 이하"), "보류 사유를 알려 줌");
+
+    // 손절 자체는 양수여도 80% 거리면 계획으로 제시하기에 비현실적이다.
+    const tooWide = earlyPlan(baseMetrics(), 20, 100, CONFIG);
+    eq(tooWide.valid, false, "기본 최대 손절 폭(25%)을 넘으면 무효");
+    eq(tooWide.invalidation, null, "과도한 손절을 숨김");
+    assert(tooWide.warning?.includes("80.00%"), "실제 손절 폭을 경고에 표시");
+
+    const atBoundary = earlyPlan(baseMetrics(), 6.25, 100, CONFIG);
+    eq(atBoundary.valid, true, "정확히 최대 손절 폭인 25%는 부동소수점 오차로 보류하지 않음");
+
+    const strictCfg = { ...CONFIG, earlyDetect: { ...CONFIG.earlyDetect, maxPlanRiskPct: 5 } };
+    const customCap = earlyPlan(baseMetrics(), 2, 100, strictCfg);
+    eq(customCap.valid, false, "설정한 손절 폭 상한도 반영");
+    assert(customCap.warning?.includes("5.00%"), "설정 상한을 경고에 표시");
+  });
+
+  test("plan — 현재 시세가 4시간 신호 기준가에서 크게 벗어나면 보류한다", () => {
+    const p = earlyPlan(baseMetrics({ marketDriftPct: CONFIG.earlyDetect.maxSignalPriceDriftPct + 0.1 }), 2, 100, CONFIG);
+    eq(p.valid, false, "진행 중 봉에서 크게 움직인 가격은 계획으로 쓰지 않음");
+    assert(p.warning?.includes("신호 기준가"), "재스캔 사유를 보여 줌");
+  });
+
   // 화면에 원 단위 금액이 뜨므로 산수가 틀리면 사용자가 바로 손해를 오해한다.
   // 부분 익절 전제라 결과가 셋이다 — 손절 / 절반만 먹고 본전 / 끝까지.
   test("손익 금액 — 시드에 비례하고 왕복 비용이 양쪽에서 빠진다", () => {
@@ -463,12 +501,24 @@ export function run() {
     const { candles, item } = earlyFixture();
     const r = buildEarlyResult(item, candles, [], null, CONFIG);
     assert(r != null, "1단계 조건을 만족하는 픽스처인데 null");
-    for (const k of ["symbol", "price", "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
+    for (const k of ["symbol", "price", "signalPrice", "signalTime", "signalExpiresAt", "marketPriceAt",
+      "score", "grade", "stage", "breakdown", "penalties", "topSignals", "plan", "direction"]) {
       assert(r[k] !== undefined, `결과에 ${k} 필요`);
     }
     eq(r.direction, "long", "early 는 롱 전용");
     assert(r.stage.stage >= 1 && r.stage.stage <= 5, "단계는 1~5");
     assert(r.earlyAxes?.potential && r.earlyAxes?.readiness && r.earlyAxes?.risk, "3축 필요");
+  });
+
+  test("결과 조립 — 스캔 시세와 4시간 신호 기준가를 분리한다", () => {
+    const { candles, item } = earlyFixture();
+    const signalPrice = candles.at(-1).close;
+    const marketPrice = signalPrice * 1.02;
+    const r = buildEarlyResult({ ...item, lastPrice: marketPrice }, candles, [], null, CONFIG);
+    eq(r.price, marketPrice, "가격 칸은 티커 시장가");
+    eq(r.signalPrice, signalPrice, "지표 기준은 마지막 4시간 마감가");
+    assert(r.marketDriftPct > 1.9 && r.marketDriftPct < 2.1, "두 가격의 차이를 보존");
+    assert(r.signalExpiresAt > r.signalTime, "다음 4시간 마감에 신호 만료");
   });
 
   test("펀딩·OI 조회 실패해도 후보는 살아있다 — 엔드포인트 하나로 0건이 되면 안 된다", () => {

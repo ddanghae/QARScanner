@@ -161,7 +161,7 @@ function resultTables(view) {
   return `
     <table class="result-table">
       <thead><tr>
-        <th>후보</th><th>검토 상태</th><th>시장</th><th>24h 전망</th>
+        <th>후보</th><th>검토 상태</th><th>스캔 시세</th><th>24h 전망</th>
         <th>계획</th><th>예상 손익</th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
@@ -188,6 +188,14 @@ const isEarly = (r) => resultMode(r) === "early";
 const isPumpFade = (r) => r?.scanMode === "pump_fade";
 const isSweep = (r) => resultMode(r) === "sweep_retest";
 const scoreLabel = (r) => isSweep(r) ? `진행 ${r.stage.stage}/5` : String(r.score);
+
+// 조기포착은 4시간봉으로 신호를 계산하지만, 가격 칸은 티커를 받은 순간의 시장가다.
+// 예전 6h 값은 실제로 계산하지 않고 0으로 표시했으므로, 검증 가능한 24h 티커 변동만 쓴다.
+function marketChange(r) {
+  return isEarly(r)
+    ? { label: "24h", value: r.change24h }
+    : { label: "6h", value: r.change6h };
+}
 
 function modeBadge(mode) {
   const meta = SCAN_MODE_META[mode] || SCAN_MODE_META.early;
@@ -226,6 +234,7 @@ const partialOn = () => state.settings.partialTake !== false;
 function moneyCell(r) {
   if (isSweep(r)) return `<span class="muted">탐지 전용 · 금액 계산 안 함</span>`;
   if (isPumpFade(r)) return `<span class="muted">실험 신호 · 금액 계산 안 함</span>`;
+  if (!r.plan?.valid) return `<span class="muted">계획 보류</span>`;
   const s = state.settings;
   const m = planMoney(r.plan, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, partialOn() ? undefined : 0);
@@ -277,6 +286,8 @@ function noiseBadge(r) {
 function planCell(r) {
   if (isSweep(r)) return `<div class="plan-stack plan-stack-wrap"><b>${escapeHtml(r.sweepRetest?.label || r.stage.label)}</b>`
     + `<small>${escapeHtml(r.sweepRetest?.reason || "다음 순서를 기다립니다.")}</small></div>`;
+  if (!r.plan?.valid) return `<div class="plan-stack plan-stack-wrap"><b>계획 보류</b>`
+    + `<small>${escapeHtml(r.plan?.warning || "새 마감봉 뒤 다시 계산해 주세요.")}</small></div>`;
   return `<div class="plan-stack"><span>진입 <b>${fmtPrice(r.plan.entry)}</b></span>`
     + `<span>손절 <b class="down">${fmtPrice(r.plan.invalidation)}</b></span>`
     + `<small>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</small></div>`;
@@ -285,6 +296,8 @@ function planCell(r) {
 function paperButton(r, key) {
   return isSweep(r)
     ? '<button class="btn-mini" disabled title="진입·손절·목표 계획을 만들지 않는 탐지 전용 모드입니다.">기록 불가</button>'
+    : !r.plan?.valid
+      ? `<button class="btn-mini" disabled title="${escapeHtml(r.plan?.warning || "계획이 유효하지 않습니다.")}">기록 보류</button>`
     : `<button class="btn-mini" data-paper="${key}">기록</button>`;
 }
 
@@ -323,10 +336,11 @@ function candidateTags(r) {
 
 function rowHtml(r) {
   const key = resultKey(r);
+  const change = marketChange(r);
   return `<tr data-result-key="${key}">
     <td class="candidate-cell"><div class="candidate-main"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button><b>${escapeHtml(r.symbol)}</b><span class="score-pill score-${r.grade.key}">${scoreLabel(r)}</span></div><div class="candidate-sub"><span>#${r.rank}</span>${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></div></td>
     <td><div class="decision-stack">${candidateTags(r)}</div></td>
-    <td><div class="market-stack"><b>${fmtPrice(r.price)}</b><span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span><small>${fmtVolume(r.quoteVolume)}</small></div></td>
+    <td><div class="market-stack"><b>${fmtPrice(r.price)}</b><span class="${pctClass(change.value)}">${change.label} ${fmtPct(change.value)}</span><small>${fmtVolume(r.quoteVolume)}</small></div></td>
     <td>${forecastCell(r)}</td>
     <td>${planCell(r)}</td>
     <td class="risk-cell">${moneyCell(r)}</td>
@@ -337,6 +351,7 @@ function rowHtml(r) {
 function cardHtml(r) {
   const p = r.plan;
   const key = resultKey(r);
+  const change = marketChange(r);
   return `<div class="rcard" data-result-key="${key}">
     <div class="rcard-top">
       <button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>
@@ -346,7 +361,7 @@ function cardHtml(r) {
     <div class="rcard-meta">${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span><span class="muted">#${r.rank}</span></div>
     <div class="rcard-decision">${candidateTags(r)}</div>
     <div class="rcard-grid">
-      <div class="rcard-metric"><small>현재 시장</small><b>${fmtPrice(r.price)}</b><span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)} · ${fmtVolume(r.quoteVolume)}</span></div>
+      <div class="rcard-metric"><small>스캔 시세</small><b>${fmtPrice(r.price)}</b><span class="${pctClass(change.value)}">${change.label} ${fmtPct(change.value)} · ${fmtVolume(r.quoteVolume)}</span></div>
       <div class="rcard-metric"><small>24h 전망</small>${forecastCell(r)}</div>
       <div class="rcard-metric"><small>${isSweep(r) ? "패턴 상태" : "계획"}</small>${planCell(r)}</div>
       <div class="rcard-metric"><small>예상 손익</small>${moneyCell(r)}</div>

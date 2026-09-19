@@ -6,6 +6,7 @@ import { CONFIG, minScoreFor, strictnessPreset } from "../config.js";
 import { modesForScan, resultMode } from "../scan-modes.js";
 import { toast } from "./notifications.js";
 import { crtMatchesCandidate } from "../core/crt-tbs.js";
+import { filterEarlyReviewCandidates, rankEarlyReviewCandidates } from "../core/early-selection.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
 const CHECK_BINDINGS = [
@@ -31,19 +32,23 @@ function applyModeFilters(results, mode, s, unified) {
   const reversal = mode === "reversal";
   const early = mode === "early";
   const pumpFade = mode === "pump_fade";
-  let list = results.filter((r) => resultMode(r) === mode);
+  // 비싼 CRT·첫 눌림 확인을 보낼 후보와 같은 기본 규칙을 쓴다. CRT 자체는 아직
+  // 계산 전이므로 아래에서 별도로 적용한다.
+  let list = early
+    ? filterEarlyReviewCandidates(results, s, CONFIG)
+    : results.filter((r) => resultMode(r) === mode);
   // sweep_retest는 자체 5분 구조·BTC 확인을 포함하므로 별도 CRT 필터 대상이 아니다.
   if (s.crtTbsOnly && mode !== "sweep_retest") list = list.filter((r) => crtMatchesCandidate(r));
 
   // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
   if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  list = list.filter((r) => r.score >= minScoreFor({ ...s, scanMode: mode }));
+  if (!early) list = list.filter((r) => r.score >= minScoreFor({ ...s, scanMode: mode }));
   // 관심 종목만
-  if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
+  if (!early && s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
-  if ((reversal || early) && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  if (reversal && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
   // 신규 종목 제외
-  if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
+  if (!early && s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
   if (reversal && s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
   // 1시간봉 200일선 밀착만
@@ -52,21 +57,25 @@ function applyModeFilters(results, mode, s, unified) {
   // early 모드의 매집 구간은 정의상 횡보(=촙)라 이 필터를 적용하면 후보가 전멸한다.
   if (reversal && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
-  if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
+  if (!early && s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
-  if (!unified && s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
+  if (!early && !unified && s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
 
   const sortFns = {
-    score: pumpFade
+    score: early
+      ? (a, b) => b.score - a.score || b.quoteVolume - a.quoteVolume || a.symbol.localeCompare(b.symbol)
+      : pumpFade
       ? (a, b) => b.stage.stage - a.stage.stage || b.score - a.score
       : (a, b) => b.score - a.score,
-    change: pumpFade ? (a, b) => b.change6h - a.change6h : (a, b) => a.change6h - b.change6h,
+    change: pumpFade ? (a, b) => b.change6h - a.change6h
+      : early ? (a, b) => (b.change24h ?? -Infinity) - (a.change24h ?? -Infinity)
+        : (a, b) => a.change6h - b.change6h,
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
   // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다 — 반드시 점수 기준으로,
   // 사용자 정렬보다 먼저. 정렬 뒤에 자르면 "거래대금" 정렬이 순서가 아니라 보이는
   // 집합 자체를 바꿔(점수 최하위 5개만 남음) 정렬이 필터로 변한다.
-  list.sort(sortFns.score);
+  list = early ? rankEarlyReviewCandidates(list) : list.sort(sortFns.score);
   const keepMax = mode === "sweep_retest" ? CONFIG.sweepRetest.keepMax : pumpFade ? CONFIG.pumpFade.keepMax : early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop;
   list = list.slice(0, keepMax);
 

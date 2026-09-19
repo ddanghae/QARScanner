@@ -124,10 +124,95 @@ export function run() {
       marketRegime: { available: true, key: "bull", label: "상승 국면", bias: "long" },
       regimeFit: { key: "aligned", label: "시장 흐름 우호" },
     }, { seedMoney: 1_000_000, leverage: 1 }, 1234);
-    eq(rec.schemaVersion, 2);
+    eq(rec.schemaVersion, 3);
     eq(rec.plannedRR, 4);
     eq(rec.marketRegime.key, "bull");
     assert(netRFor(rec, 4) < 4, "왕복비용만큼 순 R이 줄어야 함");
+  });
+
+  test("저널은 신호 출처·3축·CRT/TBS 확인 상태를 기록 시점에 고정", () => {
+    const now = 10_000_000;
+    const result = {
+      symbol: "SOURCEUSDT", scanMode: "early", direction: "long", score: 72,
+      price: 102, signalPrice: 100, signalTime: now - 20 * 60_000, marketPriceAt: now - 30_000,
+      plan: { valid: true, entry: 102, invalidation: 96, tp1: 108, tp2: 126 },
+      stage: { stage: 3, label: "임박" },
+      earlyAxes: {
+        potential: { score: 72, label: "강함" },
+        readiness: { score: 65, label: "준비", reasons: ["24시간 상승", "거래량 확인"] },
+        risk: { score: 80, label: "낮음", reasons: ["위험 조건 없음"] },
+      },
+      early: { mom14: 20, relVol3: 1.8, rangePos: 0.7, closeAboveEma200: true,
+        ema200SlopeOk: true, breakoutClose: false, oi: { change72h: 3, change12h: 1, prev12h: 0.5 } },
+      breakdown: [{ key: "momentum", label: "14일 추세 강도", weight: 45, got: 20, hit: true }],
+      topSignals: ["14일 추세 강도"],
+      crtTbs: {
+        available: true, confirmed: true, status: "confirmed", label: "전환 확인", direction: "long",
+        asOf: now - 60_000, confirmationTime: now - 60_000,
+        range: { high: 110, low: 90, mid: 100, expiresAt: now + 60 * 60_000 },
+      },
+      earlyConfirmation: { sweepRetest: {
+        available: true, confirmed: true, status: "confirmed", label: "첫 눌림 검토 후보",
+        expiresAt: now + 60_000, stage: 5, base: { startTime: 1, endTime: 2, crashTime: 0, drop: -20 },
+      } },
+    };
+    const rec = buildPaperRecord(result, { seedMoney: 1_000_000, leverage: 1 }, now);
+    eq(rec.schemaVersion, 3);
+    eq(rec.signalSources.price.signalPrice, 100);
+    eq(rec.signalSources.price.marketPrice, 102);
+    eq(rec.signalSources.price.signalFresh, true);
+    eq(rec.earlyAxes.readiness.score, 65);
+    eq(rec.earlyAxes.readiness.reasons.join("|"), "24시간 상승|거래량 확인");
+    eq(rec.confirmationSources.crtTbs.status, "confirmed");
+    eq(rec.confirmationSources.crtTbs.freshness.fresh, true);
+    eq(rec.confirmationSources.sweepRetest.status, "confirmed");
+    // 기록 뒤 원본 결과가 재스캔으로 바뀌어도 저널 레코드는 과거 상태를 유지한다.
+    result.earlyAxes.readiness.reasons.push("나중 변경");
+    result.early.relVol3 = 99;
+    eq(rec.earlyAxes.readiness.reasons.includes("나중 변경"), false);
+    eq(rec.signalSources.earlyMetrics.relVol3, 1.8);
+  });
+
+  test("만료된 확인 출처는 기록에 남기되, 게이트에서 현재 확인으로 쓰지 않는다", () => {
+    const now = 20_000_000;
+    const result = {
+      symbol: "STALEUSDT", scanMode: "early", direction: "long", score: 60,
+      plan: { valid: true, entry: 100, invalidation: 90, tp1: 110, tp2: 120 },
+      stage: { stage: 3, label: "임박" },
+      crtTbs: {
+        available: true, confirmed: true, status: "confirmed", label: "전환 확인", direction: "long",
+        // CRT는 5분 최신성도 만족해야 한다. 오래된 asOf는 재스캔 전에는 확인으로 쓰면 안 된다.
+        asOf: now - 5 * 60_000 - 1, confirmationTime: now - 60_000,
+        range: { expiresAt: now + 60 * 60_000 },
+      },
+      earlyConfirmation: { sweepRetest: {
+        available: true, confirmed: true, status: "confirmed", label: "첫 눌림 검토 후보", expiresAt: now - 1,
+      } },
+    };
+    const rec = buildPaperRecord(result, { seedMoney: 1_000_000, leverage: 1 }, now);
+    eq(rec.confirmationSources.crtTbs.status, "expired");
+    eq(rec.confirmationSources.crtTbs.originalConfirmed, true);
+    eq(rec.confirmationSources.crtTbs.freshness.fresh, false);
+    eq(rec.confirmationSources.sweepRetest.status, "expired");
+    eq(rec.confirmationSources.sweepRetest.originalConfirmed, true);
+    eq(rec.confirmationSources.sweepRetest.freshness.fresh, false);
+    const crtGate = rec.decisionGate.checks.find((check) => check.key === "crt");
+    eq(crtGate.level, "info", "만료 CRT를 통과로 저장하면 안 된다");
+    const sweepGate = rec.decisionGate.checks.find((check) => check.key === "sweep-retest");
+    eq(sweepGate.level, "info", "만료된 첫 눌림도 현재 확인으로 쓰면 안 된다");
+    eq(result.crtTbs.confirmed, true, "원본 스캔 결과는 저널 기록 때문에 바뀌면 안 된다");
+    eq(result.earlyConfirmation.sweepRetest.confirmed, true);
+  });
+
+  test("4시간 신호 기준이 만료되면 기록 버튼 경로도 계획을 거부한다", () => {
+    const now = 30_000_000;
+    const rec = buildPaperRecord({
+      symbol: "EXPIREDUSDT", scanMode: "early", direction: "long", score: 70,
+      signalExpiresAt: now - 1,
+      plan: { valid: true, entry: 100, invalidation: 90, tp1: 110, tp2: 140 },
+      stage: { stage: 3, label: "임박" },
+    }, { seedMoney: 1_000_000, leverage: 1 }, now);
+    eq(rec, null, "화면 만료 타이머 직전에도 오래된 가격 계획은 기록하지 않음");
   });
 
   test("저널 요약은 종료된 승패만 성과에 포함하고 최대 낙폭을 계산", () => {
@@ -153,6 +238,7 @@ export function run() {
       decisionGate: { label: "확인, 대기" }, settlement: { status: "win", netR: 2 },
     }]);
     assert(csv.startsWith("id,symbol,recordedAt"), "헤더가 있어야 함");
+    assert(csv.includes("signalAt,signalExpiresAt,signalPrice"), "신호 기준가·만료 시각을 내보낼 수 있어야 함");
     assert(csv.includes('"확인, 대기"'), "쉼표가 든 셀은 따옴표로 감싸야 함");
     assert(csv.includes("TESTUSDT"), "종목이 포함돼야 함");
   });

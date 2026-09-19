@@ -24,7 +24,8 @@ export function run() {
   test("다음 4시간 마감 전에는 같은 객체와 유효 계획을 유지한다", () => {
     const row = earlyRow(1_000);
     eq(expireResult(row, 999), row, "아직 유효하면 객체를 바꾸지 않음");
-    eq(buildDecisionGate(row, 999).status, "review", "만료 전에는 차단하지 않음");
+    eq(buildDecisionGate(row, 999).blockers, 0, "만료 전에는 가격 계획을 차단하지 않음");
+    eq(buildDecisionGate(row, 999).status, "wait", "성과 검증 전까지 관찰 전용");
   });
 
   test("다음 4시간 마감 뒤에는 가격 계획과 기록을 보류한다", () => {

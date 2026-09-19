@@ -89,6 +89,7 @@ export function buildDecisionGate(result, now = Date.now()) {
   }
 
   if (mode === "early") {
+    checks.push(item("early-evidence", "warn", "관찰 전용 · 성과 재검증 중", "15개 알트·24시간 보유 시험은 유효 24건, 승률 29.2%, 평균 -0.219R입니다. 표본과 실시간 재현이 부족하며 CRT·단계 확인도 수익성을 입증하지 않습니다."));
     const risk = result?.earlyAxes?.risk;
     if (risk?.score < 50) checks.push(item("early-risk", "block", "관찰 위험 높음", (risk.reasons || []).join(" · ") || "하락·추격 위험을 확인하세요."));
     else if (risk?.score < 75) checks.push(item("early-risk", "warn", "관찰 위험 주의", (risk.reasons || []).join(" · ") || "위험 조건이 있습니다."));
@@ -107,7 +108,7 @@ export function buildDecisionGate(result, now = Date.now()) {
   const warnings = checks.filter((x) => x.level === "warn").length;
   const passes = checks.filter((x) => x.level === "pass").length;
   const status = blockers ? "risk" : warnings ? "wait" : "review";
-  const label = status === "risk" ? "리스크 높음" : status === "wait" ? "확인 대기" : "검토 후보";
+  const label = status === "risk" ? "리스크 높음" : mode === "early" ? "관찰 전용" : status === "wait" ? "확인 대기" : "검토 후보";
   return {
     status,
     label,

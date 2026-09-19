@@ -205,9 +205,7 @@ function modeBadge(mode) {
 function oddsCell(r) {
   if (isSweep(r)) return `진행 ${r.stage.stage}/5`;
   if (!isEarly(r)) return escapeHtml(r.plan.rrText);
-  const b = CONFIG.earlyHitBaseline;
-  const lift = (r.grade.hitRate / b).toFixed(1);
-  return `<span class="odds" title="${CONFIG.earlyHitLabel} · 무작위 ${b}% 대비 ${lift}배">${r.grade.hitRate}% <span class="muted">(${lift}x)</span></span>`;
+  return `<span class="odds" title="과거 등급별 적중률을 현재 코인의 성공 확률로 적용할 근거가 부족합니다.">재검증 보류</span>`;
 }
 
 const FORECAST_LABEL = { up: "상승 우세", down: "하락 우세", neutral: "횡보 우세" };
@@ -290,7 +288,7 @@ function planCell(r) {
     + `<small>${escapeHtml(r.plan?.warning || "새 마감봉 뒤 다시 계산해 주세요.")}</small></div>`;
   return `<div class="plan-stack"><span>진입 <b>${fmtPrice(r.plan.entry)}</b></span>`
     + `<span>손절 <b class="down">${fmtPrice(r.plan.invalidation)}</b></span>`
-    + `<small>${isEarly(r) ? "급등확률" : "손익비"} ${oddsCell(r)}</small></div>`;
+    + `<small>${isEarly(r) ? "예측 근거" : "손익비"} ${oddsCell(r)}</small></div>`;
 }
 
 function paperButton(r, key) {
@@ -318,7 +316,7 @@ function earlyAxisBadges(r) {
   const a = r?.earlyAxes;
   if (!a) return "";
   const riskKey = a.risk.score >= 75 ? "green" : a.risk.score >= 50 ? "yellow" : "red";
-  return `<span class="badge badge-blue" title="검증된 7일 급등 잠재력 점수">잠재력 ${a.potential.score}</span>`
+  return `<span class="badge badge-blue" title="과거 규칙 기반 후보 점수 · 현재 성공 확률 미검증">잠재력 ${a.potential.score}</span>`
     + `<span class="badge badge-purple" title="방향·상단 접근·거래량·변동성의 현재 준비 상태이며 확률이 아닙니다">준비도 ${a.readiness.score}</span>`
     + `<span class="badge badge-${riskKey}" title="100에 가까울수록 관찰 위험이 낮습니다. 성공 확률이 아닙니다">위험 ${a.risk.label}</span>`;
 }

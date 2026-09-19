@@ -92,7 +92,7 @@ export function classifyEarlyStage(m, cfg) {
 
   // 4단계 확인 — 박스 상단 종가 돌파에 거래량과 변동성 확장이 함께 있어야 한다.
   if (m.breakoutClose && m.relVol3 >= e.breakoutRelVol && m.atrRising) {
-    return stage(4, "confirmed", "4 확인 후보", "green");
+    return stage(4, "confirmed", "4 돌파 관찰", "green");
   }
 
   const hits = coreHits(m, e);
@@ -105,7 +105,7 @@ export function classifyEarlyStage(m, cfg) {
   const positiveRecovery = (m.change24h ?? 0) > 0
     && ((m.mom14 ?? 0) > 0 || Boolean(m.closeAboveEma200));
   if (hits >= 2 && positiveRecovery && readiness >= 55) {
-    return stage(3, "imminent", "3 임박", "purple");
+    return stage(3, "imminent", "3 회복 관찰", "purple");
   }
   if (hits >= 2) return stage(2, "preparing", "2 준비", "yellow");
   return stage(1, "accumulation", "1 관찰", "blue");

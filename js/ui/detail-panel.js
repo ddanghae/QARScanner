@@ -194,12 +194,12 @@ function earlyAxesSection(r) {
   return `<section class="detail-section">
     <h3>조기포착 3축 <small>(한 숫자로 섞지 않음)</small></h3>
     <table class="plan-table">
-      <tr><td>급등 잠재력</td><td><b>${a.potential.score} · ${escapeHtml(a.potential.label)}</b><br><small>과거 검증 점수 · ${CONFIG.earlyHitLabel}</small></td></tr>
+      <tr><td>급등 잠재력</td><td><b>${a.potential.score} · ${escapeHtml(a.potential.label)}</b><br><small>규칙 기반 순위 점수 · 현재 적중률 재검증 보류</small></td></tr>
       <tr><td>현재 준비도</td><td><b>${a.readiness.score} · ${escapeHtml(a.readiness.label)}</b><br><small>${list(a.readiness.reasons)}</small></td></tr>
       <tr><td>관찰 위험도</td><td><b>${a.risk.score} · ${escapeHtml(a.risk.label)}</b><br><small>${list(a.risk.reasons)}</small></td></tr>
       <tr><td>첫 눌림 확인</td><td>${escapeHtml(sweepText)}</td></tr>
     </table>
-    <p class="plan-note">잠재력만 과거 급등 라벨로 검증된 점수입니다. 준비도와 위험도는 현재 상태를 놓치지 않기 위한 체크리스트이며 성공 확률이나 매수 지시가 아닙니다.</p>
+    <p class="plan-note">관찰·모의 기록용입니다. 15개 알트의 24시간 보유 시험: 유효 24건 중 7건 수익(29.2%), 비용 후 평균 -0.219R. 표본이 작고 전체 시장 순위·실시간 확인 흐름을 재현하지 않아 현재 코인의 승률로 읽을 수 없습니다. 3·4단계는 가격 상태이며 진입 승인 단계가 아닙니다. CRT 확인에도 관찰 전용 상태를 유지합니다.</p>
   </section>`;
 }
 

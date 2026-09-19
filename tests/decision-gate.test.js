@@ -19,6 +19,17 @@ const base = (overrides = {}) => ({
 export function run() {
   suite("decision gate");
 
+  test("조기포착은 우호적 전망과 높은 단계에도 관찰 전용으로 유지", () => {
+    const result = base({ scanMode: "early", stage: { stage: 4, label: "4 돌파 관찰" } });
+    const gate = buildDecisionGate(result, 1000);
+    eq(gate.status, "wait");
+    eq(gate.label, "관찰 전용");
+    eq(gate.checks.find(x => x.key === "early-evidence").level, "warn");
+    eq(result.score, 77);
+    const blocked = buildDecisionGate({ ...result, plan: { valid: false } }, 1000);
+    eq(blocked.status, "risk", "연구 경고가 무효 계획 차단을 덮으면 안 됨");
+  });
+
   test("정합 후보는 점수 변경 없이 검토 후보로 설명", () => {
     const result = base();
     const gate = buildDecisionGate(result, 1000);

@@ -352,6 +352,12 @@ function syncModeControls(settings) {
 
 export function applyDarkMode() {
   document.documentElement.classList.toggle("dark", !!state.settings.darkMode);
+  const toggle = document.getElementById("toggle-dark");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(!!state.settings.darkMode));
+    const label = toggle.querySelector("span");
+    if (label) label.textContent = state.settings.darkMode ? "라이트 테마" : "다크 테마";
+  }
 }
 
 export default { applyFilters, initSettingsUI, syncControls, applyDarkMode };

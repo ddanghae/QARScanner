@@ -16,7 +16,8 @@ const defaultSettings = {
   favorites: [],             // 관심 종목 심볼 배열
   excluded: [],              // 제외 종목
   sort: "score",             // "score" | "change" | "volume"
-  darkMode: false,
+  darkMode: true,
+  themeRevision: 1,
   includeRealtimeCandle: false, // 리페인트 방지: 기본은 마감 캔들만
   showFavoritesOnly: false,
   excludeChaseBan: false,       // "추격 금지(5단계)" 제외
@@ -47,6 +48,10 @@ function loadSettings() {
       : { ...defaultSettings, ...parsed };
     // 제거된 all/reversal/pump_fade/sweep_retest 저장값이 단일 스캐너를 되살리지 않게 한다.
     merged.scanMode = "early";
+    if (parsed.themeRevision !== 1) {
+      merged.darkMode = true;
+      merged.themeRevision = 1;
+    }
     merged.direction = "long";
     if (migrating) merged.minQuoteVolume = CONFIG.earlyDetect.minQuoteVolume;
     return merged;

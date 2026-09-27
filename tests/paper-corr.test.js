@@ -93,6 +93,16 @@ export function run() {
     assert(Math.abs(open.r - 0.8) < 1e-9, `숏 진행 손익도 R 로 (${open.r})`);
   });
 
+  test("패턴 기록은 TP1·TP2 도달만으로 종료하지 않고 TP3 에서 판정한다", () => {
+    const long = { at: 0, direction: "long", entry: 100, stop: 90, tp1: 110, tp2: 120, tp3: 140 };
+    eq(resolveTrade(long, [bar(100, 125, 95, 120, 1000)]).status, "open");
+    eq(resolveTrade(long, [bar(100, 145, 95, 142, 1000)]).exitPx, 140);
+    eq(resolveTrade(long, [bar(100, 145, 85, 142, 1000)]).status, "loss");
+    const short = { at: 0, direction: "short", entry: 100, stop: 110, tp1: 90, tp2: 80, tp3: 70 };
+    eq(resolveTrade(short, [bar(100, 105, 75, 80, 1000)]).status, "open");
+    eq(resolveTrade(short, [bar(100, 105, 65, 68, 1000)]).exitPx, 70);
+  });
+
   // 신호별 승률이 틀리면 점수 가중치를 엉뚱하게 고친다 — 진행 중을 분모에 넣는 게 가장 흔한 실수다.
   test("신호별 집계 — 닫힌 기록만, 신호 3개면 3개 전부에 계상", () => {
     const rows = [

@@ -12,18 +12,24 @@ export function fmtPrice(x) {
   return Number(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-// Use one shared precision for both entry edges so a narrow range stays readable.
-export function fmtPriceRange(low, high) {
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return `${fmtPrice(low)} – ${fmtPrice(high)}`;
-  const magnitude = Math.max(Math.abs(low), Math.abs(high));
+// Share enough precision to distinguish each planned level on the same card.
+export function fmtPriceList(values) {
+  if (!values.every(Number.isFinite)) return values.map(fmtPrice);
+  const magnitude = Math.max(...values.map(Math.abs));
   let digits = magnitude < 0.001 ? 8 : magnitude < 0.1 ? 6 : magnitude < 1 ? 5 : magnitude < 100 ? 3 : 2;
   const format = (value) => value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-  let from = format(low), to = format(high);
-  while (low !== high && from === to && digits < 12) {
+  let formatted = values.map(format);
+  const overlaps = () => formatted.some((value, index) => formatted.some((other, otherIndex) =>
+    index < otherIndex && values[index] !== values[otherIndex] && value === other));
+  while (overlaps() && digits < 12) {
     digits++;
-    from = format(low);
-    to = format(high);
+    formatted = values.map(format);
   }
+  return formatted;
+}
+
+export function fmtPriceRange(low, high) {
+  const [from, to] = fmtPriceList([low, high]);
   return `${from} – ${to}`;
 }
 
@@ -123,4 +129,4 @@ export function escapeHtml(s) {
   ));
 }
 
-export default { fmtPrice, fmtPriceRange, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml };
+export default { fmtPrice, fmtPriceList, fmtPriceRange, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml };

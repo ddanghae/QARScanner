@@ -1,7 +1,7 @@
 // ui/pattern-results.js — 패턴 검색 결과의 필터링·정렬·카드 렌더링.
 
 import { state } from "../state.js";
-import { fmtPrice, fmtPriceRange, fmtVolume, fmtTime, escapeHtml } from "./format.js";
+import { fmtPrice, fmtPriceList, fmtVolume, fmtTime, escapeHtml } from "./format.js";
 import { openTradingView } from "./tradingview.js";
 import { patternFamilyLabel } from "../core/chart-patterns.js";
 import { assessSymbolDirection } from "../core/pattern-direction.js";
@@ -102,7 +102,7 @@ function patternSymbolJudgmentHtml(row) {
   </div>`;
 }
 
-function patternEntryCandidateHtml(row) {
+export function patternEntryCandidateHtml(row) {
   const candidate = row.entryCandidate;
   const directionClass = candidate.direction === "long" ? "pattern-bullish"
     : candidate.direction === "short" ? "pattern-bearish" : "pattern-neutral";
@@ -112,17 +112,21 @@ function patternEntryCandidateHtml(row) {
       <p>${escapeHtml(candidate.reason)}</p>
     </div>`;
   }
-  const stopText = `${fmtPrice(candidate.stop)} · ${candidate.riskPct.toFixed(2)}%`;
-  const targetText = `${fmtPrice(candidate.target)} · +${candidate.rewardPct.toFixed(2)}%`;
+  const [entryLow, entryHigh, stop, tp1, tp2, tp3] = fmtPriceList([
+    candidate.entryLow, candidate.entryHigh, candidate.stop,
+    candidate.tp1, candidate.tp2, candidate.tp3,
+  ]);
   return `<div class="pattern-entry-candidate ${directionClass}">
     <div class="pattern-entry-heading"><b>${escapeHtml(candidate.title)}</b><span>근거 ${escapeHtml(candidate.reason)}</span></div>
     <div class="pattern-entry-levels">
-      <span><small>진입 후보 구간</small><b>${fmtPriceRange(candidate.entryLow, candidate.entryHigh)}</b></span>
-      <span><small>구조 무효화 · 손절 폭</small><b>${stopText}</b></span>
-      <span><small>패턴 투영 목표</small><b>${targetText}</b></span>
-      <span><small>구간 끝 기준 손익비</small><b>1 : ${candidate.rr.toFixed(2)}</b></span>
+      <span><small>진입 후보 구간</small><b>${entryLow} – ${entryHigh}</b></span>
+      <span><small>SL · 구조 무효화</small><b>${stop} · -${candidate.riskPct.toFixed(2)}%</b></span>
+      <span><small>TP1 · 1R</small><b>${tp1} · +${candidate.tp1Pct.toFixed(2)}%</b></span>
+      <span><small>TP2 · 중간 목표</small><b>${tp2} · +${candidate.tp2Pct.toFixed(2)}%</b></span>
+      <span><small>TP3 · 패턴 투영</small><b>${tp3} · +${candidate.rewardPct.toFixed(2)}%</b></span>
+      <span><small>TP3 기준 손익비</small><b>1 : ${candidate.rr.toFixed(2)}</b></span>
     </div>
-    <p>확정 봉 기준 조건부 후보입니다. 손절 폭은 수수료·슬리피지 전 추정치이며, 돌파/되돌림 확인 전에는 진입 신호가 아닙니다.</p>
+    <p>확정 봉 기준 조건부 후보입니다. 손절 폭은 수수료·슬리피지 전 추정치이며, 돌파/되돌림 확인 전에는 진입 신호가 아닙니다. 페이퍼 기록은 SL 또는 TP3 도달만 판정하며 TP1·TP2 분할 익절은 집계하지 않습니다.</p>
     <button class="btn-mini pattern-record" data-pattern-record="${escapeHtml(row.symbol)}">페이퍼 기록</button>
   </div>`;
 }

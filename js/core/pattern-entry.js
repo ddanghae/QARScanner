@@ -27,6 +27,7 @@ function levelCandidate(pattern, timeframe, direction, atr14, price) {
     || !(atr14 > 0)) return null;
 
   const trigger = Number(detail.trigger), invalidation = Number(detail.invalidation), projection = Number(detail.projection);
+  if (!(trigger > 0) || !(invalidation > 0) || !(projection > 0)) return null;
   const long = direction === "long";
   // Keep the entry area close to the trigger even on volatile higher timeframes.
   const band = Math.min(atr14 * RETEST_ATR, trigger * MAX_RETEST_PRICE_PCT);
@@ -47,6 +48,13 @@ function levelCandidate(pattern, timeframe, direction, atr14, price) {
 
   const rr = rewardDistance / riskDistance;
   if (rr < MIN_RR) return { rejected: "투영 목표 기준 손익비가 1.5 미만" };
+  const entry = long ? entryHigh : entryLow;
+  const tp1 = entry + (long ? riskDistance : -riskDistance);
+  const tp3 = projection;
+  const tp2 = (tp1 + tp3) / 2;
+  if (!(tp1 > 0) || !(tp2 > 0)
+    || (long ? !(entry < tp1 && tp1 < tp2 && tp2 < tp3)
+      : !(entry > tp1 && tp1 > tp2 && tp2 > tp3))) return null;
   const timeframeWeight = PATTERN_DIRECTION_WEIGHTS[timeframe] || 1;
   const score = (Number(detail.fitScore) || 0) * 0.65
     + Math.min(100, Number(detail.completionPct) || 0) * 0.1
@@ -67,8 +75,13 @@ function levelCandidate(pattern, timeframe, direction, atr14, price) {
     entryHigh,
     stop: invalidation,
     target: projection,
-    riskPct: riskDistance / (long ? entryHigh : entryLow) * 100,
-    rewardPct: rewardDistance / (long ? entryHigh : entryLow) * 100,
+    tp1,
+    tp2,
+    tp3,
+    riskPct: riskDistance / entry * 100,
+    tp1Pct: riskDistance / entry * 100,
+    tp2Pct: Math.abs(tp2 - entry) / entry * 100,
+    rewardPct: rewardDistance / entry * 100,
     rr: Math.round(rr * 100) / 100,
     timeframeWeight,
     score,

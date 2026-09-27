@@ -12,6 +12,7 @@ import { buildTrendResult } from "../core/strategies.js";
 import { gradeFor, topSignals } from "../core/scoring.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
 import { detectChartPatterns, groupPatternsByTimeframe, patternCompletionPct } from "../core/chart-patterns.js";
+import { assessFractalContinuation } from "../core/fractal-continuation.js";
 import { replayPatternHistory, signalFreshness } from "../core/pattern-validation.js";
 import { atr, ema } from "../core/indicators.js";
 
@@ -193,7 +194,9 @@ async function runPatternPipeline(universe, now, token) {
     const frameResults = await Promise.all(timeframes.map(async (timeframe) => {
       try {
         const raw = await getKlines(item.symbol, timeframe, CONFIG.klinesLimit[timeframe]);
-        const bars = closedOnly(raw, token.settings.includeRealtimeCandle);
+        const confirmedAt = Date.now();
+        const confirmedBars = raw.filter((bar) => Number.isFinite(Number(bar.closeTime)) && Number(bar.closeTime) < confirmedAt);
+        const bars = token.settings.includeRealtimeCandle ? raw : confirmedBars;
         const closes = bars.map((bar) => bar.close);
         const ema200 = ema(closes, 200).at(-1);
         const atr14 = atr(bars, 14).at(-1);
@@ -210,6 +213,16 @@ async function runPatternPipeline(universe, now, token) {
             ...pattern,
             completionPct: patternCompletionPct(pattern, bars.at(-1)?.close),
           }));
+        // The backtested 5m rule always reads closed candles, even when the
+        // general pattern view is configured to show a provisional candle.
+        const fractalContinuation = timeframe === "5m" ? {
+          ...assessFractalContinuation(confirmedBars,
+            detectChartPatterns(confirmedBars, { pivotDepth: CONFIG.patternScanner.pivotDepth }),
+            { pivotDepth: CONFIG.patternScanner.pivotDepth, asOf: confirmedAt }),
+          closedAt: confirmedBars.at(-1)?.closeTime ?? null,
+          price: confirmedBars.at(-1)?.close ?? null,
+          freshness: signalFreshness(confirmedBars.at(-1)?.closeTime, "5m", Date.now(), false),
+        } : null;
         const latestCandleTime = bars.at(-1)?.closeTime ?? bars.at(-1)?.openTime ?? null;
         return {
           timeframe,
@@ -225,6 +238,7 @@ async function runPatternPipeline(universe, now, token) {
             step: 8,
             maxSamples: 10,
           }) : null,
+          fractalContinuation,
           patterns,
         };
       } catch (error) {
@@ -236,7 +250,8 @@ async function runPatternPipeline(universe, now, token) {
     const patterns = groupPatternsByTimeframe(Object.fromEntries(
       frameResults.map(({ timeframe, patterns: found }) => [timeframe, found]),
     ));
-    if (!patterns.length) return null;
+    const fractalContinuation = frameResults.find((frame) => frame.timeframe === "5m")?.fractalContinuation || null;
+    if (!patterns.length && !fractalContinuation?.matched) return null;
     const failedTimeframes = frameResults.filter((frame) => frame.error).map((frame) => frame.timeframe);
     const latestFrame = selectLatestFrame(frameResults);
     return {
@@ -253,6 +268,7 @@ async function runPatternPipeline(universe, now, token) {
       failedTimeframes,
       atrByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.atr14 ?? null])),
       ema200ByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.ema200 || null])),
+      fractalContinuation,
       patterns,
     };
   }, null, token);

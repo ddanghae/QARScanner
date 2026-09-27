@@ -17,6 +17,7 @@ import { run as patternEntry } from "./pattern-entry.test.js";
 import { run as format } from "./format.test.js";
 import { run as scanner } from "./scanner.test.js";
 import { run as patternValidation } from "./pattern-validation.test.js";
+import { run as fractalContinuation } from "./fractal-continuation.test.js";
 
 export function runAll() {
   reset();
@@ -36,6 +37,7 @@ export function runAll() {
   format();
   scanner();
   patternValidation();
+  fractalContinuation();
   return report();
 }
 

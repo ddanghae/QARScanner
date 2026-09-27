@@ -451,9 +451,20 @@ a { color:var(--accent); }
 .pattern-entry-candidate .pattern-record { margin-top:8px; }
 .pattern-scan-tab { background:transparent; border-color:transparent; min-height:48px; font-size:14px; border-radius:8px; }
 .pattern-scan-tab.active.long,.pattern-scan-tab.active.short { background:var(--surface); box-shadow:0 2px 7px #152c3b0a; }
+.pattern-scan-tab.active.fractal { background:var(--surface); color:var(--accent); box-shadow:0 2px 7px #152c3b0a; }
 .pattern-scan-tab b { font-variant-numeric:tabular-nums; font-size:11px; padding:3px 9px; }
 .pattern-scan-tab[data-pattern-scan-side="long"]::before { content:"↗"; color:var(--up); font-size:20px; }
 .pattern-scan-tab[data-pattern-scan-side="short"]::before { content:"↘"; color:var(--down); font-size:20px; }
+.pattern-scan-tab[data-pattern-scan-side="fractal"]::before { content:"⌁"; color:var(--accent); font-size:20px; }
+.fractal-scan-note { margin:-10px 0 15px; color:var(--muted); font-size:11px; line-height:1.5; }
+.fractal-card-heading { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; margin-top:14px; font-size:11px; color:var(--muted); }
+.fractal-card-meta { margin:10px 0; font-size:12px; color:var(--text); }
+.fractal-card-levels { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+.fractal-card-levels > span { display:grid; gap:4px; min-width:0; padding:9px; border:1px solid var(--border); border-radius:7px; background:var(--surface-2); }
+.fractal-card-levels small { color:var(--muted); font-size:10px; }
+.fractal-card-levels b { font-size:12px; overflow-wrap:anywhere; }
+.fractal-card-foot { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; margin-top:9px; color:var(--muted); font-size:10px; }
+.fractal-card-caution { margin:10px 0 0; color:var(--muted); font-size:10px; line-height:1.5; }
 .pattern-cards { gap:18px; grid-template-columns:repeat(auto-fit,minmax(min(100%,370px),1fr)); }
 .pattern-card { padding:20px; border-radius:13px; border-top:3px solid var(--up); transition:box-shadow .2s; }
 .pattern-card.scan-short { border-top-color:var(--down); }

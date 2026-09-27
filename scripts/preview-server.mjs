@@ -8,6 +8,7 @@ const types = new Map([
   ['.js', 'text/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.md', 'text/markdown; charset=utf-8'],
+  ['.pine', 'text/plain; charset=utf-8'],
   ['.svg', 'image/svg+xml'],
   ['.webmanifest', 'application/manifest+json; charset=utf-8'],
 ]);
@@ -16,6 +17,8 @@ function isPublic(relativePath) {
   return relativePath === 'index.html' || relativePath === 'sw.js'
     || relativePath === 'manifest.webmanifest'
     || relativePath === `docs${sep}CHART-PATTERNS.md`
+    || relativePath === `docs${sep}TRADINGVIEW-PATTERNS.md`
+    || relativePath === `pine${sep}qar_pattern_detector.pine`
     || relativePath.startsWith(`css${sep}`) || relativePath.startsWith(`js${sep}`);
 }
 

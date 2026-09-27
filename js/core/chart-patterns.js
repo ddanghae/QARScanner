@@ -34,7 +34,23 @@ export function detectChartPatterns(input, options = {}) {
   ];
   const best = new Map();
   for (const p of all) if (!best.has(p.id) || best.get(p.id).fitScore < p.fitScore) best.set(p.id, p);
-  return [...best.values()].sort((a, b) => b.fitScore - a.fitScore || a.name.localeCompare(b.name));
+  const lastBar = bars.at(-1);
+  const detectedAt = barTime(lastBar);
+  return [...best.values()].sort((a, b) => b.fitScore - a.fitScore || a.name.localeCompare(b.name))
+    .map((pattern) => ({
+      ...pattern,
+      detectedAt,
+      detectedPrice: lastBar.close,
+      ...(pattern.points ? { points: pattern.points.map((point) => ({
+        ...point,
+        time: barTime(bars[point.index]),
+      })) } : {}),
+    }));
+}
+
+function barTime(bar) {
+  const value = bar?.openTime ?? bar?.time;
+  return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
 function validBar(c) {
@@ -150,7 +166,8 @@ export function groupPatternsByTimeframe(resultsByTimeframe) {
         const {
           timeframe: _timeframe, status: _status, fitScore: _fitScore, completionPct: _completionPct,
           trigger: _trigger, invalidation: _invalidation, projection: _projection,
-          zone: _zone, evidence: _evidence, points: _points, ...identity
+          zone: _zone, evidence: _evidence, points: _points,
+          detectedAt: _detectedAt, detectedPrice: _detectedPrice, ...identity
         } = pattern;
         grouped.set(pattern.id, { ...identity, timeframes: {} });
       }

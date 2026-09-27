@@ -41,7 +41,25 @@ export function run() {
       { kind: "L", price: 104.28 },
     ]);
     const found = detectChartPatterns(bars, { pivotDepth: 2 });
-    assert(found.some((p) => p.id === "harmonic-gartley-bull"), "expected ratio-matched Gartley");
+    const gartley = found.find((p) => p.id === "harmonic-gartley-bull");
+    assert(gartley, "expected ratio-matched Gartley");
+    eq(gartley.detectedAt, bars.at(-1).openTime);
+    eq(gartley.detectedPrice, bars.at(-1).close);
+    for (const point of gartley.points) eq(point.time, bars[point.index].openTime);
+  });
+
+  test("harmonic pivot times use the detector's trimmed 240-bar window", () => {
+    const prefix = flatCandles(220, 100);
+    const tail = pivotSeries([
+      { kind: "L", price: 100 }, { kind: "H", price: 120 },
+      { kind: "L", price: 107.64 }, { kind: "H", price: 114.92 },
+      { kind: "L", price: 104.28 },
+    ]).map((bar, index) => ({ ...bar, openTime: (220 + index) * 3600000 }));
+    const bars = [...prefix, ...tail];
+    const gartley = detectChartPatterns(bars, { pivotDepth: 2 }).find((p) => p.id === "harmonic-gartley-bull");
+    assert(gartley, "expected ratio-matched Gartley after a long history");
+    const detectorWindow = bars.slice(-240);
+    for (const point of gartley.points) eq(point.time, detectorWindow[point.index].openTime);
   });
 
   test("detects an impulse followed by a shallow bullish flag", () => {

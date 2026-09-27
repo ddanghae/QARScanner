@@ -30,15 +30,26 @@ test('preview serves app entry and assets with content types', async () => {
 });
 
 test('preview serves the user-facing chart pattern guide', async () => {
-  const guide = await fetch(`${baseUrl}/docs/CHART-PATTERNS.md`);
+  const [guide, tvGuide, indicator] = await Promise.all([
+    fetch(`${baseUrl}/docs/CHART-PATTERNS.md`),
+    fetch(`${baseUrl}/docs/TRADINGVIEW-PATTERNS.md`),
+    fetch(`${baseUrl}/pine/qar_pattern_snapshot.pine`),
+  ]);
   assert.equal(guide.status, 200);
   assert.match(guide.headers.get('content-type'), /markdown/);
   assert.match(await guide.text(), /하모닉/);
+  assert.equal(tvGuide.status, 200);
+  assert.match(await tvGuide.text(), /Pine Editor/);
+  assert.equal(indicator.status, 200);
+  assert.match(indicator.headers.get('content-type'), /text\/plain/);
+  assert.match(await indicator.text(), /@version=6/);
 });
 
 test('preview does not expose research runs or project files', async () => {
   const privateRun = await fetch(`${baseUrl}/lab-runs/latest.json`);
   const privateProjectFile = await fetch(`${baseUrl}/AGENTS.md`);
+  const unrelatedIndicator = await fetch(`${baseUrl}/pine/qar_reversal.pine`);
   assert.equal(privateRun.status, 404);
   assert.equal(privateProjectFile.status, 404);
+  assert.equal(unrelatedIndicator.status, 404);
 });

@@ -1,0 +1,232 @@
+//@version=6
+indicator("마켓 스캐너 · 패턴 스냅샷", overlay = true, max_lines_count = 200, max_boxes_count = 50, max_labels_count = 250)
+
+// Paste the QAR1 export from Market Scanner into the indicator's Inputs tab.
+// This is a manually refreshed snapshot. Pine cannot fetch the scanner website.
+// Header: QAR1|BINANCE:SYMBOL.P|ISO_UTC|C_OR_R
+// Record: P|tf|detectedAt|name|bias|status|fit|completion|detectedPrice|
+//         trigger|invalidation|projection|zoneLow|zoneHigh|entryLow|entryHigh|
+//         SL|TP1|TP2|TP3|pivotTime1|pivotPrice1|...|pivotTime5|pivotPrice5
+
+string GROUP_DATA = "스캐너 데이터"
+string GROUP_VIEW = "차트 표시"
+string snapshotInput = input.text_area("", "복사한 QAR1 스냅샷", group = GROUP_DATA)
+bool showAllTimeframes = input.bool(false, "모든 시간봉 보기", group = GROUP_VIEW,
+     tooltip = "끄면 현재 차트 시간봉과 같은 패턴만 표시합니다.")
+bool showStructure = input.bool(true, "패턴 기준선 보기", group = GROUP_VIEW,
+     tooltip = "기준선, 무효화선, 투영선을 표시합니다.")
+bool showPrz = input.bool(true, "PRZ 구간 보기", group = GROUP_VIEW)
+bool showHarmonic = input.bool(true, "하모닉 XABCD 보기", group = GROUP_VIEW)
+int geometryLimit = input.int(15, "도형 표시 패턴 수", minval = 0, maxval = 20, group = GROUP_VIEW,
+     tooltip = "패턴 라벨은 모두 표시하고 선·PRZ·하모닉 도형만 이 수로 제한합니다.")
+int selectedPlanInput = input.int(1, "타점 순번", minval = 1, maxval = 80, group = GROUP_VIEW,
+     tooltip = "현재 종목과 시간봉에서 유효한 타점의 순번입니다. 1은 첫 번째 타점입니다.")
+
+f_number(string raw) =>
+    string value = str.trim(raw)
+    str.lower(value) == "na" or value == "" ? float(na) : str.tonumber(value)
+
+f_optionalPositive(string raw) =>
+    string value = str.trim(raw)
+    float parsed = f_number(value)
+    str.lower(value) == "na" or (not na(parsed) and parsed > 0)
+
+f_timestamp(float value) =>
+    not na(value) and value > 0 and value == math.floor(value)
+
+var array<line> drawnLines = array.new<line>()
+var array<box> drawnBoxes = array.new<box>()
+var array<label> drawnLabels = array.new<label>()
+var table statusPanel = table.new(position.top_right, 2, 6, frame_color = color.new(color.gray, 65), frame_width = 1)
+
+if barstate.islast
+    // The last bar updates repeatedly. Delete the previous snapshot objects first.
+    for item in drawnLines
+        line.delete(item)
+    for item in drawnBoxes
+        box.delete(item)
+    for item in drawnLabels
+        label.delete(item)
+    array.clear(drawnLines)
+    array.clear(drawnBoxes)
+    array.clear(drawnLabels)
+
+    int matchingCount = 0
+    int planCount = 0
+    int invalidCount = 0
+    int geometryCount = 0
+    string snapshotSymbol = "—"
+    string snapshotUtc = "—"
+    string snapshotMode = "—"
+    string statusText = "스캐너에서 스냅샷을 복사해 붙여넣으세요."
+    array<string> rows = str.split(snapshotInput, "\n")
+    array<string> header = array.new<string>()
+    if array.size(rows) > 0
+        header := str.split(str.trim(str.replace_all(array.get(rows, 0), "\r", "")), "|")
+
+    bool validHeader = false
+    if array.size(header) == 4
+        snapshotSymbol := str.upper(str.trim(array.get(header, 1)))
+        snapshotUtc := str.trim(array.get(header, 2))
+        snapshotMode := str.upper(str.trim(array.get(header, 3)))
+        validHeader := str.trim(array.get(header, 0)) == "QAR1" and snapshotSymbol != "" and snapshotUtc != "" and
+             (snapshotMode == "C" or snapshotMode == "R")
+
+    int dataCount = math.max(0, array.size(rows) - 1)
+    int processCount = math.min(dataCount, 80)
+    if not validHeader
+        statusText := "QAR1 헤더 형식을 확인하세요."
+    else if snapshotSymbol != str.upper(syminfo.tickerid)
+        statusText := "종목 불일치 · " + syminfo.tickerid + " 차트에서 확인하세요."
+    else
+        if processCount > 0
+            for rowIndex = 1 to processCount
+                string rowText = str.trim(str.replace_all(array.get(rows, rowIndex), "\r", ""))
+                if rowText != ""
+                    array<string> fields = str.split(rowText, "|")
+                    bool valid = array.size(fields) == 30
+                    if valid
+                        string recordType = str.trim(array.get(fields, 0))
+                        string recordTf = str.trim(array.get(fields, 1))
+                        string patternName = str.trim(array.get(fields, 3))
+                        string bias = str.upper(str.trim(array.get(fields, 4)))
+                        string patternStatus = str.upper(str.trim(array.get(fields, 5)))
+                        float detectedTimeValue = f_number(array.get(fields, 2))
+                        float fitScore = f_number(array.get(fields, 6))
+                        float completion = f_number(array.get(fields, 7))
+                        float detectedPrice = f_number(array.get(fields, 8))
+                        valid := recordType == "P" and (recordTf == "5" or recordTf == "15" or recordTf == "60" or recordTf == "240") and
+                             patternName != "" and (bias == "L" or bias == "S" or bias == "N") and
+                             (patternStatus == "B" or patternStatus == "R" or patternStatus == "F") and
+                             f_timestamp(detectedTimeValue) and not na(fitScore) and fitScore >= 0 and fitScore <= 100 and
+                             (na(completion) or (completion >= 0 and completion <= 100)) and
+                             not na(detectedPrice) and detectedPrice > 0
+                        for fieldIndex = 9 to 19
+                            valid := valid and f_optionalPositive(array.get(fields, fieldIndex))
+                        float zoneLow = f_number(array.get(fields, 12))
+                        float zoneHigh = f_number(array.get(fields, 13))
+                        float entryLow = f_number(array.get(fields, 14))
+                        float entryHigh = f_number(array.get(fields, 15))
+                        valid := valid and (na(zoneLow) == na(zoneHigh)) and (na(zoneLow) or zoneLow <= zoneHigh)
+                        valid := valid and (na(entryLow) == na(entryHigh)) and (na(entryLow) or entryLow <= entryHigh)
+                        for pivotIndex = 0 to 4
+                            string pivotTimeText = str.trim(array.get(fields, 20 + pivotIndex * 2))
+                            string pivotPriceText = str.trim(array.get(fields, 21 + pivotIndex * 2))
+                            float pivotTimeValue = f_number(pivotTimeText)
+                            float pivotPriceValue = f_number(pivotPriceText)
+                            bool bothMissing = str.lower(pivotTimeText) == "na" and str.lower(pivotPriceText) == "na"
+                            bool bothValid = f_timestamp(pivotTimeValue) and not na(pivotPriceValue) and pivotPriceValue > 0
+                            valid := valid and (bothMissing or bothValid)
+
+                        if valid and (showAllTimeframes or recordTf == timeframe.period)
+                            matchingCount += 1
+                            int detectedAt = int(detectedTimeValue)
+                            int tfMillis = recordTf == "5" ? 300000 : recordTf == "15" ? 900000 : recordTf == "60" ? 3600000 : 14400000
+                            int rightTime = math.max(time, detectedAt) + 2 * tfMillis
+                            color signalColor = bias == "L" ? color.rgb(24, 179, 142) : bias == "S" ? color.rgb(231, 87, 97) : color.gray
+                            string directionText = bias == "L" ? "롱" : bias == "S" ? "숏" : "중립"
+                            string completionText = na(completion) ? "—" : str.tostring(completion, "#.0") + "%"
+                            string mainText = recordTf + "분 · " + patternName + " · " + directionText + "\n적합 " +
+                                 str.tostring(fitScore, "#.0") + " · 완성 " + completionText + " · " + patternStatus
+                            label mainLabel = label.new(detectedAt, detectedPrice, mainText,
+                                 xloc = xloc.bar_time, yloc = yloc.price, color = signalColor,
+                                 style = bias == "S" ? label.style_label_down : label.style_label_up,
+                                 textcolor = color.white, size = size.tiny)
+                            array.push(drawnLabels, mainLabel)
+
+                            float trigger = f_number(array.get(fields, 9))
+                            float invalidation = f_number(array.get(fields, 10))
+                            float projection = f_number(array.get(fields, 11))
+                            if geometryCount < geometryLimit
+                                geometryCount += 1
+                                if showStructure
+                                    if not na(trigger)
+                                        array.push(drawnLines, line.new(detectedAt, trigger, rightTime, trigger,
+                                             xloc = xloc.bar_time, color = color.new(signalColor, 10), style = line.style_dotted))
+                                    if not na(invalidation)
+                                        array.push(drawnLines, line.new(detectedAt, invalidation, rightTime, invalidation,
+                                             xloc = xloc.bar_time, color = color.new(color.red, 35), style = line.style_dotted))
+                                    if not na(projection)
+                                        array.push(drawnLines, line.new(detectedAt, projection, rightTime, projection,
+                                             xloc = xloc.bar_time, color = color.new(color.lime, 35), style = line.style_dotted))
+                                if showPrz and not na(zoneLow) and zoneHigh > zoneLow
+                                    array.push(drawnBoxes, box.new(detectedAt, zoneHigh, rightTime, zoneLow,
+                                         border_color = color.new(signalColor, 45), xloc = xloc.bar_time,
+                                         bgcolor = color.new(signalColor, 91)))
+                                if showHarmonic
+                                    int previousTime = na
+                                    float previousPrice = na
+                                    for pivotIndex = 0 to 4
+                                        float pivotTimeValue = f_number(array.get(fields, 20 + pivotIndex * 2))
+                                        float pivotPrice = f_number(array.get(fields, 21 + pivotIndex * 2))
+                                        if not na(pivotTimeValue)
+                                            int pivotTime = int(pivotTimeValue)
+                                            if not na(previousTime)
+                                                array.push(drawnLines, line.new(previousTime, previousPrice, pivotTime, pivotPrice,
+                                                     xloc = xloc.bar_time, color = signalColor, width = 2))
+                                            string pivotLetter = pivotIndex == 0 ? "X" : pivotIndex == 1 ? "A" : pivotIndex == 2 ? "B" : pivotIndex == 3 ? "C" : "D"
+                                            array.push(drawnLabels, label.new(pivotTime, pivotPrice, pivotLetter,
+                                                 xloc = xloc.bar_time, yloc = yloc.price, color = color.new(signalColor, 20),
+                                                 style = label.style_label_center, textcolor = color.white, size = size.tiny))
+                                            previousTime := pivotTime
+                                            previousPrice := pivotPrice
+                                        else
+                                            previousTime := na
+                                            previousPrice := na
+
+                            float stop = f_number(array.get(fields, 16))
+                            float tp1 = f_number(array.get(fields, 17))
+                            float tp2 = f_number(array.get(fields, 18))
+                            float tp3 = f_number(array.get(fields, 19))
+                            bool completePlan = bias != "N" and not na(entryLow) and not na(stop) and
+                                 not na(tp1) and not na(tp2) and not na(tp3)
+                            bool orderedPlan = completePlan and (bias == "L" ?
+                                 stop < entryLow and tp1 > entryHigh and tp1 <= tp2 and tp2 <= tp3 :
+                                 stop > entryHigh and tp1 < entryLow and tp1 >= tp2 and tp2 >= tp3)
+                            if orderedPlan
+                                planCount += 1
+                                if planCount == selectedPlanInput
+                                    array.push(drawnBoxes, box.new(detectedAt, entryHigh, rightTime, entryLow,
+                                         border_color = signalColor, border_width = 2, xloc = xloc.bar_time,
+                                         bgcolor = color.new(signalColor, 82), text = "진입 " + str.tostring(entryLow, format.mintick) +
+                                         "–" + str.tostring(entryHigh, format.mintick), text_color = color.white,
+                                         text_size = size.tiny))
+                                    for targetIndex = 0 to 3
+                                        float target = targetIndex == 0 ? stop : targetIndex == 1 ? tp1 : targetIndex == 2 ? tp2 : tp3
+                                        string targetName = targetIndex == 0 ? "SL" : targetIndex == 1 ? "TP1" : targetIndex == 2 ? "TP2" : "TP3"
+                                        color targetColor = targetIndex == 0 ? color.rgb(231, 87, 97) : color.rgb(24, 179, 142)
+                                        array.push(drawnLines, line.new(detectedAt, target, rightTime, target,
+                                             xloc = xloc.bar_time, color = targetColor, width = 2,
+                                             style = targetIndex == 0 ? line.style_solid : line.style_dashed))
+                                        array.push(drawnLabels, label.new(rightTime, target, targetName + " " + str.tostring(target, format.mintick),
+                                             xloc = xloc.bar_time, yloc = yloc.price, color = targetColor,
+                                             style = label.style_label_left, textcolor = color.white, size = size.tiny))
+                    if not valid
+                        invalidCount += 1
+
+        statusText := matchingCount == 0 ? "현재 차트에 일치하는 패턴이 없습니다." :
+             planCount == 0 ? "패턴 표시 중 · 유효한 타점 없음" :
+             selectedPlanInput > planCount ? "타점 순번이 범위를 벗어났습니다." : "수동 스냅샷 표시 중"
+        if invalidCount > 0
+            statusText += " · 잘못된 행 " + str.tostring(invalidCount)
+        if dataCount > 80
+            statusText += " · 처음 80개만 처리"
+
+    color panelBg = color.new(color.rgb(17, 24, 35), 8)
+    color muted = color.rgb(177, 190, 205)
+    table.cell(statusPanel, 0, 0, "마켓 스캐너", bgcolor = panelBg, text_color = color.white, text_size = size.small)
+    table.cell(statusPanel, 1, 0, "패턴 스냅샷", bgcolor = panelBg, text_color = color.white, text_size = size.small)
+    table.cell(statusPanel, 0, 1, "탐색 시각", bgcolor = panelBg, text_color = muted, text_size = size.tiny)
+    table.cell(statusPanel, 1, 1, snapshotUtc + " · " + snapshotMode, bgcolor = panelBg, text_color = color.white, text_size = size.tiny)
+    table.cell(statusPanel, 0, 2, "종목", bgcolor = panelBg, text_color = muted, text_size = size.tiny)
+    table.cell(statusPanel, 1, 2, snapshotSymbol, bgcolor = panelBg, text_color = color.white, text_size = size.tiny)
+    table.cell(statusPanel, 0, 3, "시간봉", bgcolor = panelBg, text_color = muted, text_size = size.tiny)
+    table.cell(statusPanel, 1, 3, showAllTimeframes ? "전체" : timeframe.period + "분", bgcolor = panelBg,
+         text_color = color.white, text_size = size.tiny)
+    table.cell(statusPanel, 0, 4, "표시", bgcolor = panelBg, text_color = muted, text_size = size.tiny)
+    table.cell(statusPanel, 1, 4, str.tostring(matchingCount) + "개 패턴 · " + str.tostring(planCount) + "개 타점",
+         bgcolor = panelBg, text_color = color.white, text_size = size.tiny)
+    table.cell(statusPanel, 0, 5, "상태", bgcolor = panelBg, text_color = muted, text_size = size.tiny)
+    table.cell(statusPanel, 1, 5, statusText, bgcolor = panelBg,
+         text_color = validHeader and snapshotSymbol == str.upper(syminfo.tickerid) ? color.rgb(93, 225, 180) : color.rgb(244, 176, 96),
+         text_size = size.tiny)

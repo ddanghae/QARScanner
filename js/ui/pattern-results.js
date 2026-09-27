@@ -3,6 +3,8 @@
 import { state } from "../state.js";
 import { fmtPrice, fmtPriceList, fmtVolume, fmtTime, escapeHtml } from "./format.js";
 import { openTradingView } from "./tradingview.js";
+import { buildPatternTvSnapshot } from "./pattern-tv-export.js";
+import { toast } from "./notifications.js";
 import { patternFamilyLabel } from "../core/chart-patterns.js";
 import { assessSymbolDirection } from "../core/pattern-direction.js";
 import { derivePatternEntryCandidate } from "../core/pattern-entry.js";
@@ -53,6 +55,7 @@ export function renderPatternResults(resultsEl) {
     </div>
     ${scanMetaText ? `<p class="pattern-scan-meta" role="status">${escapeHtml(scanMetaText)}</p>` : ""}
     <div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>
+    <details class="pattern-method"><summary>TradingView 차트에 탐색 패턴 표시</summary><p><a href="./pine/qar_pattern_snapshot.pine" target="_blank" rel="noopener">패턴 지표 코드</a>를 Pine Editor에 한 번 추가하세요. 종목 카드의 ‘표시 데이터 복사’를 눌러 지표 설정의 ‘스캔 데이터’에 붙여넣으면 해당 종목·시간봉의 탐색 결과가 차트에 표시됩니다. 새 스캔 결과는 다시 복사해야 합니다. <a href="./docs/TRADINGVIEW-PATTERNS.md" target="_blank" rel="noopener">사용 방법</a></p></details>
     <details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.1 ATR이며 각 방향 최대 기준 가격의 0.15%로 제한합니다. 돌파나 되돌림 확인을 기다리는 값이며, 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>
   `;
   resultsEl.querySelectorAll("[data-pattern-scan-side]").forEach((button) => button.addEventListener("click", () => {
@@ -63,11 +66,40 @@ export function renderPatternResults(resultsEl) {
     event.stopPropagation();
     openTradingView(button.dataset.patternTv);
   }));
+  resultsEl.querySelectorAll("[data-pattern-tv-copy]").forEach((button) => button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    const row = rows.find((item) => item.symbol === button.dataset.patternTvCopy);
+    if (!row) return;
+    try {
+      const snapshot = buildPatternTvSnapshot(row, { includeRealtimeCandle: state.settings.includeRealtimeCandle });
+      if (!snapshot.count) { toast("차트에 표시할 패턴 시각 정보가 없습니다. 다시 스캔해 주세요.", "warn"); return; }
+      if (!await copyText(snapshot.text)) { toast("자동 복사가 실패했습니다. 브라우저의 클립보드 권한을 확인해 주세요.", "error"); return; }
+      toast(`${snapshot.count}개 패턴 표시 데이터를 복사했습니다.${snapshot.omitted ? ` ${snapshot.omitted}개는 표시 한도로 제외됐습니다.` : ""} 지표 설정의 ‘스캔 데이터’에 붙여넣으세요.`, snapshot.omitted ? "warn" : "success", 6500);
+    } catch (error) {
+      toast(error?.message || "패턴 데이터 복사에 실패했습니다.", "error");
+    }
+  }));
   resultsEl.querySelectorAll("[data-pattern-record]").forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
     const row = rows.find((item) => item.symbol === button.dataset.patternRecord);
     if (row) recordPatternTrade(row);
   }));
+}
+
+async function copyText(value) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true; }
+  } catch { /* Legacy clipboard fallback below. */ }
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.readOnly = true;
+  input.style.cssText = "position:fixed;left:-9999px;opacity:0";
+  document.body.appendChild(input);
+  input.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch { /* Clipboard unavailable. */ }
+  input.remove();
+  return copied;
 }
 
 function patternSymbolJudgmentHtml(row) {
@@ -206,7 +238,7 @@ function patternCardHtml(row) {
     ${patternEntryCandidateHtml(row)}
     <div class="pattern-preview">${preview}</div>
     <details class="pattern-all"><summary>패턴 ${row.patterns.length}개 · 시간봉별 상세 보기</summary><div class="pattern-block-list">${blocks}</div></details>
-    <div class="pattern-card-actions"><button class="btn-mini tv" data-pattern-tv="${escapeHtml(row.symbol)}">TradingView 차트</button></div>
+    <div class="pattern-card-actions"><button class="btn-mini tv" data-pattern-tv="${escapeHtml(row.symbol)}">TradingView 차트</button><button class="btn-mini" data-pattern-tv-copy="${escapeHtml(row.symbol)}">표시 데이터 복사</button></div>
   </section>`;
 }
 

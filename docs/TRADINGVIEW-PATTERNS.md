@@ -2,7 +2,7 @@
 
 ## 차트에서 패턴 직접 감지
 
-1. [멀티 시간봉 패턴 탐지 지표](../pine/qar_pattern_detector.pine)를 열어 전체 코드를 복사합니다.
+1. [멀티 시간봉 패턴 탐지 지표 코드](https://raw.githubusercontent.com/ddanghae/QARScanner/main/pine/qar_pattern_detector.pine)를 열어 전체 코드를 복사합니다.
 2. TradingView 차트의 **Pine Editor**에 붙여넣고 저장한 다음 **차트에 추가**합니다.
 3. 입력 설정에서 감지할 5분·15분·1시간·4시간 시간봉을 선택합니다. 기본값은 모두 켜져 있습니다.
 4. 차트 우측 패널에서 시간봉별 롱·숏 개수, 패턴명, 적합도, 완성률을 확인합니다. 알림 메뉴에서는 상승·하락 패턴 알림을 따로 만들 수 있습니다.

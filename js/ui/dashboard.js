@@ -8,6 +8,7 @@ import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
+import { renderPatternResults } from "./pattern-results.js";
 
 let resultsEl, statusEl, progressEl;
 
@@ -50,6 +51,7 @@ const PHASE_LABEL = {
 function renderStatus() {
   const sc = state.scan;
   const h = state.apiHealth;
+  const patternMode = state.settings.scanMode === "patterns";
   const conn = h.connected === true ? "Binance 연결됨" : h.connected === false ? "연결 실패" : "미확인";
   const connClass = h.connected === true ? "ok" : h.connected === false ? "bad" : "";
   const pill = document.getElementById("conn-pill");
@@ -58,9 +60,9 @@ function renderStatus() {
   if (!statusEl) return;
   statusEl.innerHTML = `
     <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
-    <div class="stat-card"><span class="stat-label">전체 종목</span><span class="stat-val">${state.universe.length}</span></div>
-    <div class="stat-card"><span class="stat-label">1차 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
-    <div class="stat-card"><span class="stat-label">후보</span><span class="stat-val">${state.candidates.length}</span></div>
+    <div class="stat-card"><span class="stat-label">선물 종목</span><span class="stat-val">${state.universe.length}</span></div>
+    <div class="stat-card"><span class="stat-label">거래대금 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
+    <div class="stat-card"><span class="stat-label">${patternMode ? "패턴 종목" : "후보"}</span><span class="stat-val">${patternMode ? state.patternResults.length : state.candidates.length}</span></div>
     <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
   `;
 }
@@ -83,6 +85,7 @@ function setBusy(busy) {
 
 export function renderResults() {
   if (!resultsEl) return;
+  if (state.settings.scanMode === "patterns") return renderPatternResults(resultsEl);
   const view = applyFilters(state.results);
   visibleSyms = new Set(view.map((r) => r.symbol));
   if (!view.length) {

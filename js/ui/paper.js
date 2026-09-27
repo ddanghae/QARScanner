@@ -31,13 +31,16 @@ export function resolveTrade(rec, candles) {
   const now = Date.now();
   // 기록 이후에 시작한 마감봉만. 진행 중인 봉은 고·저가 아직 안 굳어서 제외한다.
   const after = (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
-  const risk = rec.entry - rec.stop;
-  const rOf = (px) => (risk > 0 ? (px - rec.entry) / risk : 0);
+  const short = rec.direction === "short";
+  const risk = short ? rec.stop - rec.entry : rec.entry - rec.stop;
+  const rOf = (px) => (risk > 0 ? (short ? rec.entry - px : px - rec.entry) / risk : 0);
   for (const c of after) {
     // exitAt 도 startOf 로 읽는다 — 위에서 openTime/closeTime 을 쓰는 이유와 같다.
     // c.time 은 실제 캔들에 없어서 조용히 undefined 가 된다.
-    if (c.low <= rec.stop) return { status: "loss", exitPx: rec.stop, exitAt: startOf(c), r: rOf(rec.stop) };
-    if (c.high >= rec.tp2) return { status: "win", exitPx: rec.tp2, exitAt: startOf(c), r: rOf(rec.tp2) };
+    if (short ? c.high >= rec.stop : c.low <= rec.stop)
+      return { status: "loss", exitPx: rec.stop, exitAt: startOf(c), r: rOf(rec.stop) };
+    if (short ? c.low <= rec.tp2 : c.high >= rec.tp2)
+      return { status: "win", exitPx: rec.tp2, exitAt: startOf(c), r: rOf(rec.tp2) };
   }
   const last = after[after.length - 1];
   return { status: "open", exitPx: last ? last.close : rec.entry, exitAt: null, r: rOf(last ? last.close : rec.entry) };
@@ -45,33 +48,48 @@ export function resolveTrade(rec, candles) {
 
 // 금액 = R 배수 × 리스크 금액. 기록 당시의 시드·레버리지를 그대로 쓴다.
 function moneyOf(rec, r) {
-  const riskPct = (rec.entry - rec.stop) / rec.entry;
+  const riskPct = Math.abs(rec.entry - rec.stop) / rec.entry;
   return rec.seed * rec.leverage * riskPct * r;
+}
+
+function appendRecord(record) {
+  const list = load();
+  if (list.some((x) => x.symbol === record.symbol && x.status !== "closed")) {
+    toast(`${record.symbol} 은 이미 열린 기록이 있습니다.`, "info");
+    return;
+  }
+  list.unshift({ ...record, id: `${record.symbol}-${Date.now()}`, at: Date.now(), seed: state.settings.seedMoney, leverage: state.settings.leverage });
+  save(list);
+  toast(`${record.symbol} 기록했습니다.`, "success");
+  render();
 }
 
 export function recordTrade(result) {
   const p = result.plan;
   if (!p?.valid) { toast("계획이 유효하지 않아 기록할 수 없습니다.", "error"); return; }
-  const list = load();
-  if (list.some((x) => x.symbol === result.symbol && x.status !== "closed")) {
-    toast(`${result.symbol} 은 이미 열린 기록이 있습니다.`, "info");
+  appendRecord({
+    symbol: result.symbol, direction: "long", entry: p.entry, stop: p.invalidation, tp2: p.tp2,
+    score: result.score, signals: result.topSignals || [], kind: "legacy",
+  });
+}
+
+/** Record a pattern candidate for paper-only follow-up. */
+export function recordPatternTrade(row) {
+  const candidate = row?.entryCandidate;
+  if (!candidate?.entryLow || candidate.target == null || candidate.stop == null) {
+    toast("진입·무효화·목표가 모두 있는 패턴만 기록할 수 있습니다.", "error");
     return;
   }
-  list.unshift({
-    id: `${result.symbol}-${Date.now()}`,
-    symbol: result.symbol,
-    at: Date.now(),
-    entry: p.entry, stop: p.invalidation, tp2: p.tp2,
-    score: result.score,
-    // 어떤 신호로 잡았는지 박아둔다. 나중에 신호별 승률을 못 뽑으면 점수 가중치를 고칠 근거가 없다.
-    // 과거 기록엔 소급 못 하므로 지금부터 쌓인다.
-    signals: result.topSignals || [],
-    // 기록 시점의 시드·레버리지를 박아둔다. 나중에 설정을 바꿔도 과거 기록의 금액은 안 흔들린다.
-    seed: state.settings.seedMoney, leverage: state.settings.leverage,
+  const direction = candidate.direction === "short" ? "short" : "long";
+  const entry = direction === "short" ? candidate.entryLow : candidate.entryHigh;
+  const pattern = row.patterns?.find((item) => item.id === candidate.patternId);
+  appendRecord({
+    symbol: row.symbol, direction, entry, stop: candidate.stop, tp2: candidate.target,
+    score: Math.round((candidate.assessment?.overall?.[direction === "short" ? "shortPct" : "longPct"] || candidate.fitScore || 0)),
+    signals: [`패턴 · ${candidate.patternName}`, `${candidate.timeframe} · 적합도 ${candidate.fitScore}점`],
+    kind: "pattern", patternName: candidate.patternName, patternFamily: pattern?.family || "",
+    fitScore: candidate.fitScore, completionPct: candidate.completionPct ?? null,
   });
-  save(list);
-  toast(`${result.symbol} 기록했습니다.`, "success");
-  render();
 }
 
 // 신호별 승률. 닫힌 기록만 센다 — 진행 중은 결말을 모르니 분모에 넣으면 승률이 거짓으로 낮아진다.
@@ -145,7 +163,7 @@ export async function render() {
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
     ${sigHtml}
     <table class="result-table paper-table">
-      <thead><tr><th>종목</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
+      <thead><tr><th>종목</th><th>방향</th><th>근거</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
     </table>
     <p class="muted">4시간봉 마감가 기준 · 봉 안에서 손절·목표가 같이 닿으면 손절 우선 · 왕복 비용 미반영</p>`;
@@ -161,6 +179,8 @@ function rowHtml({ rec, res }) {
   const money = moneyOf(rec, res.r);
   return `<tr>
     <td class="sym">${escapeHtml(rec.symbol)}</td>
+    <td class="${rec.direction === "short" ? "down" : "up"}">${rec.direction === "short" ? "숏" : "롱"}</td>
+    <td>${escapeHtml(rec.patternName || (rec.signals || []).slice(0, 2).join(" · ") || "기존 스캐너")}</td>
     <td>${recAt(rec.at)}</td>
     <td>${rec.score}</td>
     <td>${fmtPrice(rec.entry)}</td>
@@ -173,4 +193,4 @@ function rowHtml({ rec, res }) {
   </tr>`;
 }
 
-export default { initPaper, render, recordTrade, resolveTrade, signalStats };
+export default { initPaper, render, recordTrade, recordPatternTrade, resolveTrade, signalStats };

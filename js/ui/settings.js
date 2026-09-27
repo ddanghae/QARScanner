@@ -16,6 +16,7 @@ const CHECK_BINDINGS = [
 ];
 const AUTOREFRESH_IDS = ["filter-autorefresh", "set-autorefresh"];
 const REALTIME_IDS = ["set-realtime-candle"];
+const PATTERN_TIMEFRAMES = ["5m", "15m", "1h", "4h"];
 
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
@@ -69,6 +70,13 @@ export function applyFilters(results) {
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
   bindSelect("filter-scanmode", "scanMode");
+  bindPatternTimeframes();
+  const patternLimit = document.getElementById("filter-pattern-limit");
+  if (patternLimit) patternLimit.addEventListener("change", () => {
+    updateSettings({ patternScanLimit: Number(patternLimit.value) });
+    toast("검사 범위는 다음 스캔부터 적용됩니다.", "info");
+  });
+  bindSelect("filter-pattern-family", "patternFamily");
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-stage", "stageFilter");
@@ -142,10 +150,12 @@ export function initSettingsUI() {
   });
 
   // 초기화 버튼 — 사이드바 + 설정 탭 양쪽
-  for (const id of ["settings-reset", "settings-reset-2"]) {
+  for (const id of ["settings-reset-2"]) {
     const btn = document.getElementById(id);
     if (btn) btn.addEventListener("click", () => {
       resetSettings();
+      // 상태만 초기화하면 기존 타이머가 계속 돌 수 있으므로 실행 서비스도 함께 끈다.
+      emit("autorefresh:toggle", { active: false, silent: true });
       syncControls();
       applyDarkMode();
       emit("filters:apply");
@@ -172,6 +182,24 @@ function bindSelect(id, key, cast) {
   });
 }
 
+function bindPatternTimeframes() {
+  for (const timeframe of PATTERN_TIMEFRAMES) {
+    const input = document.getElementById(`filter-pattern-tf-${timeframe}`);
+    if (!input) continue;
+    input.addEventListener("change", () => {
+      const selected = PATTERN_TIMEFRAMES.filter((tf) =>
+        document.getElementById(`filter-pattern-tf-${tf}`)?.checked);
+      if (!selected.length) {
+        input.checked = true;
+        toast("시간봉은 하나 이상 선택해야 합니다.", "info");
+        return;
+      }
+      updateSettings({ patternTimeframes: selected });
+      toast("선택한 시간봉은 다음 스캔부터 적용됩니다.", "info");
+    });
+  }
+}
+
 // 같은 설정을 가리키는 여러 체크박스를 묶어 바인딩. 하나 바뀌면 상태 갱신 + 나머지 동기화.
 function bindCheckGroup(ids, key, applyFilter, after) {
   for (const id of ids) {
@@ -190,6 +218,15 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
+  const selectedTimeframes = Array.isArray(s.patternTimeframes)
+    ? PATTERN_TIMEFRAMES.filter((timeframe) => s.patternTimeframes.includes(timeframe))
+    : PATTERN_TIMEFRAMES;
+  if (!selectedTimeframes.length) selectedTimeframes.push(...PATTERN_TIMEFRAMES);
+  for (const timeframe of PATTERN_TIMEFRAMES) {
+    setChk(`filter-pattern-tf-${timeframe}`, selectedTimeframes.includes(timeframe));
+  }
+  setVal("filter-pattern-limit", s.patternScanLimit);
+  setVal("filter-pattern-family", s.patternFamily);
   syncModeControls(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
@@ -219,6 +256,12 @@ const STAGE_LABELS = {
 function syncModeControls(mode) {
   const early = mode === "early";
   const trend = mode === "trend";
+  const patterns = mode === "patterns";
+  for (const id of ["pattern-timeframes-control", "pattern-scan-limit-control", "pattern-family-control", "pattern-scan-note"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !patterns;
+  }
+  document.querySelectorAll("[data-trading-filter]").forEach((el) => { el.hidden = patterns; });
   // 3단계까지만 있는 모드가 둘이다. 4·5 를 고르면 조용히 빈 결과가 된다.
   const threeStage = early || trend;
   const el = document.getElementById("filter-stage");
@@ -247,14 +290,15 @@ function syncModeControls(mode) {
   // early 는 config.earlyMinScore 를 하한으로 쓰므로 컨트롤을 잠그고 이유를 보여준다.
   const msEl = document.getElementById("filter-minscore");
   if (msEl) {
-    msEl.disabled = early;
+    msEl.disabled = early || patterns;
     msEl.title = early
       ? `조기 포착 모드는 점수대가 달라 전용 하한(${CONFIG.earlyMinScore}점)을 씁니다.`
-      : "";
+      : patterns ? "패턴 모드는 점수 필터를 사용하지 않습니다." : "";
   }
   const msLabel = msEl?.closest("label");
   if (msLabel) {
-    msLabel.childNodes[0].nodeValue = early ? `최소 점수 (early ${CONFIG.earlyMinScore} 고정)` : "최소 점수";
+    msLabel.childNodes[0].nodeValue = early ? `최소 점수 (early ${CONFIG.earlyMinScore} 고정)`
+      : patterns ? "최소 점수 (미사용)" : "최소 점수";
   }
 }
 

@@ -12,6 +12,10 @@ import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
 import { run as strategies } from "./strategies.test.js";
+import { run as chartPatterns } from "./chart-patterns.test.js";
+import { run as patternEntry } from "./pattern-entry.test.js";
+import { run as scanner } from "./scanner.test.js";
+import { run as patternValidation } from "./pattern-validation.test.js";
 
 export function runAll() {
   reset();
@@ -26,6 +30,10 @@ export function runAll() {
   refresh();
   paperCorr();
   strategies();
+  chartPatterns();
+  patternEntry();
+  scanner();
+  patternValidation();
   return report();
 }
 

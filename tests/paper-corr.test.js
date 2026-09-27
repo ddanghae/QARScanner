@@ -85,6 +85,14 @@ export function run() {
     eq(win.r, 4);
   });
 
+  test("숏 기록도 손절·목표 방향을 반대로 판정한다", () => {
+    const rec = { at: 0, direction: "short", entry: 100, stop: 110, tp2: 80 };
+    eq(resolveTrade(rec, [bar(100, 105, 79, 82, 1000)]).status, "win");
+    eq(resolveTrade(rec, [bar(100, 111, 95, 100, 1000)]).status, "loss");
+    const open = resolveTrade(rec, [bar(100, 103, 90, 92, 1000)]);
+    assert(Math.abs(open.r - 0.8) < 1e-9, `숏 진행 손익도 R 로 (${open.r})`);
+  });
+
   // 신호별 승률이 틀리면 점수 가중치를 엉뚱하게 고친다 — 진행 중을 분모에 넣는 게 가장 흔한 실수다.
   test("신호별 집계 — 닫힌 기록만, 신호 3개면 3개 전부에 계상", () => {
     const rows = [

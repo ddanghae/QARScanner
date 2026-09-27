@@ -7,7 +7,7 @@ const base = "../tests/";
 const files = ["indicators.test.js", "structure.test.js", "liquidity.test.js",
                "scoring.test.js", "golden-cross.test.js", "noise.test.js",
                "early-detect.test.js", "repaint.test.js", "refresh.test.js",
-               "paper-corr.test.js", "strategies.test.js"];
+               "paper-corr.test.js", "strategies.test.js", "chart-patterns.test.js"];
 reset();
 for (const f of files) {
   const m = await import(base + f);

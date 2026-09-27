@@ -3,8 +3,8 @@
 // 백테스트는 과거고 이건 미래다. 이 도구 말대로 했으면 실제로 어땠는지 앞으로 쌓인다.
 // 3개월쯤 모이면 백테스트 숫자를 믿어도 되는지에 대한 진짜 답이 나온다.
 //
-// 결과 판정은 기록 시점의 계획(진입·손절·목표) 그대로. 4시간봉 마감가로만 판정한다
-// — 봉 안에서 손절과 목표가 같이 닿으면 손절을 먼저 본다(봉 내부 순서를 알 수 없다).
+// 결과 판정은 기록 시점의 계획(진입·손절·최종 목표) 그대로. 완료된 4시간봉의
+// 고·저가로 판정하며, 같은 봉에서 둘 다 닿으면 순서를 모르므로 손절을 먼저 본다.
 
 import { getKlines } from "../api/binance.js";
 import { state } from "../state.js";
@@ -13,6 +13,7 @@ import { toast } from "./notifications.js";
 
 const KEY = "qar-paper";
 let listEl = null;
+const finalTargetOf = (rec) => rec.tp3 ?? rec.tp2;
 
 function load() {
   try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
@@ -32,6 +33,7 @@ export function resolveTrade(rec, candles) {
   // 기록 이후에 시작한 마감봉만. 진행 중인 봉은 고·저가 아직 안 굳어서 제외한다.
   const after = (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
   const short = rec.direction === "short";
+  const finalTarget = finalTargetOf(rec);
   const risk = short ? rec.stop - rec.entry : rec.entry - rec.stop;
   const rOf = (px) => (risk > 0 ? (short ? rec.entry - px : px - rec.entry) / risk : 0);
   for (const c of after) {
@@ -39,8 +41,8 @@ export function resolveTrade(rec, candles) {
     // c.time 은 실제 캔들에 없어서 조용히 undefined 가 된다.
     if (short ? c.high >= rec.stop : c.low <= rec.stop)
       return { status: "loss", exitPx: rec.stop, exitAt: startOf(c), r: rOf(rec.stop) };
-    if (short ? c.low <= rec.tp2 : c.high >= rec.tp2)
-      return { status: "win", exitPx: rec.tp2, exitAt: startOf(c), r: rOf(rec.tp2) };
+    if (short ? c.low <= finalTarget : c.high >= finalTarget)
+      return { status: "win", exitPx: finalTarget, exitAt: startOf(c), r: rOf(finalTarget) };
   }
   const last = after[after.length - 1];
   return { status: "open", exitPx: last ? last.close : rec.entry, exitAt: null, r: rOf(last ? last.close : rec.entry) };
@@ -76,7 +78,8 @@ export function recordTrade(result) {
 /** Record a pattern candidate for paper-only follow-up. */
 export function recordPatternTrade(row) {
   const candidate = row?.entryCandidate;
-  if (!candidate?.entryLow || candidate.target == null || candidate.stop == null) {
+  if (!candidate?.entryLow || candidate.tp1 == null || candidate.tp2 == null
+    || candidate.tp3 == null || candidate.stop == null) {
     toast("진입·무효화·목표가 모두 있는 패턴만 기록할 수 있습니다.", "error");
     return;
   }
@@ -84,7 +87,8 @@ export function recordPatternTrade(row) {
   const entry = direction === "short" ? candidate.entryLow : candidate.entryHigh;
   const pattern = row.patterns?.find((item) => item.id === candidate.patternId);
   appendRecord({
-    symbol: row.symbol, direction, entry, stop: candidate.stop, tp2: candidate.target,
+    symbol: row.symbol, direction, entry, stop: candidate.stop,
+    tp1: candidate.tp1, tp2: candidate.tp2, tp3: candidate.tp3,
     score: Math.round((candidate.assessment?.overall?.[direction === "short" ? "shortPct" : "longPct"] || candidate.fitScore || 0)),
     signals: [`패턴 · ${candidate.patternName}`, `${candidate.timeframe} · 적합도 ${candidate.fitScore}점`],
     kind: "pattern", patternName: candidate.patternName, patternFamily: pattern?.family || "",
@@ -163,10 +167,10 @@ export async function render() {
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
     ${sigHtml}
     <table class="result-table paper-table">
-      <thead><tr><th>종목</th><th>방향</th><th>근거</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
+      <thead><tr><th>종목</th><th>방향</th><th>근거</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>최종 목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
     </table>
-    <p class="muted">4시간봉 마감가 기준 · 봉 안에서 손절·목표가 같이 닿으면 손절 우선 · 왕복 비용 미반영</p>`;
+    <p class="muted">완료된 4시간봉 고·저가 기준 · 봉 안에서 손절·최종 목표가 같이 닿으면 손절 우선 · TP1·TP2 분할 익절 및 왕복 비용 미반영</p>`;
 }
 
 // 기록은 며칠씩 열려 있으므로 날짜가 있어야 한다 — format.js 의 fmtTime 은 시:분만 준다.
@@ -185,7 +189,7 @@ function rowHtml({ rec, res }) {
     <td>${rec.score}</td>
     <td>${fmtPrice(rec.entry)}</td>
     <td>${fmtPrice(rec.stop)}</td>
-    <td>${fmtPrice(rec.tp2)}</td>
+    <td>${rec.tp3 != null ? "TP3 " : ""}${fmtPrice(finalTargetOf(rec))}</td>
     <td class="${cls}">${label}</td>
     <td class="${res.r >= 0 ? "up" : "down"}">${res.r >= 0 ? "+" : ""}${res.r.toFixed(2)}R</td>
     <td class="${money >= 0 ? "up" : "down"}">${money >= 0 ? "+" : ""}${fmtWon(money)}</td>

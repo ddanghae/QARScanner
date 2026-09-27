@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>QAR Scenario Scanner — 테스트</title>
+  <title>QAR ICT Scanner — 테스트</title>
   <style>
     body { font-family: ui-monospace, Menlo, Consolas, monospace; background: #0b1220; color: #e6ecf6; padding: 20px; line-height: 1.6; }
     h1 { font-size: 18px; }
@@ -13,26 +13,19 @@
   </style>
 </head>
 <body>
-  <h1>QAR Scenario Scanner — 계산·리페인트 테스트</h1>
+  <h1>QAR ICT Scanner — 계산·리페인트·패턴 테스트</h1>
   <div id="summary">실행 중…</div>
   <pre id="output"></pre>
   <script type="module">
+    import { runAll } from "./run.js";
+    const r = runAll();
     const out = document.getElementById("output");
+    out.innerHTML = r.lines
+      .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)
+      .join("");
     const s = document.getElementById("summary");
-    try {
-      const { runAll } = await import("./run.js");
-      const r = runAll();
-      out.innerHTML = r.lines
-        .map((l) => `<div class="${l.startsWith("PASS") ? "pass" : "fail"}">${l}</div>`)
-        .join("");
-      s.textContent = r.summary.trim();
-      s.className = r.fail ? "fail" : "pass";
-    } catch (error) {
-      s.textContent = "테스트 실행 오류";
-      s.className = "fail";
-      out.textContent = error?.stack || error?.message || String(error);
-      console.error(error);
-    }
+    s.textContent = r.summary.trim();
+    s.className = r.fail ? "fail" : "pass";
   </script>
 </body>
 </html>

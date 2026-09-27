@@ -4,48 +4,64 @@
 
 import { CONFIG } from "../config.js";
 import { state, emit } from "../state.js";
-import {
-  getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll, closedOnly,
-} from "../api/binance.js";
+import { getExchangeInfo, getTicker24h, getKlines, getOpenInterestHist, getPremiumIndexAll, closedOnly } from "../api/binance.js";
 import { stage1Universe, stage2Liquidity, stage3Evaluate, capCandidates, excludeMajors, stage3EvaluateEarly } from "./prefilter.js";
 import { deepAnalyze } from "./deep-scanner.js";
-import { buildEarlyResult } from "../core/early-detect.js";
+import { buildEarlyResult, buildEarlyMetrics, earlyPlan } from "../core/early-detect.js";
+import { buildTrendResult } from "../core/strategies.js";
+import { gradeFor, topSignals } from "../core/scoring.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
-import { buildPumpFadeResult, pumpFadePrefilter } from "../core/pump-fade.js";
-import { forecastDirection } from "../core/direction-forecast.js";
-import { modesForScan, resultMode } from "../scan-modes.js";
-import { evaluateCrtTbs } from "../core/crt-tbs.js";
-import { analyzeMarketRegime, regimeAlignment } from "../core/market-regime.js";
-import { findSweepBase, buildSweepResult } from "../core/sweep-retest.js";
-import { selectEarlyConfirmationTargets } from "../core/early-selection.js";
+import { detectChartPatterns, groupPatternsByTimeframe, patternCompletionPct } from "../core/chart-patterns.js";
+import { replayPatternHistory, signalFreshness } from "../core/pattern-validation.js";
+import { atr, ema } from "../core/indicators.js";
 
-let abortToken = { aborted: false };
+let activeRun = null;
+let runSequence = 0;
 
-export function abortScan() {
-  abortToken.aborted = true;
-  setPhase("idle");
-  state.scan.running = false;
-  emit("scan:aborted");
+function snapshotSettings() {
+  return {
+    ...state.settings,
+    patternTimeframes: Array.isArray(state.settings.patternTimeframes) ? [...state.settings.patternTimeframes] : [],
+    favorites: Array.isArray(state.settings.favorites) ? [...state.settings.favorites] : [],
+    excluded: Array.isArray(state.settings.excluded) ? [...state.settings.excluded] : [],
+    penalties: state.settings.penalties ? { ...state.settings.penalties } : {},
+  };
 }
 
-function setPhase(phase) {
+function isCurrentRun(token) {
+  return activeRun === token;
+}
+
+function canContinue(token) {
+  return isCurrentRun(token) && !token.aborted;
+}
+
+// 시간봉 배열의 순서가 5m·15m·1h·4h 로 고정되어 있다는 보장은 없다.
+// 타점 계산에 쓸 가격은 배열의 마지막 원소가 아니라 가장 최근 마감 시각으로 고른다.
+export function selectLatestFrame(frames) {
+  return (frames || [])
+    .filter((frame) => frame?.bars?.length)
+    .sort((a, b) => (b.bars.at(-1)?.closeTime ?? b.bars.at(-1)?.openTime ?? 0)
+      - (a.bars.at(-1)?.closeTime ?? a.bars.at(-1)?.openTime ?? 0))[0] || null;
+}
+
+export function abortScan() {
+  if (!activeRun || activeRun.aborted) return;
+  activeRun.aborted = true;
+  state.scan.running = false;
+  state.scan.phase = "idle";
+  emit("scan:phase", "idle");
+  emit("scan:aborted");
+  activeRun = null;
+}
+
+function setPhase(phase, token = activeRun) {
+  if (token && !isCurrentRun(token)) return;
   state.scan.phase = phase;
   emit("scan:phase", phase);
 }
-function setCurrentMode(mode, index, total) {
-  state.scan.currentMode = mode;
-  state.scan.modeIndex = index;
-  state.scan.modeTotal = total;
-  emit("scan:mode", { mode, index, total });
-}
-function recordModeStats(mode, results) {
-  state.scan.modeStats[mode] = {
-    prefiltered: state.prefiltered.length,
-    candidates: state.candidates.length,
-    results: results.filter((r) => r && !r.skipped && !r.error).length,
-  };
-}
-function setProgress(done, total) {
+function setProgress(done, total, token = activeRun) {
+  if (token && !isCurrentRun(token)) return;
   state.scan.done = done;
   state.scan.total = total;
   state.scan.progress = total > 0 ? done / total : 0;
@@ -54,19 +70,19 @@ function setProgress(done, total) {
 }
 
 // 동시성 있는 map — 세마포어가 실제 병렬 수를 제한하므로 전부 시작해도 안전.
-async function mapWithProgress(items, fn, onEach) {
+async function mapWithProgress(items, fn, onEach, token) {
   let done = 0;
   const total = items.length;
-  setProgress(0, total);
+  setProgress(0, total, token);
   const results = await Promise.all(items.map(async (it) => {
-    if (abortToken.aborted) return null;
+    if (!canContinue(token)) return null;
     let r = null;
     try { r = await fn(it); }
     // early 파이프라인은 { item, k4h, res } 래퍼를 넘기므로 심볼을 양쪽에서 찾는다.
     catch (e) { r = { symbol: it.symbol ?? it.item?.symbol, error: e.message, skipped: true }; }
     done++;
-    setProgress(done, total);
-    if (onEach && r) onEach(r);
+    setProgress(done, total, token);
+    if (onEach && r && canContinue(token)) onEach(r);
     return r;
   }));
   return results.filter(Boolean);
@@ -74,55 +90,224 @@ async function mapWithProgress(items, fn, onEach) {
 
 // ---- 조기 포착 모드 파이프라인 ----
 // 반환: 기존과 동일 shape 결과 배열 (rank 는 호출부에서 부여)
-async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
+// 추세 추종 파이프라인. early 와 뼈대가 같아 보이지만 1차 선별 기준이 반대다:
+// early 는 압축(squeezePct) 강한 순으로 남기고, 여기는 상승률 큰 순으로 남긴다.
+// OI 는 안 부른다 — 채점에 안 쓰이므로 후보당 1회 호출을 통째로 아낀다.
+async function runTrendPipeline(universe, now, token) {
+  const t = CONFIG.trendFollow;
+
+  setPhase("prefilter", token);
+  const tickers = await getTicker24h();
+  if (!canContinue(token)) return null;
+  state.tickers = tickers;
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter,
+    minQuoteVolume: token.settings.minQuoteVolume ?? t.minQuoteVolume,
+  });
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  if (!canContinue(token)) return null;
+
+  const fundingMap = await getPremiumIndexAll();
+  if (!canContinue(token)) return null;
+
+  // 1차 선별: 24시간 상승률로 자른다. 티커는 이미 손에 있으므로 API 호출이 0이다
+  // — 4시간봉을 500종목 전부에 받으면 그게 스캔 시간의 대부분이 된다.
+  setPhase("candidate", token);
+  const byTicker = new Map(tickers.map((x) => [x.symbol, x]));
+  const shortlist = prefiltered
+    .map((item) => ({ item, chg: +(byTicker.get(item.symbol)?.priceChangePercent ?? 0) }))
+    .filter((x) => x.chg >= t.prefilterMinMomPct)
+    .sort((a, b) => b.chg - a.chg)
+    .slice(0, t.keepMax)
+    .map((x) => x.item);
+  state.candidates = shortlist;
+  emit("scan:candidates", { count: shortlist.length });
+  if (!canContinue(token)) return null;
+
+  setPhase("deep", token);
+  const analyzed = await mapWithProgress(shortlist, async (item) => {
+    const k4h = await getKlines(item.symbol, "4h");
+    const closed = k4h.slice(0, token.settings.includeRealtimeCandle ? k4h.length : -1);
+    const funding = fundingMap.get(item.symbol) ?? null;
+    const res = buildTrendResult(item, closed, funding, CONFIG,
+      { buildEarlyMetrics, earlyPlan, gradeFor, topSignals });
+    return res ? { res, k4h: closed } : null;
+  }, null, token);
+  if (!canContinue(token)) return null;
+  const kept = analyzed.filter(Boolean);
+  const results = kept.map((x) => x.res);
+
+  // 상승장에서는 후보가 죄다 같이 오르기 쉽다 — 분산이 아니라는 걸 여기서 알려야 한다.
+  const series = [];
+  for (const { res, k4h } of kept) {
+    const ret = returnsFrom(k4h, CONFIG.correlation.bars);
+    if (ret) series.push({ symbol: res.symbol, returns: ret });
+  }
+  const corr = correlationMap(series, CONFIG.correlation.threshold);
+  for (const r of results) r.correlatedWith = corr.get(r.symbol) || [];
+  return results;
+}
+
+// ---- 차트 패턴 모드 ----
+const PATTERN_TIMEFRAMES = ["5m", "15m", "1h", "4h"];
+
+// 거래대금 상위 심볼만 검사하고, 선택한 시간봉별 결과는 합치지 않고 나란히 보존한다.
+async function runPatternPipeline(universe, now, token) {
+  const configured = Array.isArray(token.settings.patternTimeframes)
+    ? token.settings.patternTimeframes : [];
+  const timeframes = PATTERN_TIMEFRAMES.filter((tf) => configured.includes(tf));
+  if (!timeframes.length) timeframes.push(...PATTERN_TIMEFRAMES);
+  state.patternScanMeta = { requestedTimeframes: timeframes, candidateCount: 0, completedRequests: 0, failedRequests: 0 };
+  setPhase("prefilter", token);
+  const tickers = await getTicker24h();
+  if (!canContinue(token)) return null;
+  state.tickers = tickers;
+  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+    ...CONFIG.prefilter,
+    minQuoteVolume: token.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+  });
+  state.prefiltered = prefiltered;
+  state.newListings = newListings;
+  emit("scan:prefiltered", { count: prefiltered.length, newListings });
+  if (!canContinue(token)) return null;
+
+  setPhase("candidate", token);
+  const requestedLimit = Number(token.settings.patternScanLimit) || CONFIG.patternScanner.maxSymbols;
+  const scanLimit = CONFIG.patternScanner.scanLimits.includes(requestedLimit)
+    ? requestedLimit : CONFIG.patternScanner.maxSymbols;
+  const candidates = prefiltered.slice(0, scanLimit);
+  state.candidates = candidates;
+  const patternStats = {
+    requestedTimeframes: timeframes,
+    candidateCount: candidates.length,
+    completedRequests: 0,
+    failedRequests: 0,
+  };
+  emit("scan:candidates", { count: candidates.length });
+  if (!canContinue(token)) return null;
+
+  setPhase("deep", token);
+  const analyzed = await mapWithProgress(candidates, async (item) => {
+    const frameResults = await Promise.all(timeframes.map(async (timeframe) => {
+      try {
+        const raw = await getKlines(item.symbol, timeframe, CONFIG.klinesLimit[timeframe]);
+        const bars = closedOnly(raw, token.settings.includeRealtimeCandle);
+        const closes = bars.map((bar) => bar.close);
+        const ema200 = ema(closes, 200).at(-1);
+        const atr14 = atr(bars, 14).at(-1);
+        const lastClose = closes.at(-1);
+        const ema200Context = Number.isFinite(ema200) && Number.isFinite(lastClose)
+          ? {
+            position: lastClose > ema200 ? "above" : lastClose < ema200 ? "below" : "equal",
+            value: ema200,
+            distancePct: (lastClose / ema200 - 1) * 100,
+          }
+          : null;
+        const patterns = detectChartPatterns(bars, { pivotDepth: CONFIG.patternScanner.pivotDepth })
+          .map((pattern) => ({
+            ...pattern,
+            completionPct: patternCompletionPct(pattern, bars.at(-1)?.close),
+          }));
+        const latestCandleTime = bars.at(-1)?.closeTime ?? bars.at(-1)?.openTime ?? null;
+        return {
+          timeframe,
+          bars,
+          atr14: Number.isFinite(atr14) ? atr14 : null,
+          ema200: ema200Context,
+          latestCandleTime,
+          freshness: signalFreshness(latestCandleTime, timeframe, Date.now(), token.settings.includeRealtimeCandle),
+          validation: patterns.length ? replayPatternHistory(bars, {
+            pivotDepth: CONFIG.patternScanner.pivotDepth,
+            horizonBars: timeframe === "4h" ? 8 : 12,
+            warmup: timeframe === "4h" ? 80 : 60,
+            step: 8,
+            maxSamples: 10,
+          }) : null,
+          patterns,
+        };
+      } catch (error) {
+        return { timeframe, bars: [], patterns: [], error: error?.message || "요청 실패" };
+      }
+    }));
+    patternStats.completedRequests += frameResults.length;
+    patternStats.failedRequests += frameResults.filter((frame) => frame.error).length;
+    const patterns = groupPatternsByTimeframe(Object.fromEntries(
+      frameResults.map(({ timeframe, patterns: found }) => [timeframe, found]),
+    ));
+    if (!patterns.length) return null;
+    const failedTimeframes = frameResults.filter((frame) => frame.error).map((frame) => frame.timeframe);
+    const latestFrame = selectLatestFrame(frameResults);
+    return {
+      symbol: item.symbol,
+      baseAsset: item.baseAsset,
+      price: latestFrame?.bars.at(-1)?.close ?? item.lastPrice,
+      quoteVolume: item.quoteVolume,
+      newListing: item.newListing,
+      latestCandleTime: latestFrame?.bars.at(-1)?.closeTime ?? latestFrame?.bars.at(-1)?.openTime ?? null,
+      candleTimeByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.latestCandleTime ?? null])),
+      freshnessByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.freshness || null])),
+      validationByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.validation || null])),
+      scannedTimeframes: timeframes,
+      failedTimeframes,
+      atrByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.atr14 ?? null])),
+      ema200ByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.ema200 || null])),
+      patterns,
+    };
+  }, null, token);
+  if (!canContinue(token)) return null;
+  state.patternScanMeta = patternStats;
+  return analyzed.filter((r) => r && !r.skipped && !r.error);
+}
+
+async function runEarlyPipeline(universe, now, token) {
   const e = CONFIG.earlyDetect;
 
   // 2단계: early 유니버스 기준으로 유동성 필터
-  setPhase("prefilter");
+  setPhase("prefilter", token);
+  const tickers = await getTicker24h();
+  if (!canContinue(token)) return null;
+  state.tickers = tickers;
   const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
     ...CONFIG.prefilter,
-    minQuoteVolume: Math.max(e.minQuoteVolume, settings.minQuoteVolume ?? e.minQuoteVolume),
+    minQuoteVolume: e.minQuoteVolume,
     topByVolume: e.topByVolume,
   });
   const midCaps = excludeMajors(prefiltered, e.excludeMajors);
   state.prefiltered = midCaps;
   state.newListings = newListings;
   emit("scan:prefiltered", { count: midCaps.length, newListings });
-  if (abortToken.aborted) return null;
+  if (!canContinue(token)) return null;
 
   // 펀딩비는 스캔당 1회 (전 종목)
   const fundingMap = await getPremiumIndexAll();
+  if (!canContinue(token)) return null;
 
   // 3단계: 4시간봉으로 1차 선별
-  setPhase("candidate");
+  setPhase("candidate", token);
   const evaluated = await mapWithProgress(midCaps, async (item) => {
     const k4h = await getKlines(item.symbol, "4h");
-    const closed = closedOnly(k4h, settings.includeRealtimeCandle);
-    return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG, now) };
-  });
+    const closed = k4h.slice(0, token.settings.includeRealtimeCandle ? k4h.length : -1);
+    return { item, k4h: closed, res: stage3EvaluateEarly(item, closed, CONFIG) };
+  }, null, token);
+  if (!canContinue(token)) return null;
   let candidates = evaluated
     .filter((x) => x.res?.pass)
-    // 최종 조기포착 점수와 같은 입력으로 우선순위를 매긴다. 예전 squeezePct 는
-    // 이 단계에서 만들지도 않는 값이어서 사실상 티커 원래 순서를 따르고 있었다.
-    .sort((a, b) => (b.res.priority ?? -Infinity) - (a.res.priority ?? -Infinity)
-      || (b.item.quoteVolume ?? 0) - (a.item.quoteVolume ?? 0)
-      || String(a.item.symbol).localeCompare(String(b.item.symbol)))
+    .sort((a, b) => (a.res.squeezePct ?? 100) - (b.res.squeezePct ?? 100)) // 압축 강한 순
     .slice(0, e.keepMax);
   state.candidates = candidates.map((x) => x.item);
   emit("scan:candidates", { count: candidates.length });
-  if (abortToken.aborted) return null;
+  if (!canContinue(token)) return null;
 
   // 4단계: 후보만 OI 조회 후 정밀 판정
-  setPhase("deep");
+  setPhase("deep", token);
   const analyzed = await mapWithProgress(candidates, async ({ item, k4h }) => {
     const oiSeries = await getOpenInterestHist(item.symbol, e.oiPeriod, e.oiLimit);
     const funding = fundingMap.get(item.symbol) ?? null;
-    const result = buildEarlyResult(item, k4h, oiSeries, funding, CONFIG, now);
-    if (result) result.forecast = forecastDirection(k4h, market4h, {
-      provisional: Boolean(settings.includeRealtimeCandle), now,
-    });
-    return result;
-  });
+    return buildEarlyResult(item, k4h, oiSeries, funding, CONFIG);
+  }, null, token);
+  if (!canContinue(token)) return null;
   const results = analyzed.filter(Boolean);
 
   // 후보끼리 같이 움직이는지 — k4h 가 아직 손에 있을 때 여기서 계산한다.
@@ -138,247 +323,95 @@ async function runEarlyPipeline(universe, now, tickers, settings, market4h) {
   return results;
 }
 
-// ---- 급등 후 급락 모드 파이프라인 (SHORT 전용) ----
-// 1h 급등 통과 집합은 임의로 추가 절단하지 않고 모두 15m/5m 정밀 분석한다.
-async function runPumpFadePipeline(universe, now, tickers, settings, market4h) {
-  const includeRealtime = Boolean(settings.includeRealtimeCandle);
-
-  setPhase("prefilter");
-  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
-    ...CONFIG.prefilter,
-    minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
-  });
-  state.prefiltered = prefiltered;
-  state.newListings = newListings;
-  emit("scan:prefiltered", { count: prefiltered.length, newListings });
-  if (abortToken.aborted) return null;
-
-  setPhase("candidate");
-  const evaluated = await mapWithProgress(prefiltered, async (item) => {
-    const raw1h = await getKlines(item.symbol, "1h");
-    const candles1h = closedOnly(raw1h, includeRealtime);
-    return { item, candles1h, pre: pumpFadePrefilter(candles1h, CONFIG) };
-  });
-  const candidates = evaluated
-    .filter((x) => x.pre?.pass)
-    .sort((a, b) => {
-      const strength = (b.pre.normalizedStrength ?? -Infinity) - (a.pre.normalizedStrength ?? -Infinity);
-      return strength || String(a.item.symbol).localeCompare(String(b.item.symbol));
-    });
-  state.candidates = candidates.map((x) => x.item);
-  emit("scan:candidates", { count: candidates.length });
-  if (abortToken.aborted) return null;
-
-  setPhase("deep");
-  const analyzed = await mapWithProgress(candidates, async ({ item, candles1h }) => {
-    // 방향 모델의 4h 확인은 급등 1차 후보에만 붙인다. 전체 종목 4h 추가 호출은 하지 않는다.
-    const [raw4h, raw15m, raw5m] = await Promise.all([
-      getKlines(item.symbol, "4h"),
-      getKlines(item.symbol, "15m"),
-      getKlines(item.symbol, "5m"),
-    ]);
-    const candles4h = closedOnly(raw4h, includeRealtime);
-    const candles15m = closedOnly(raw15m, includeRealtime);
-    const candles5m = closedOnly(raw5m, includeRealtime);
-    const result = buildPumpFadeResult(item, candles1h, candles15m, candles5m, CONFIG, {
-      provisional: includeRealtime,
-    });
-    if (result) result.forecast = forecastDirection(candles4h, market4h, { provisional: includeRealtime });
-    return result;
-  });
-  return analyzed.filter(Boolean);
-}
-
-// ---- 급락 반등 모드 파이프라인 ----
-async function runReversalPipeline(universe, now, tickers, settings, market4h) {
-  setPhase("prefilter");
-  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
-    ...CONFIG.prefilter,
-    minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
-  });
-  state.prefiltered = prefiltered;
-  state.newListings = newListings;
-  emit("scan:prefiltered", { count: prefiltered.length, newListings });
-  if (abortToken.aborted) return null;
-
-  setPhase("candidate");
-  const dir = settings.direction || "long";
-  const evaluated = await mapWithProgress(prefiltered, async (item) => {
-    const k1h = await getKlines(item.symbol, "1h");
-    const closed = closedOnly(k1h, settings.includeRealtimeCandle);
-    const res = stage3Evaluate(item, closed, dir);
-    return { item, res };
-  });
-  let candidates = evaluated
-    .filter((e) => e.res?.pass)
-    .sort((a, b) => Math.abs(b.res.change6h) - Math.abs(a.res.change6h))
-    .map((e) => ({ ...e.item, pre: e.res }));
-  candidates = capCandidates(candidates);
-  state.candidates = candidates;
-  emit("scan:candidates", { count: candidates.length });
-  if (abortToken.aborted) return null;
-
-  setPhase("deep");
-  return mapWithProgress(candidates, (item) => deepAnalyze(item, settings, market4h));
-}
-
-async function runSweepPipeline(universe, now, tickers, settings, market4h) {
-  setPhase("prefilter");
-  const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
-    ...CONFIG.prefilter, minQuoteVolume: settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
-  });
-  state.prefiltered = prefiltered;
-  state.newListings = newListings;
-  emit("scan:prefiltered", { count: prefiltered.length, newListings });
-  setPhase("candidate");
-  const evaluated = await mapWithProgress(prefiltered, async item => {
-    const h1 = await getKlines(item.symbol, "1h");
-    return { item, h1, base: findSweepBase(h1, now, CONFIG.sweepRetest) };
-  });
-  const candidates = evaluated.filter(x => x.base)
-    .sort((a, b) => b.base.endTime - a.base.endTime || a.item.symbol.localeCompare(b.item.symbol))
-    .slice(0, CONFIG.sweepRetest.keepMax);
-  state.candidates = candidates.map(x => x.item);
-  emit("scan:candidates", { count: candidates.length });
-  if (abortToken.aborted) return null;
-  setPhase("deep");
-  return mapWithProgress(candidates, async ({ item, h1 }) => {
-    const [m15, m5] = await Promise.all([getKlines(item.symbol, "15m", 260), getKlines(item.symbol, "5m", 200)]);
-    return buildSweepResult(item, { h1, m15, m5, btc4h: market4h, now, config: CONFIG.sweepRetest });
-  });
-}
-
-export function sortAndRankResults(results, requestedMode = "early") {
-  return modesForScan(requestedMode).flatMap((mode) => {
-    const comparator = mode === "pump_fade"
-      ? pumpFadeComparator
-      : (a, b) => b.score - a.score || String(a.symbol).localeCompare(String(b.symbol));
-    return results
-      .filter((r) => r && !r.skipped && !r.error && resultMode(r) === mode)
-      .sort(comparator)
-      .map((r, i) => ({ ...r, rank: i + 1 }));
-  });
-}
-
 export async function runScan() {
   if (state.scan.running) return;
-  abortToken = { aborted: false };
+  const token = { id: ++runSequence, aborted: false, settings: snapshotSettings() };
+  activeRun = token;
   state.scan.running = true;
   state.scan.error = null;
   state.scan.startedAt = Date.now();
-  state.scan.currentMode = null;
-  state.scan.modeIndex = 0;
-  state.scan.modeTotal = 0;
-  state.scan.modeStats = {};
-  state.scan.modeErrors = {};
   emit("scan:start");
 
   try {
     const now = Date.now();
-    // 실행 중 UI 설정을 바꿔도 세 파이프라인의 데이터 경계와 채점 조건은 시작 시점 기준으로 고정한다.
-    const settings = { ...state.settings, penalties: { ...state.settings.penalties } };
-    const requestedMode = settings.scanMode;
 
     // --- 1단계: 전체 종목 수집 ---
-    setPhase("universe");
+    setPhase("universe", token);
     const symbols = await getExchangeInfo();
+    if (!canContinue(token)) return finishAborted(token);
     const universe = stage1Universe(symbols);
     state.universe = universe;
-    if (abortToken.aborted) return finishAborted();
+    if (!canContinue(token)) return finishAborted(token);
 
-    // 공통 24h 데이터는 전체 스캔에서도 한 번만 요청한다.
-    setPhase("prefilter");
+    // --- 조기 포착 모드면 별도 파이프라인 ---
+    if (token.settings.scanMode === "early") {
+      const earlyResults = await runEarlyPipeline(universe, now, token);
+      if (earlyResults === null) return finishAborted(token);
+      return finishScan(earlyResults, token);
+    }
+
+    if (token.settings.scanMode === "patterns") {
+      const patternResults = await runPatternPipeline(universe, now, token);
+      if (patternResults === null) return finishAborted(token);
+      return finishPatternScan(patternResults, token);
+    }
+
+    // --- 추세 추종 모드 ---
+    if (token.settings.scanMode === "trend") {
+      const trendResults = await runTrendPipeline(universe, now, token);
+      if (trendResults === null) return finishAborted(token);
+      return finishScan(trendResults, token);
+    }
+
+    // --- 2단계: 24h 유동성 필터 ---
+    setPhase("prefilter", token);
     const tickers = await getTicker24h();
+    if (!canContinue(token)) return finishAborted(token);
     state.tickers = tickers;
-    if (abortToken.aborted) return finishAborted();
+    // 최소 거래대금은 사용자 설정 우선 (필터 바의 "최소 거래대금").
+    // early 모드는 중형 중심 유니버스라 자체 기준(earlyDetect.minQuoteVolume)을 그대로 쓴다.
+    const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
+      ...CONFIG.prefilter,
+      minQuoteVolume: token.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+    });
+    state.prefiltered = prefiltered;
+    state.newListings = newListings;
+    emit("scan:prefiltered", { count: prefiltered.length, newListings });
+    if (!canContinue(token)) return finishAborted(token);
 
-    // 방향 확률의 시장 국면 입력. 한 번만 요청하고 모든 모드가 재사용한다.
-    // 실패해도 기존 세 스캐너는 정상 동작하고 확률만 "산출 보류"가 된다.
-    let market4h = [];
-    try {
-      const rawBtc4h = await getKlines("BTCUSDT", "4h");
-      // 시장국면은 항상 마감 봉 기준. 실시간 옵션이 켜져도 진행 중 BTC 봉은 사용하지 않는다.
-      market4h = closedOnly(rawBtc4h, false, now);
-    } catch (error) {
-      console.warn("방향 모델 BTC 4시간봉 조회 실패", error);
-    }
-    state.marketRegime = analyzeMarketRegime(market4h, CONFIG.marketRegime, now);
-    emit("market:regime", state.marketRegime);
+    // --- 3단계: 1h 빠른 분석 → 급락·초기 후보 ---
+    setPhase("candidate", token);
+    const dir = token.settings.direction || "long";
+    const evaluated = await mapWithProgress(prefiltered, async (item) => {
+      const k1h = await getKlines(item.symbol, "1h");
+      const closed = k1h.slice(0, token.settings.includeRealtimeCandle ? k1h.length : -1);
+      const res = stage3Evaluate(item, closed, dir);
+      return { item, res };
+    }, null, token);
+    if (!canContinue(token)) return finishAborted(token);
+    let candidates = evaluated
+      .filter((e) => e.res?.pass)
+      .sort((a, b) => Math.abs(b.res.change6h) - Math.abs(a.res.change6h)) // 더 크게 움직인 순(롱=급락/숏=급등)
+      .map((e) => ({ ...e.item, pre: e.res }));
+    candidates = capCandidates(candidates);
+    state.candidates = candidates;
+    emit("scan:candidates", { count: candidates.length });
+    if (!canContinue(token)) return finishAborted(token);
 
-    const modes = modesForScan(requestedMode);
-    const combined = [];
-    for (let i = 0; i < modes.length; i++) {
-      const mode = modes[i];
-      if (abortToken.aborted) return finishAborted();
-      setCurrentMode(mode, i + 1, modes.length);
-      try {
-        const results = mode === "sweep_retest"
-          ? await runSweepPipeline(universe, now, tickers, settings, market4h)
-          : mode === "early"
-          ? await runEarlyPipeline(universe, now, tickers, settings, market4h)
-          : mode === "pump_fade"
-            ? await runPumpFadePipeline(universe, now, tickers, settings, market4h)
-            : await runReversalPipeline(universe, now, tickers, settings, market4h);
-        if (results === null) return finishAborted();
-        recordModeStats(mode, results);
-        combined.push(...results);
-      } catch (e) {
-        if (modes.length === 1) throw e;
-        state.scan.modeErrors[mode] = e.message;
-        state.scan.modeStats[mode] = { prefiltered: 0, candidates: 0, results: 0 };
-        emit("scan:mode-error", { mode, message: e.message });
-      }
-    }
-    // 국면은 아직 검증된 가중치가 아니므로 점수를 바꾸지 않는다. 화면과 페이퍼 기록에만 고정한다.
-    for (const result of combined) {
-      if (!result || result.skipped || result.error) continue;
-      result.marketRegime = state.marketRegime;
-      result.regimeFit = regimeAlignment(state.marketRegime, result.direction);
-    }
-    // 화면 기본 필터를 먼저 통과한 상위 소수만 CRT·첫 눌림을 함께 확인한다.
-    // CRT/TBS 자체는 이 단계에서 처음 계산되므로 선택 규칙에 넣지 않는다.
-    if (abortToken.aborted) return finishAborted();
-    const confirmationTargets = selectEarlyConfirmationTargets(combined, settings, CONFIG);
-    if (confirmationTargets.length) {
-      setPhase("confirmation");
-      await mapWithProgress(confirmationTargets, async (result) => {
-        try {
-          // 1h/15m/5m/4h를 각각 후보 3개에만 요청한다. 앞 단계의 4h 결과는 API 캐시가
-          // 재사용하며, 같은 시세 묶음에서 CRT와 첫 눌림 근거를 함께 고정한다.
-          const [h4, h1, m15, m5] = await Promise.all([
-            getKlines(result.symbol, "4h"), getKlines(result.symbol, "1h"),
-            getKlines(result.symbol, "15m", 260), getKlines(result.symbol, "5m", 200),
-          ]);
-          result.crtTbs = evaluateCrtTbs(h4, m5, { now, config: CONFIG });
-          const sweep = buildSweepResult(result, {
-            h1, m15, m5, btc4h: market4h, now, config: CONFIG.sweepRetest,
-          });
-          result.earlyConfirmation = {
-            sweepRetest: sweep?.sweepRetest || {
-              status: "none", confirmed: false, label: "첫 눌림 확인 없음", reason: "패턴의 시작 조건이 없습니다.",
-            },
-          };
-        } catch {
-          result.crtTbs = {
-            available: false, confirmed: false, status: "unavailable", label: "산출 보류", reason: "확인용 CRT 캔들 조회 실패",
-          };
-          result.earlyConfirmation = {
-            sweepRetest: {
-              status: "unavailable", confirmed: false, label: "첫 눌림 산출 보류", reason: "확인용 캔들 조회에 실패했습니다.",
-            },
-          };
-        }
-        return result;
-      });
-    }
-    if (abortToken.aborted) return finishAborted();
-    return finishScan(combined, requestedMode);
+    // --- 4·5단계: 정밀 분석 + 점수 ---
+    setPhase("deep", token);
+    const analyzed = await mapWithProgress(candidates, (item) => deepAnalyze(item, token.settings), null, token);
+    if (!canContinue(token)) return finishAborted(token);
+    return finishScan(analyzed, token);
   } catch (e) {
+    if (!isCurrentRun(token)) return [];
+    if (token.aborted) return finishAborted(token);
     console.error("스캔 실패", e);
     state.scan.error = e.message;
     state.scan.running = false;
-    setPhase("error");
+    setPhase("error", token);
     emit("scan:error", e.message);
+    activeRun = null;
     return [];
   }
 }
@@ -386,28 +419,51 @@ export async function runScan() {
 // 스캔 마무리 — 정렬 후 state 에 저장하고 done 이벤트 발행. 두 모드 공용.
 // 점수 하한(minScore)은 여기서 자르지 않는다. 잘라 버리면 UI 에서 "최소 점수"를
 // 낮춰도 되살릴 데이터가 없어 재스캔해야만 반영됐다. 최종 필터는 ui/settings.applyFilters.
-function pumpFadeComparator(a, b) {
-  return b.stage.stage - a.stage.stage || b.score - a.score || a.symbol.localeCompare(b.symbol);
-}
-
-function finishScan(analyzed, requestedMode) {
-  setPhase("score");
-  const results = sortAndRankResults(analyzed, requestedMode);
+function finishScan(analyzed, token) {
+  if (!canContinue(token)) return finishAborted(token);
+  setPhase("score", token);
+  const results = analyzed
+    .filter((r) => !r.skipped && !r.error)
+    .sort((a, b) => b.score - a.score)
+    .map((r, i) => ({ ...r, rank: i + 1 }));
   state.results = results;
 
-  setPhase("done");
+  setPhase("done", token);
   state.scan.running = false;
   state.scan.lastUpdated = Date.now();
-  state.scan.currentMode = null;
   // payload 없음 — 표시용 개수는 목록과 같은 필터를 거쳐야 맞으므로 main.js 가 직접 센다.
   emit("scan:done");
+  activeRun = null;
   return results;
 }
 
-function finishAborted() {
+function finishPatternScan(analyzed, token) {
+  if (!canContinue(token)) return finishAborted(token);
+  setPhase("score", token);
+  state.patternResults = analyzed
+    .sort((a, b) => maxPatternFit(b) - maxPatternFit(a)
+      || b.quoteVolume - a.quoteVolume)
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+  setPhase("done", token);
   state.scan.running = false;
-  setPhase("idle");
+  state.scan.lastUpdated = Date.now();
+  emit("scan:done");
+  activeRun = null;
+  return state.patternResults;
+}
+
+function maxPatternFit(row) {
+  return Math.max(0, ...row.patterns.flatMap((pattern) =>
+    Object.values(pattern.timeframes || {}).map((frame) => Number(frame.fitScore) || 0)));
+}
+
+function finishAborted(token) {
+  if (!isCurrentRun(token)) return [];
+  state.scan.running = false;
+  state.scan.phase = "idle";
+  emit("scan:phase", "idle");
   emit("scan:aborted");
+  activeRun = null;
   return [];
 }
 

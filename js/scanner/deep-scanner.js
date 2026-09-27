@@ -6,6 +6,7 @@ import { getKlines, closedOnly } from "../api/binance.js";
 import { computeIndicators, last } from "../core/indicators.js";
 import {
   volumeDelta, cvd, cvdSlope, avgVolume, relativeVolume, candleAbsorption, volumeTrend,
+  volumeSpikes, cvdDivergence,
 } from "../core/volume-analysis.js";
 import { findPivots, structureSummary } from "../core/market-structure.js";
 import { analyzeLiquidity } from "../core/liquidity.js";
@@ -15,11 +16,10 @@ import { computeLongPlan, computeShortPlan } from "../core/risk-reward.js";
 import { estimateAbsorption, classifyStage, scoreCandidate, topSignals, coreStrengthPct } from "../core/scoring.js";
 import { detectGoldenCrossRetest } from "../core/golden-cross-retest.js";
 import { evaluateNoise } from "../core/noise-filter.js";
-import { forecastDirection } from "../core/direction-forecast.js";
 
 // 한 시간봉 분석 묶음
-function analyzeTf(candlesRaw, includeRealtime, tf, now) {
-  const candles = closedOnly(candlesRaw, includeRealtime, now);
+function analyzeTf(candlesRaw, includeRealtime, tf) {
+  const candles = closedOnly(candlesRaw, includeRealtime);
   if (candles.length < 40) return null;
   const ind = computeIndicators(candles, CONFIG.indicators);
   const atrVal = last(ind.atr);
@@ -298,17 +298,13 @@ function lowerHigh(a5) {
 }
 
 // 최종: 종목 하나 정밀 분석
-export async function deepAnalyze(item, settings, market4h = []) {
-  return analyzeCandles(item, settings, await fetchAll(item.symbol), market4h);
-}
-
-// Live/research share one scoring path. Research supplies only candles available at now.
-export function analyzeCandles(item, settings, { k4h, k1h, k15m, k5m }, market4h = [], now = Date.now()) {
+export async function deepAnalyze(item, settings) {
   const includeRt = settings.includeRealtimeCandle;
-  const a4 = analyzeTf(k4h, includeRt, "4h", now);
-  const a1 = analyzeTf(k1h, includeRt, "1h", now);
-  const a15 = analyzeTf(k15m, includeRt, "15m", now);
-  const a5 = analyzeTf(k5m, includeRt, "5m", now);
+  const { k4h, k1h, k15m, k5m } = await fetchAll(item.symbol);
+  const a4 = analyzeTf(k4h, includeRt, "4h");
+  const a1 = analyzeTf(k1h, includeRt, "1h");
+  const a15 = analyzeTf(k15m, includeRt, "15m");
+  const a5 = analyzeTf(k5m, includeRt, "5m");
   if (!a4 || !a1 || !a15 || !a5) {
     return { symbol: item.symbol, error: "캔들 데이터 부족", skipped: true };
   }
@@ -347,8 +343,7 @@ export function analyzeCandles(item, settings, { k4h, k1h, k15m, k5m }, market4h
     : false;
   // 신호 노이즈 — 촙 구간/저거래량 판정 (15m 기준). applyFilters 에서 걸러냄.
   const noise = evaluateNoise(noiseTf({ a4, a1, a15, a5 }), CONFIG);
-  const result = {
-    scanMode: "reversal",
+  return {
     symbol: item.symbol,
     baseAsset: item.baseAsset,
     price: sig.price,
@@ -368,6 +363,16 @@ export function analyzeCandles(item, settings, { k4h, k1h, k15m, k5m }, market4h
     near1hEma200,
     noise,
     corePct,
+    // 1시간봉 대량거래 봉 + CVD 다이버전스. **채점에는 안 들어간다.**
+    // 2026-07-30 측정(529종목·57,796건): 점수 40+ 구간에서 급증 6배+ 의 구간내 리프트가
+    // 1.01x — 추가 정보가 없다. volExpand(단독 2.00x)가 이미 같은 걸 더 강하게 잡는다.
+    // 매수/매도 비율은 방향 예측력이 없었다(매도 흡수 0.79x, 혼재 1.36x — 뒤집혀 있다).
+    // 그래서 사용자가 눈으로 검토할 때 참고하는 **사실 정보로만** 보여준다.
+    // 인자는 research/predict-dump.mjs 와 **같아야 한다**. 피봇 길이는 이 지표의 지배 변수라
+    // swingPivot(5) 을 재사용하면 측정한 것과 다른 걸 화면에 띄우게 된다 — 위 리프트 수치가
+    // 그 순간 근거를 잃는다. 3 은 predict-dump.mjs 가 쓴 값이다. 한쪽을 바꾸면 양쪽 다 바꿀 것.
+    volSpike1h: volumeSpikes(a1.candles, { period: 20, minRel: 3, lookback: 30 })[0] || null,
+    cvdDiv1h: cvdDivergence(a1.candles, 3, 40),
     plan: sig.plan,
     rsi1h: sig.rsi1h,
     timeframes: {
@@ -377,8 +382,6 @@ export function analyzeCandles(item, settings, { k4h, k1h, k15m, k5m }, market4h
       "5m": tfSummary(a5, side),
     },
   };
-  result.forecast = forecastDirection(a4.candles, market4h, { now, provisional: Boolean(includeRt) });
-  return result;
 }
 
 // 노이즈 판정용 TF 선택 (config.noiseFilter.tf) — 기본 15m

@@ -1,408 +1,113 @@
-// ui/paper.js — 신호 발생 시점의 계획·시장국면·전망을 고정하는 Forward Paper Ledger.
-// 실제 주문은 없으며 localStorage에만 저장한다. 기존 qar-paper 기록도 그대로 읽는다.
+// ui/paper.js — 페이퍼 트레이딩 기록. 실제 주문 없음, 전부 localStorage.
+//
+// 백테스트는 과거고 이건 미래다. 이 도구 말대로 했으면 실제로 어땠는지 앞으로 쌓인다.
+// 3개월쯤 모이면 백테스트 숫자를 믿어도 되는지에 대한 진짜 답이 나온다.
+//
+// 결과 판정은 기록 시점의 계획(진입·손절·목표) 그대로. 4시간봉 마감가로만 판정한다
+// — 봉 안에서 손절과 목표가 같이 닿으면 손절을 먼저 본다(봉 내부 순서를 알 수 없다).
 
 import { getKlines } from "../api/binance.js";
-import { CONFIG } from "../config.js";
 import { state } from "../state.js";
 import { fmtPrice, fmtWon, escapeHtml } from "./format.js";
 import { toast } from "./notifications.js";
-import { buildDecisionGate } from "../core/decision-gate.js";
-import { expireResult } from "../core/signal-freshness.js";
-import { currentCrtStatus } from "../core/crt-tbs.js";
 
 const KEY = "qar-paper";
-const SCHEMA_VERSION = 3;
-const FORWARD_HOURS = [1, 3, 6, 24];
-const H4 = 4 * 60 * 60 * 1000;
-const M5 = 5 * 60 * 1000;
 let listEl = null;
 
-const finite = Number.isFinite;
-const directionOf = (rec) => rec?.direction === "short" || (rec?.stop > rec?.entry) ? "short" : "long";
-const sideOf = (rec) => directionOf(rec) === "short" ? -1 : 1;
-const startOf = (c) => Number(c?.openTime ?? c?.time ?? 0);
-const endOf = (c) => Number(c?.closeTime ?? c?.time ?? c?.openTime ?? 0);
-const numberOrNull = (value) => value == null || value === "" ? null
-  : finite(Number(value)) ? Number(value) : null;
-const textOrNull = (value) => typeof value === "string" ? value : null;
-
-function firstNumber(...values) {
-  for (const value of values) {
-    const number = numberOrNull(value);
-    if (number != null) return number;
-  }
-  return null;
-}
-
-function textList(values, max = 8) {
-  return Array.isArray(values) ? values.filter((value) => typeof value === "string").slice(0, max) : [];
-}
-
-function copyAxis(axis) {
-  if (!axis || typeof axis !== "object") return null;
-  return {
-    score: numberOrNull(axis.score),
-    label: textOrNull(axis.label),
-    reasons: textList(axis.reasons),
-  };
-}
-
-// 후보를 나중에 다시 평가할 때 "어떤 축이 켜져 있었는가"를 재현할 수 있도록,
-// 표시용 점수와 이유만 고정한다. 원본 결과 객체를 참조하지 않아 이후 재스캔도 기록을 바꾸지 않는다.
-function copyEarlyAxes(axes) {
-  if (!axes || typeof axes !== "object") return null;
-  return {
-    potential: copyAxis(axes.potential),
-    readiness: copyAxis(axes.readiness),
-    risk: copyAxis(axes.risk),
-  };
-}
-
-function copyScoreSources(result) {
-  const breakdown = Array.isArray(result?.breakdown)
-    ? result.breakdown.slice(0, 12).map((item) => ({
-      key: textOrNull(item?.key), label: textOrNull(item?.label),
-      weight: numberOrNull(item?.weight), got: numberOrNull(item?.got), hit: Boolean(item?.hit),
-    })) : [];
-  const penalties = Array.isArray(result?.penalties)
-    ? result.penalties.slice(0, 12).map((item) => ({
-      key: textOrNull(item?.key), label: textOrNull(item?.label), val: numberOrNull(item?.val),
-    })) : [];
-  if (!breakdown.length && !penalties.length && !Array.isArray(result?.topSignals)) return null;
-  return { breakdown, penalties, topSignals: textList(result?.topSignals, 6) };
-}
-
-function copyEarlyMetrics(early) {
-  if (!early || typeof early !== "object") return null;
-  const copied = {};
-  const numeric = [
-    "squeezePct", "volExpand", "relVol3", "mom14", "ageDays", "rangePos",
-    "runFromBreakoutPct", "funding", "boxHigh", "boxLow",
-  ];
-  const flags = ["closeAboveEma200", "ema200SlopeOk", "breakoutClose"];
-  for (const key of numeric) if (Object.hasOwn(early, key)) copied[key] = numberOrNull(early[key]);
-  for (const key of flags) if (Object.hasOwn(early, key)) copied[key] = Boolean(early[key]);
-  if (early.oi && typeof early.oi === "object") {
-    copied.oi = {
-      change72h: numberOrNull(early.oi.change72h),
-      change12h: numberOrNull(early.oi.change12h),
-      prev12h: numberOrNull(early.oi.prev12h),
-    };
-  }
-  return Object.keys(copied).length ? copied : null;
-}
-
-function freshSweep(source, now) {
-  if (!source || typeof source !== "object") return source;
-  const expiresAt = numberOrNull(source.expiresAt);
-  if (expiresAt == null || now < expiresAt) return source;
-  return {
-    ...source,
-    confirmed: false,
-    status: "expired",
-    label: "확인 신호 만료",
-    reason: "확인 출처의 유효 시간이 지나 기록 시점에는 재스캔이 필요합니다.",
-  };
-}
-
-// 화면에서 만료 처리되기 전 바로 기록을 눌러도, 당시 실제로 유효한 확인만
-// 의사결정 게이트에 쓰도록 한다. 입력 result 자체는 변경하지 않는다.
-function freshResultForRecord(result, now) {
-  const current = expireResult(result, now);
-  const rawSweep = current?.earlyConfirmation?.sweepRetest;
-  const sweep = freshSweep(rawSweep, now);
-  if (sweep === rawSweep) return current;
-  return {
-    ...current,
-    earlyConfirmation: { ...current.earlyConfirmation, sweepRetest: sweep },
-  };
-}
-
-function copyRange(range) {
-  if (!range || typeof range !== "object") return null;
-  return {
-    high: numberOrNull(range.high), low: numberOrNull(range.low), mid: numberOrNull(range.mid),
-    openTime: numberOrNull(range.openTime), closeTime: numberOrNull(range.closeTime),
-    expiresAt: numberOrNull(range.expiresAt),
-  };
-}
-
-function copyPlan(plan) {
-  if (!plan || typeof plan !== "object") return null;
-  return {
-    entry: numberOrNull(plan.entry), invalidation: numberOrNull(plan.invalidation),
-    tp1: numberOrNull(plan.tp1), tp2: numberOrNull(plan.tp2),
-    riskReward: numberOrNull(plan.riskReward), netRR: numberOrNull(plan.netRR),
-  };
-}
-
-function crtExpiry(source) {
-  const rangeExpiry = numberOrNull(source?.range?.expiresAt);
-  const confirmationTime = numberOrNull(source?.confirmationTime);
-  const confirmationExpiry = confirmationTime == null ? null
-    : confirmationTime + (CONFIG.crtTbs.freshBars * M5);
-  if (rangeExpiry != null && confirmationExpiry != null) return Math.min(rangeExpiry, confirmationExpiry);
-  return rangeExpiry ?? confirmationExpiry;
-}
-
-function copyCrtConfirmation(source, now) {
-  if (!source || typeof source !== "object") return null;
-  const current = currentCrtStatus(source, now) || source;
-  const asOf = numberOrNull(source.asOf);
-  const asOfAgeMs = asOf == null ? null : Math.max(0, now - asOf);
-  const expiresAt = crtExpiry(source);
-  const expired = current.status === "expired" || (expiresAt != null && now >= expiresAt);
-  return {
-    source: "CRT + Turtle Body Soup",
-    available: current.available === true,
-    confirmed: current.confirmed === true,
-    status: textOrNull(current.status), label: textOrNull(current.label), reason: textOrNull(current.reason),
-    originalStatus: textOrNull(source.status), originalConfirmed: source.confirmed === true,
-    direction: textOrNull(current.direction), asOf, confirmationTime: numberOrNull(source.confirmationTime),
-    sweepTime: numberOrNull(source.sweepTime), reclaimTime: numberOrNull(source.reclaimTime),
-    expiresAt, range: copyRange(source.range), plan: copyPlan(current.plan),
-    freshness: {
-      evaluatedAt: now, expiresAt, expired,
-      asOfAgeMs, asOfFresh: asOfAgeMs == null ? null : asOfAgeMs <= M5,
-      fresh: !expired && current.available !== false && (asOfAgeMs == null || asOfAgeMs <= M5),
-    },
-  };
-}
-
-function copySweepConfirmation(source, now) {
-  if (!source || typeof source !== "object") return null;
-  const current = freshSweep(source, now);
-  const expiresAt = numberOrNull(source.expiresAt);
-  const expired = expiresAt != null && now >= expiresAt;
-  return {
-    source: "첫 눌림 재확인",
-    available: current.available !== false,
-    confirmed: current.confirmed === true,
-    status: textOrNull(current.status), label: textOrNull(current.label), reason: textOrNull(current.reason),
-    originalStatus: textOrNull(source.status), originalConfirmed: source.confirmed === true,
-    direction: textOrNull(current.direction), expiresAt,
-    stage: numberOrNull(source.stage), base: source.base ? {
-      startTime: numberOrNull(source.base.startTime), endTime: numberOrNull(source.base.endTime),
-      crashTime: numberOrNull(source.base.crashTime), drop: numberOrNull(source.base.drop),
-    } : null,
-    freshness: { evaluatedAt: now, expiresAt, expired, fresh: !expired && current.available !== false },
-  };
-}
-
-function copySignalSources(result, now) {
-  const signalTime = firstNumber(result?.signalTime, result?.early?.signalTime);
-  const signalExpiresAt = firstNumber(result?.signalExpiresAt, result?.early?.signalExpiresAt);
-  const marketPriceAt = firstNumber(result?.marketPriceAt, result?.early?.marketPriceAt);
-  const signalPrice = firstNumber(result?.signalPrice, result?.early?.signalPrice, result?.price);
-  const marketPrice = firstNumber(result?.marketPrice, result?.price);
-  const signalAgeMs = signalTime == null ? null : Math.max(0, now - signalTime);
-  const marketAgeMs = marketPriceAt == null ? null : Math.max(0, now - marketPriceAt);
-  const signalExpired = signalExpiresAt == null
-    ? signalAgeMs == null ? null : signalAgeMs > H4 + 2 * M5
-    : now >= signalExpiresAt;
-  return {
-    capturedAt: now,
-    price: {
-      signalPrice, marketPrice, signalTime, signalExpiresAt, marketPriceAt,
-      candleInterval: textOrNull(result?.signalInterval) || (result?.scanMode === "early" ? "4h" : null),
-      signalAgeMs, marketAgeMs,
-      signalExpired,
-      signalFresh: signalExpired == null ? null : !signalExpired,
-      marketFresh: marketAgeMs == null ? null : marketAgeMs <= M5,
-    },
-    score: copyScoreSources(result),
-    earlyMetrics: copyEarlyMetrics(result?.early),
-  };
-}
-
-function copyConfirmationSources(result, now) {
-  return {
-    capturedAt: now,
-    crtTbs: copyCrtConfirmation(result?.crtTbs, now),
-    sweepRetest: copySweepConfirmation(result?.earlyConfirmation?.sweepRetest ?? result?.sweepRetest, now),
-  };
-}
-
-function normalizeRecord(rec) {
-  if (!rec || typeof rec !== "object") return null;
-  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
-  const plannedRR = finite(Number(rec.plannedRR)) ? Number(rec.plannedRR)
-    : risk > 0 && finite(Number(rec.tp2)) ? Math.abs(Number(rec.tp2) - Number(rec.entry)) / risk : null;
-  return {
-    ...rec,
-    schemaVersion: rec.schemaVersion ?? 1,
-    direction: directionOf(rec),
-    status: rec.status || (rec.settlement ? "closed" : "open"),
-    plannedRR,
-  };
-}
-
 function load() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(KEY));
-    return Array.isArray(parsed) ? parsed.map(normalizeRecord).filter(Boolean) : [];
-  } catch { return []; }
+  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
 }
-
 function save(list) {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* 용량 초과 시 기존 기록 유지 */ }
+  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* 용량 초과 무시 */ }
 }
 
-function closedAfter(rec, candles, now = Date.now()) {
-  return (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
-}
-
-export function pathStats(rec, candles, now = Date.now()) {
-  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
-  if (!(risk > 0)) return { mfeR: 0, maeR: 0 };
-  const side = sideOf(rec);
-  let mfeR = 0;
-  let maeR = 0;
-  for (const c of closedAfter(rec, candles, now)) {
-    const favorablePx = side > 0 ? Number(c.high) : Number(c.low);
-    const adversePx = side > 0 ? Number(c.low) : Number(c.high);
-    if (finite(favorablePx)) mfeR = Math.max(mfeR, ((favorablePx - rec.entry) * side) / risk);
-    if (finite(adversePx)) maeR = Math.min(maeR, ((adversePx - rec.entry) * side) / risk);
-  }
-  return { mfeR, maeR };
-}
-
-// 기록 당시 계획과 이후 마감봉으로 결말을 판정한다. 같은 봉에서 양쪽 가격이 닿으면
-// 순서를 알 수 없으므로 승패에서 제외할 ambiguous로 보존한다.
-export function resolveTrade(rec, candles, now = Date.now()) {
-  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
-  const side = sideOf(rec);
-  const rOf = (px) => risk > 0 ? ((px - rec.entry) * side) / risk : 0;
-  const after = closedAfter(rec, candles, now);
-  const stats = pathStats(rec, after, now);
-
+// 순수 함수 — 기록 + 진입 이후 캔들 → 결말. 테스트가 이걸 본다.
+// candles 는 진입 시각 이후 마감봉만 들어온다고 가정하지 않는다(여기서 자른다).
+export function resolveTrade(rec, candles) {
+  // api/binance.js 의 parseKlines 는 openTime/closeTime 을 쓴다(time 아님).
+  // 필드 이름을 잘못 보면 조용히 빈 배열이 되어 모든 기록이 영원히 "진행 중" 이 된다.
+  const startOf = (c) => c.openTime ?? c.time ?? 0;
+  const endOf = (c) => c.closeTime ?? startOf(c);
+  const now = Date.now();
+  // 기록 이후에 시작한 마감봉만. 진행 중인 봉은 고·저가 아직 안 굳어서 제외한다.
+  const after = (candles || []).filter((c) => startOf(c) >= rec.at && endOf(c) <= now);
+  const short = rec.direction === "short";
+  const risk = short ? rec.stop - rec.entry : rec.entry - rec.stop;
+  const rOf = (px) => (risk > 0 ? (short ? rec.entry - px : px - rec.entry) / risk : 0);
   for (const c of after) {
-    const high = Number(c.high), low = Number(c.low);
-    const stopHit = side > 0 ? low <= rec.stop : high >= rec.stop;
-    const targetHit = side > 0 ? high >= rec.tp2 : low <= rec.tp2;
-    const exitAt = endOf(c);
-    if (stopHit && targetHit) return { status: "ambiguous", exitPx: null, exitAt, r: null, ...stats };
-    if (stopHit) return { status: "loss", exitPx: rec.stop, exitAt, r: rOf(rec.stop), ...stats };
-    if (targetHit) return { status: "win", exitPx: rec.tp2, exitAt, r: rOf(rec.tp2), ...stats };
+    // exitAt 도 startOf 로 읽는다 — 위에서 openTime/closeTime 을 쓰는 이유와 같다.
+    // c.time 은 실제 캔들에 없어서 조용히 undefined 가 된다.
+    if (short ? c.high >= rec.stop : c.low <= rec.stop)
+      return { status: "loss", exitPx: rec.stop, exitAt: startOf(c), r: rOf(rec.stop) };
+    if (short ? c.low <= rec.tp2 : c.high >= rec.tp2)
+      return { status: "win", exitPx: rec.tp2, exitAt: startOf(c), r: rOf(rec.tp2) };
   }
   const last = after[after.length - 1];
-  const exitPx = last && finite(Number(last.close)) ? Number(last.close) : rec.entry;
-  return { status: "open", exitPx, exitAt: null, r: rOf(exitPx), ...stats };
+  return { status: "open", exitPx: last ? last.close : rec.entry, exitAt: null, r: rOf(last ? last.close : rec.entry) };
 }
 
-// 1/3/6/24시간 시점의 마감가를 신호 당시 진입가와 비교한다. 거래 방향 기준 R도 함께 남긴다.
-export function forwardSnapshots(rec, candles, horizons = FORWARD_HOURS, now = Date.now()) {
-  const after = closedAfter(rec, candles, now);
-  const risk = Math.abs(Number(rec.entry) - Number(rec.stop));
-  const riskPct = risk > 0 && rec.entry > 0 ? risk / rec.entry : null;
-  const side = sideOf(rec);
-  return horizons.map((hours) => {
-    const deadline = rec.at + hours * 60 * 60 * 1000;
-    if (now < deadline) return { hours, status: "pending" };
-    const eligible = after.filter((c) => endOf(c) <= deadline);
-    const candle = eligible[eligible.length - 1];
-    if (!candle || !finite(Number(candle.close))) return { hours, status: "unavailable" };
-    const price = Number(candle.close);
-    const changePct = ((price / rec.entry) - 1) * 100;
-    return {
-      hours,
-      status: "ready",
-      at: endOf(candle),
-      price,
-      changePct,
-      directionalR: riskPct > 0 ? (changePct / 100) * side / riskPct : null,
-    };
-  });
-}
-
-export function netRFor(rec, grossR) {
-  if (!finite(grossR)) return null;
-  const riskPct = Math.abs(Number(rec.entry) - Number(rec.stop)) / Number(rec.entry);
-  const costPct = Number(rec.costPct ?? 0) / 100;
-  return riskPct > 0 ? grossR - costPct / riskPct : grossR;
-}
-
-function moneyOf(rec, netR) {
-  if (!finite(netR)) return null;
+// 금액 = R 배수 × 리스크 금액. 기록 당시의 시드·레버리지를 그대로 쓴다.
+function moneyOf(rec, r) {
   const riskPct = Math.abs(rec.entry - rec.stop) / rec.entry;
-  return rec.seed * rec.leverage * riskPct * netR;
+  return rec.seed * rec.leverage * riskPct * r;
 }
 
-function copyForecast(forecast) {
-  if (!forecast || typeof forecast !== "object") return null;
-  const { available, up, down, neutral, lead, confidence, horizonHours, thresholdPct, asOf, reason } = forecast;
-  return { available, up, down, neutral, lead, confidence, horizonHours, thresholdPct, asOf, reason };
-}
-
-function copyRegime(regime) {
-  if (!regime || typeof regime !== "object") return null;
-  const { available, key, label, bias, volatility, confidence, asOf, reason } = regime;
-  return { available, key, label, bias, volatility, confidence, asOf, reason };
-}
-
-export function buildPaperRecord(result, settings = state.settings, now = Date.now()) {
-  const current = freshResultForRecord(result, now);
-  const p = current?.plan;
-  if (!p?.valid) return null;
-  const direction = current.direction === "short" ? "short" : "long";
-  const entry = Number(p.entry), stop = Number(p.invalidation), tp2 = Number(p.tp2);
-  const risk = Math.abs(entry - stop);
-  if (!(entry > 0) || !(risk > 0) || !finite(tp2)) return null;
-  const geometryValid = direction === "long" ? stop < entry && tp2 > entry : stop > entry && tp2 < entry;
-  if (!geometryValid) return null;
-
-  const gate = buildDecisionGate(current, now);
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    id: `${current.symbol}-${now}`,
-    symbol: current.symbol,
-    at: now,
-    status: "open",
-    scanMode: current.scanMode || current.mode || "early",
-    direction,
-    entry,
-    stop,
-    tp1: finite(Number(p.tp1)) ? Number(p.tp1) : null,
-    tp2,
-    tp3: finite(Number(p.tp3)) ? Number(p.tp3) : null,
-    plannedRR: Math.abs(tp2 - entry) / risk,
-    score: Number(current.score),
-    stage: current.stage ? { stage: current.stage.stage, label: current.stage.label } : null,
-    grade: current.grade ? { key: current.grade.key, label: current.grade.label } : null,
-    topSignals: Array.isArray(current.topSignals) ? current.topSignals.slice(0, 5) : [],
-    // 새 필드는 선택 사항이다. schemaVersion 1~2의 localStorage 레코드는 normalizeRecord에서
-    // 그대로 읽고, 이후 새 기록만 이 스냅샷을 갖는다.
-    signalSources: copySignalSources(current, now),
-    earlyAxes: copyEarlyAxes(current.earlyAxes),
-    confirmationSources: copyConfirmationSources(result, now),
-    forecast: copyForecast(current.forecast),
-    marketRegime: copyRegime(current.marketRegime || state.marketRegime),
-    regimeFit: current.regimeFit ? { ...current.regimeFit } : null,
-    decisionGate: {
-      status: gate.status,
-      label: gate.label,
-      blockers: gate.blockers,
-      warnings: gate.warnings,
-      checks: gate.checks.map(({ key, level, label }) => ({ key, level, label })),
-    },
-    costPct: CONFIG.tradeCostRoundTripPct,
-    seed: Number(settings.seedMoney) || 0,
-    leverage: Math.max(1, Number(settings.leverage) || 1),
-  };
+function appendRecord(record) {
+  const list = load();
+  if (list.some((x) => x.symbol === record.symbol && x.status !== "closed")) {
+    toast(`${record.symbol} 은 이미 열린 기록이 있습니다.`, "info");
+    return;
+  }
+  list.unshift({ ...record, id: `${record.symbol}-${Date.now()}`, at: Date.now(), seed: state.settings.seedMoney, leverage: state.settings.leverage });
+  save(list);
+  toast(`${record.symbol} 기록했습니다.`, "success");
+  render();
 }
 
 export function recordTrade(result) {
-  const rec = buildPaperRecord(result);
-  if (!rec) { toast("계획이 유효하지 않아 기록할 수 없습니다.", "error"); return; }
-  const list = load();
-  if (list.some((x) => x.symbol === result.symbol && x.status !== "closed" && !x.settlement)) {
-    toast(`${result.symbol} 은 이미 열린 기록이 있습니다.`, "info");
+  const p = result.plan;
+  if (!p?.valid) { toast("계획이 유효하지 않아 기록할 수 없습니다.", "error"); return; }
+  appendRecord({
+    symbol: result.symbol, direction: "long", entry: p.entry, stop: p.invalidation, tp2: p.tp2,
+    score: result.score, signals: result.topSignals || [], kind: "legacy",
+  });
+}
+
+/** Record a pattern candidate for paper-only follow-up. */
+export function recordPatternTrade(row) {
+  const candidate = row?.entryCandidate;
+  if (!candidate?.entryLow || candidate.target == null || candidate.stop == null) {
+    toast("진입·무효화·목표가 모두 있는 패턴만 기록할 수 있습니다.", "error");
     return;
   }
-  list.unshift(rec);
-  save(list);
-  toast(`${result.symbol} 신호 시점을 고정 기록했습니다.`, "success");
-  render();
+  const direction = candidate.direction === "short" ? "short" : "long";
+  const entry = direction === "short" ? candidate.entryLow : candidate.entryHigh;
+  const pattern = row.patterns?.find((item) => item.id === candidate.patternId);
+  appendRecord({
+    symbol: row.symbol, direction, entry, stop: candidate.stop, tp2: candidate.target,
+    score: Math.round((candidate.assessment?.overall?.[direction === "short" ? "shortPct" : "longPct"] || candidate.fitScore || 0)),
+    signals: [`패턴 · ${candidate.patternName}`, `${candidate.timeframe} · 적합도 ${candidate.fitScore}점`],
+    kind: "pattern", patternName: candidate.patternName, patternFamily: pattern?.family || "",
+    fitScore: candidate.fitScore, completionPct: candidate.completionPct ?? null,
+  });
+}
+
+// 신호별 승률. 닫힌 기록만 센다 — 진행 중은 결말을 모르니 분모에 넣으면 승률이 거짓으로 낮아진다.
+// 한 기록에 신호 3개면 3개 전부에 계상한다(신호는 배타적이지 않다).
+export function signalStats(rows) {
+  const byName = new Map();
+  for (const { rec, res } of rows) {
+    if (res.status === "open") continue;
+    for (const name of rec.signals || []) {
+      const s = byName.get(name) || { name, n: 0, wins: 0, totalR: 0 };
+      s.n++;
+      if (res.status === "win") s.wins++;
+      s.totalR += res.r;
+      byName.set(name, s);
+    }
+  }
+  // 표본 많은 순 — 2건짜리 100% 승률이 맨 위에 오면 오해한다.
+  return [...byName.values()].sort((a, b) => b.n - a.n);
 }
 
 export function initPaper() {
@@ -414,192 +119,78 @@ export function initPaper() {
     save(load().filter((x) => x.id !== del));
     render();
   });
-  document.getElementById("paper-export-json")?.addEventListener("click", exportPaperJson);
-  document.getElementById("paper-export-csv")?.addEventListener("click", exportPaperCsv);
   render();
-}
-
-export function computePaperMetrics(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  const decided = list.filter((x) => ["win", "loss"].includes(x?.res?.status));
-  const ordered = decided.slice().sort((a, b) =>
-    Number(a.rec?.closeTs ?? a.res?.exitAt ?? a.rec?.at ?? 0)
-      - Number(b.rec?.closeTs ?? b.res?.exitAt ?? b.rec?.at ?? 0));
-  let equity = 0, peak = 0, maxDrawdownR = 0;
-  for (const row of ordered) {
-    equity += row.res.netR ?? netRFor(row.rec, row.res.r) ?? 0;
-    peak = Math.max(peak, equity);
-    maxDrawdownR = Math.min(maxDrawdownR, equity - peak);
-  }
-  const planned = list
-    .map((x) => x?.rec?.plannedRR)
-    .filter((value) => value != null && finite(Number(value)))
-    .map(Number);
-  const netR = decided.reduce((sum, x) => sum + (x.res.netR ?? netRFor(x.rec, x.res.r) ?? 0), 0);
-  return {
-    total: list.length,
-    decided: decided.length,
-    open: list.filter((x) => x?.res?.status === "open").length,
-    ambiguous: list.filter((x) => x?.res?.status === "ambiguous").length,
-    wins: decided.filter((x) => x.res.status === "win").length,
-    winRate: decided.length ? decided.filter((x) => x.res.status === "win").length / decided.length * 100 : null,
-    netR,
-    maxDrawdownR,
-    avgPlannedRR: planned.length ? planned.reduce((a, b) => a + b, 0) / planned.length : null,
-  };
-}
-
-function csvCell(value) {
-  const text = value == null ? "" : String(value);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-export function paperCsv(records) {
-  const headers = [
-    "id", "symbol", "recordedAt", "closedAt", "mode", "direction", "score", "gate",
-    "regime", "signalAt", "signalExpiresAt", "signalPrice", "signalFresh", "marketPriceAt", "marketPrice", "readiness", "risk",
-    "crtStatus", "crtFresh", "sweepStatus", "sweepFresh",
-    "entry", "stop", "tp1", "tp2", "tp3", "plannedRR", "status", "grossR", "netR", "mfeR", "maeR",
-  ];
-  const lines = (records || []).map((raw) => {
-    const rec = normalizeRecord(raw);
-    const s = rec.settlement || {};
-    const price = rec.signalSources?.price || {};
-    const confirmations = rec.confirmationSources || {};
-    return [
-      rec.id, rec.symbol, rec.at ? new Date(rec.at).toISOString() : "", rec.closeTs ? new Date(rec.closeTs).toISOString() : "",
-      rec.scanMode, rec.direction, rec.score, rec.decisionGate?.label, rec.marketRegime?.label,
-      price.signalTime ? new Date(price.signalTime).toISOString() : "", price.signalExpiresAt ? new Date(price.signalExpiresAt).toISOString() : "",
-      price.signalPrice, price.signalFresh,
-      price.marketPriceAt ? new Date(price.marketPriceAt).toISOString() : "", price.marketPrice,
-      rec.earlyAxes?.readiness?.score, rec.earlyAxes?.risk?.score,
-      confirmations.crtTbs?.status, confirmations.crtTbs?.freshness?.fresh,
-      confirmations.sweepRetest?.status, confirmations.sweepRetest?.freshness?.fresh,
-      rec.entry, rec.stop, rec.tp1, rec.tp2, rec.tp3, rec.plannedRR,
-      s.status || rec.status, s.grossR, s.netR, s.mfeR, s.maeR,
-    ].map(csvCell).join(",");
-  });
-  return [headers.join(","), ...lines].join("\n");
-}
-
-function downloadText(filename, text, type) {
-  const blob = new Blob([text], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-function exportPaperJson() {
-  const records = load();
-  const payload = { schemaVersion: SCHEMA_VERSION, exportedAt: new Date().toISOString(), records };
-  downloadText(`qar-paper-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload, null, 2), "application/json");
-  toast(`${records.length}건을 JSON으로 백업했습니다.`, "success");
-}
-
-function exportPaperCsv() {
-  const records = load();
-  downloadText(`qar-paper-${new Date().toISOString().slice(0, 10)}.csv`, `\uFEFF${paperCsv(records)}`, "text/csv;charset=utf-8");
-  toast(`${records.length}건을 CSV로 내보냈습니다.`, "success");
 }
 
 export async function render() {
   if (!listEl) return;
   const list = load();
   if (!list.length) {
-    listEl.innerHTML = `<p class="muted">스캔 결과에서 <b>기록</b>을 누르면 신호 당시 계획·시장국면·24시간 경로가 여기에 쌓입니다. 실제 주문은 없습니다.</p>`;
+    listEl.innerHTML = `<p class="muted">스캔 결과에서 <b>기록</b> 을 누르면 여기에 쌓입니다. 실제 주문은 없습니다.</p>`;
     return;
   }
-  listEl.innerHTML = `<p class="muted">과거 신호의 실제 경로를 확인하는 중…</p>`;
+  listEl.innerHTML = `<p class="muted">불러오는 중…</p>`;
 
   const rows = [];
-  let changed = false;
   for (const rec of list) {
-    let candles = [];
-    try { candles = await getKlines(rec.symbol, "1h", 1000); } catch { /* 산출 보류 */ }
-    const liveResult = rec.settlement || resolveTrade(rec, candles);
-    const snapshots = forwardSnapshots(rec, candles);
-    if (!rec.settlement && ["win", "loss", "ambiguous"].includes(liveResult.status)) {
-      rec.settlement = {
-        status: liveResult.status,
-        exitPx: liveResult.exitPx,
-        exitAt: liveResult.exitAt,
-        grossR: liveResult.r,
-        netR: netRFor(rec, liveResult.r),
-        mfeR: liveResult.mfeR,
-        maeR: liveResult.maeR,
-      };
-      rec.status = "closed";
-      rec.closeTs = liveResult.exitAt;
-      changed = true;
+    let res;
+    try {
+      const candles = await getKlines(rec.symbol, "4h", 200);
+      res = resolveTrade(rec, candles);
+    } catch {
+      res = { status: "open", exitPx: rec.entry, exitAt: null, r: 0 };
     }
-    rows.push({ rec, res: rec.settlement || liveResult, snapshots });
+    rows.push({ rec, res });
   }
-  if (changed) save(list);
 
-  const metrics = computePaperMetrics(rows);
-  const decided = rows.filter((x) => ["win", "loss"].includes(x.res.status));
-  const totalR = metrics.netR;
-  const totalWon = decided.reduce((sum, x) => sum + (moneyOf(x.rec, x.res.netR ?? netRFor(x.rec, x.res.r)) ?? 0), 0);
-  const summary = metrics.decided
-    ? `판정 ${metrics.decided}건 · 승률 ${metrics.winRate.toFixed(0)}% · 비용 후 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)} · 진행 ${metrics.open}건${metrics.ambiguous ? ` · 모호 ${metrics.ambiguous}건` : ""}`
-    : `판정 가능한 기록 없음 · 진행 ${metrics.open}건${metrics.ambiguous ? ` · 모호 ${metrics.ambiguous}건` : ""}`;
+  const closed = rows.filter((x) => x.res.status !== "open");
+  const wins = closed.filter((x) => x.res.status === "win").length;
+  const totalR = closed.reduce((s, x) => s + x.res.r, 0);
+  const totalWon = closed.reduce((s, x) => s + moneyOf(x.rec, x.res.r), 0);
+
+  const summary = closed.length
+    ? `닫힘 ${closed.length}건 · 승률 ${(wins / closed.length * 100).toFixed(0)}% · 합계 ${totalR.toFixed(2)}R · ${fmtWon(totalWon)}`
+    : `닫힌 기록 없음 — 열린 ${rows.length}건`;
+
+  const sig = signalStats(rows);
+  const sigHtml = sig.length
+    ? `<p class="muted">신호별 — ${sig.map((s) =>
+        `${escapeHtml(s.name)} ${s.n}건 ${(s.wins / s.n * 100).toFixed(0)}% ${s.totalR >= 0 ? "+" : ""}${s.totalR.toFixed(1)}R`
+      ).join(" · ")}</p>`
+    : "";
 
   listEl.innerHTML = `
     <p class="paper-summary"><b>${escapeHtml(summary)}</b></p>
-    <div class="paper-kpis">
-      <div><span>평균 계획 손익비</span><b>${finite(metrics.avgPlannedRR) ? metrics.avgPlannedRR.toFixed(2) + "R" : "—"}</b></div>
-      <div><span>최대 낙폭</span><b class="${metrics.maxDrawdownR < 0 ? "down" : ""}">${metrics.decided ? metrics.maxDrawdownR.toFixed(2) + "R" : "—"}</b></div>
-      <div><span>판정 표본</span><b>${metrics.decided}건</b></div>
-      <div><span>진행·모호</span><b>${metrics.open} · ${metrics.ambiguous}</b></div>
-    </div>
+    ${sigHtml}
     <table class="result-table paper-table">
-      <thead><tr><th>종목</th><th>전략·방향</th><th>기록 시각</th><th>시장국면</th><th>계획</th><th>결과</th><th>1·3·6·24h</th><th></th></tr></thead>
+      <thead><tr><th>종목</th><th>방향</th><th>근거</th><th>기록 시각</th><th>점수</th><th>진입</th><th>손절</th><th>목표</th><th>상태</th><th>R</th><th>금액</th><th></th></tr></thead>
       <tbody>${rows.map(rowHtml).join("")}</tbody>
     </table>
-    <p class="muted">1시간 마감봉 기준 · 같은 봉에서 손절/목표가가 모두 닿으면 모호 사례로 제외 · 왕복비용 ${CONFIG.tradeCostRoundTripPct}% 반영</p>`;
+    <p class="muted">4시간봉 마감가 기준 · 봉 안에서 손절·목표가 같이 닿으면 손절 우선 · 왕복 비용 미반영</p>`;
 }
 
-const recAt = (ms) => new Date(ms).toLocaleString("ko-KR", {
-  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-});
+// 기록은 며칠씩 열려 있으므로 날짜가 있어야 한다 — format.js 의 fmtTime 은 시:분만 준다.
+const recAt = (ms) =>
+  new Date(ms).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 
-function forwardText(snapshots) {
-  return snapshots.map((s) => {
-    if (s.status === "pending") return `${s.hours}h 대기`;
-    if (s.status !== "ready") return `${s.hours}h —`;
-    const sign = s.changePct >= 0 ? "+" : "";
-    return `${s.hours}h ${sign}${s.changePct.toFixed(1)}%`;
-  }).join(" · ");
-}
-
-function rowHtml({ rec, res, snapshots }) {
-  const label = { open: "진행 중", win: "목표 도달", loss: "손절", ambiguous: "동일 봉 모호" }[res.status] || "산출 보류";
+function rowHtml({ rec, res }) {
+  const label = { open: "진행 중", win: "목표 도달", loss: "손절" }[res.status];
   const cls = res.status === "win" ? "up" : res.status === "loss" ? "down" : "muted";
-  const netR = res.netR ?? netRFor(rec, res.r);
-  const money = moneyOf(rec, netR);
-  const outcome = finite(netR)
-    ? `${label} · ${netR >= 0 ? "+" : ""}${netR.toFixed(2)}R${finite(money) ? ` · ${money >= 0 ? "+" : ""}${fmtWon(money)}` : ""}`
-    : label;
-  const mode = { early: "조기포착" }[rec.scanMode] || rec.scanMode || "조기포착";
-  const direction = directionOf(rec).toUpperCase();
-  const regime = rec.marketRegime?.label || "미기록";
-  const gate = rec.decisionGate?.label || "미기록";
+  const money = moneyOf(rec, res.r);
   return `<tr>
     <td class="sym">${escapeHtml(rec.symbol)}</td>
-    <td>${escapeHtml(mode)} · ${direction}<br><span class="muted">점수 ${finite(rec.score) ? rec.score : "—"}</span></td>
+    <td class="${rec.direction === "short" ? "down" : "up"}">${rec.direction === "short" ? "숏" : "롱"}</td>
+    <td>${escapeHtml(rec.patternName || (rec.signals || []).slice(0, 2).join(" · ") || "기존 스캐너")}</td>
     <td>${recAt(rec.at)}</td>
-    <td>${escapeHtml(regime)}<br><span class="muted">${escapeHtml(rec.regimeFit?.label || "")} · ${escapeHtml(gate)}</span></td>
-    <td>진입 ${fmtPrice(rec.entry)}<br>손절 ${fmtPrice(rec.stop)} · 목표 ${fmtPrice(rec.tp2)}<br><span class="muted">계획 ${finite(rec.plannedRR) ? rec.plannedRR.toFixed(2) : "—"}R</span></td>
-    <td class="${cls}">${escapeHtml(outcome)}</td>
-    <td class="paper-forward">${escapeHtml(forwardText(snapshots))}</td>
+    <td>${rec.score}</td>
+    <td>${fmtPrice(rec.entry)}</td>
+    <td>${fmtPrice(rec.stop)}</td>
+    <td>${fmtPrice(rec.tp2)}</td>
+    <td class="${cls}">${label}</td>
+    <td class="${res.r >= 0 ? "up" : "down"}">${res.r >= 0 ? "+" : ""}${res.r.toFixed(2)}R</td>
+    <td class="${money >= 0 ? "up" : "down"}">${money >= 0 ? "+" : ""}${fmtWon(money)}</td>
     <td><button class="btn-mini" data-paper-del="${rec.id}">삭제</button></td>
   </tr>`;
 }
 
-export default {
-  initPaper, render, recordTrade, buildPaperRecord, resolveTrade, forwardSnapshots, pathStats, netRFor,
-  computePaperMetrics, paperCsv,
-};
+export default { initPaper, render, recordTrade, recordPatternTrade, resolveTrade, signalStats };

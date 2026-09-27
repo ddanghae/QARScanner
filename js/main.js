@@ -8,7 +8,6 @@ import { initSettingsUI, applyFilters } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
 import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
-import { SCAN_MODE_META } from "./scan-modes.js";
 
 function boot() {
   initSettingsUI();
@@ -26,18 +25,21 @@ function boot() {
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
-  on("scan:mode-error", ({ mode, message }) => {
-    toast(`${SCAN_MODE_META[mode]?.label || mode} 실행 실패 — ${message}`, "error", 6000);
-  });
   // 목록과 같은 필터를 통과한 수. 스캔 단계 숫자를 쓰면 화면엔 5줄인데 12개라 뜬다.
-  on("scan:done", () => toast(`스캔 완료 — 후보 ${applyFilters(state.results).length}개`, "success"));
+  on("scan:done", () => {
+    const count = state.settings.scanMode === "patterns" ? state.patternResults.length : applyFilters(state.results).length;
+    const failed = state.patternScanMeta?.failedRequests || 0;
+    const suffix = state.settings.scanMode === "patterns" && failed ? ` · 요청 실패 ${failed}건` : "";
+    toast(state.settings.scanMode === "patterns" ? `패턴 감지 완료 — ${count}종목${suffix}` : `스캔 완료 — 후보 ${count}개`, "success");
+  });
   on("scan:aborted", () => toast("스캔을 중단했습니다.", "info"));
   document.addEventListener("tv:popup-blocked", () => notifyError("tvPopup"));
 
   // 자동 갱신 토글 (§15)
-  on("autorefresh:toggle", (onFlag) => {
-    if (onFlag) { startAutoRefresh(); toast("자동 갱신 켜짐", "info"); }
-    else { stopAutoRefresh(); toast("자동 갱신 꺼짐", "info"); }
+  on("autorefresh:toggle", (payload) => {
+    const onFlag = typeof payload === "object" ? payload.active : payload;
+    if (onFlag) { startAutoRefresh(); if (!payload?.silent) toast("자동 갱신 켜짐", "info"); }
+    else { stopAutoRefresh(); if (!payload?.silent) toast("자동 갱신 꺼짐", "info"); }
   });
   if (state.settings.autoRefresh) startAutoRefresh();
 
@@ -51,19 +53,24 @@ function boot() {
   window.addEventListener("online", () => toast("네트워크 재연결됨", "success"));
 
   registerServiceWorker();
-  console.log("QAR Early Scanner 준비 완료");
+  console.log("마켓 스캐너 준비 완료");
 }
 
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
 function initTabs() {
   const views = { overview: document.getElementById("view-overview"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "조기포착 스캐너", settings: "설정" };
+  const titles = { overview: "마켓 스캐너", settings: "설정" };
   const navBtns = document.querySelectorAll("[data-nav]");
   navBtns.forEach((btn) => btn.addEventListener("click", () => {
     const nav = btn.dataset.nav;
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
-    navBtns.forEach((b) => b.classList.toggle("active", b === btn));
+    navBtns.forEach((b) => {
+      const active = b === btn;
+      b.classList.toggle("active", active);
+      if (active) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
     const h1 = document.querySelector(".topbar-title h1");
     if (h1 && titles[nav]) h1.textContent = titles[nav];
   }));

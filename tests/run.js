@@ -8,19 +8,14 @@ import { run as scoring } from "./scoring.test.js";
 import { run as goldenCross } from "./golden-cross.test.js";
 import { run as noise } from "./noise.test.js";
 import { run as earlyDetect } from "./early-detect.test.js";
-import { run as earlySelection } from "./early-selection.test.js";
-import { run as pumpFade } from "./pump-fade.test.js";
-import { run as pumpFadeResearch } from "./pump-fade-research.test.js";
 import { run as repaint } from "./repaint.test.js";
 import { run as refresh } from "./refresh.test.js";
-import { run as signalFreshness } from "./signal-freshness.test.js";
 import { run as paperCorr } from "./paper-corr.test.js";
-import { run as unifiedScan } from "./unified-scan.test.js";
-import { run as directionForecast } from "./direction-forecast.test.js";
-import { run as crtTbs } from "./crt-tbs.test.js";
-import { run as marketRegime } from "./market-regime.test.js";
-import { run as decisionGate } from "./decision-gate.test.js";
-import { run as sweepRetest } from "./sweep-retest.test.js";
+import { run as strategies } from "./strategies.test.js";
+import { run as chartPatterns } from "./chart-patterns.test.js";
+import { run as patternEntry } from "./pattern-entry.test.js";
+import { run as scanner } from "./scanner.test.js";
+import { run as patternValidation } from "./pattern-validation.test.js";
 
 export function runAll() {
   reset();
@@ -31,19 +26,14 @@ export function runAll() {
   goldenCross();
   noise();
   earlyDetect();
-  earlySelection();
-  pumpFade();
-  pumpFadeResearch();
   repaint();
   refresh();
-  signalFreshness();
   paperCorr();
-  unifiedScan();
-  directionForecast();
-  crtTbs();
-  marketRegime();
-  decisionGate();
-  sweepRetest();
+  strategies();
+  chartPatterns();
+  patternEntry();
+  scanner();
+  patternValidation();
   return report();
 }
 

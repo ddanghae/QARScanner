@@ -1,0 +1,19 @@
+{
+  "name": "qar-crypto-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static Binance USDⓈ-M Futures candidate scanner",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test:app": "node tests/run.js",
+    "test:runner": "node research/run-tests.mjs",
+    "test:preview": "node --test tests/preview-server.test.js",
+    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner",
+    "harness": "npm test",
+    "serve": "node scripts/serve.mjs"
+  }
+}

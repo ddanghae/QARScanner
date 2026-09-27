@@ -4,59 +4,89 @@ import { CONFIG } from "./config.js";
 
 const SETTINGS_KEY = "qar-ict-settings";
 
-const defaultSettings = {
-  version: CONFIG.version,
-  minScore: CONFIG.earlyMinScore, // 조기포착 검증 하한. UI에서는 고정값으로 설명한다.
-  minQuoteVolume: CONFIG.earlyDetect.minQuoteVolume,
-  direction: "long",         // 조기포착 LONG 후보 전용
-  scanMode: "early",         // 단일 제품 모드. 이전 저장값은 loadSettings 에서 마이그레이션한다.
-  stageFilter: "all",        // 모드별 단계 또는 all
-  strictnessLevel: 3,        // 채점 강도 1(널널)~5(엄격), §13 STRICTNESS_LEVELS
-  penalties: { ...CONFIG.penalties }, // strictnessLevel 선택 시 프리셋으로 교체됨
-  favorites: [],             // 관심 종목 심볼 배열
-  excluded: [],              // 제외 종목
-  sort: "score",             // "score" | "change" | "volume"
-  darkMode: true,
-  themeRevision: 1,
-  includeRealtimeCandle: false, // 리페인트 방지: 기본은 마감 캔들만
-  showFavoritesOnly: false,
-  excludeChaseBan: false,       // "추격 금지(5단계)" 제외
-  excludeNewListing: false,
-  goldenCrossOnly: false,       // 골든크로스 리테스트(거부 캔들 확인)만 보기
-  crtTbsOnly: false,            // 기존 후보와 방향이 같은 CRT + TBS 확인 신호만
-  near1hEma200Only: false,      // 1시간봉 200일선 밀착만 보기
-  near1hEma200AtrRatio: CONFIG.near1hEma200AtrRatio, // 200선 밀착 민감도 (ATR 배수)
-  filterNoise: true,            // 노이즈(촙 구간·저거래량) 신호 제외
-  seedMoney: 1000000,           // 한 종목에 넣을 금액(원). 손익 금액 표시에만 쓰인다 — 주문 없음
-  leverage: 1,                  // 표시용 배수. 1 = 현물/1배 (청산 없음)
-  // true = TP1 에서 절반 익절 + 손절을 본전으로(덜 벌고 덜 아픔),
-  // false = 목표까지 통째로 버팀(더 벌고 더 아픔). 근거는 config.earlyDetect 주석.
-  partialTake: true,
-  autoRefresh: false,           // 자동 재스캔
-  refreshIntervalMs: CONFIG.refresh.intervalMs,
-};
+const PATTERN_TIMEFRAMES = ["5m", "15m", "1h", "4h"];
+
+// 기본값에 배열/객체가 들어가므로 매번 새로 만들어야 한다. 얕은 복사로
+// 상태를 만들면 관심 종목을 토글할 때 기본값까지 함께 바뀌어 초기화가 깨진다.
+function freshDefaultSettings() {
+  return {
+    version: CONFIG.version,
+    minScore: 30,
+    minQuoteVolume: CONFIG.prefilter.minQuoteVolume,
+    direction: "long",
+    scanMode: "patterns",
+    patternTimeframes: [...PATTERN_TIMEFRAMES],
+    patternScanLimit: CONFIG.patternScanner.maxSymbols,
+    patternFamily: "all",
+    stageFilter: "all",
+    strictnessLevel: 3,
+    penalties: { ...CONFIG.penalties },
+    favorites: [],
+    excluded: [],
+    sort: "score",
+    darkMode: false,
+    includeRealtimeCandle: false,
+    showFavoritesOnly: false,
+    excludeChaseBan: false,
+    excludeNewListing: false,
+    goldenCrossOnly: false,
+    near1hEma200Only: false,
+    near1hEma200AtrRatio: CONFIG.near1hEma200AtrRatio,
+    filterNoise: true,
+    seedMoney: 1000000,
+    leverage: 1,
+    partialTake: true,
+    autoRefresh: false,
+    refreshIntervalMs: CONFIG.refresh.intervalMs,
+  };
+}
+
+function uniqueSymbols(value) {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((symbol) => typeof symbol === "string" && symbol.trim()))]
+    : [];
+}
+
+function numberOr(value, fallback, { min = -Infinity, max = Infinity } = {}) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+}
+
+function normaliseSettings(parsed) {
+  const base = freshDefaultSettings();
+  const merged = parsed && typeof parsed === "object" ? { ...base, ...parsed } : base;
+  const selected = Array.isArray(merged.patternTimeframes)
+    ? PATTERN_TIMEFRAMES.filter((tf) => merged.patternTimeframes.includes(tf))
+    : [];
+  return {
+    ...merged,
+    version: CONFIG.version,
+    scanMode: "patterns",
+    minScore: numberOr(merged.minScore, base.minScore, { min: 0, max: 100 }),
+    minQuoteVolume: numberOr(merged.minQuoteVolume, base.minQuoteVolume, { min: 0 }),
+    direction: ["long", "short", "both"].includes(merged.direction) ? merged.direction : base.direction,
+    patternFamily: ["all", "continuation", "reversal", "harmonic", "candlestick"].includes(merged.patternFamily)
+      ? merged.patternFamily : base.patternFamily,
+    strictnessLevel: numberOr(merged.strictnessLevel, base.strictnessLevel, { min: 1, max: 5 }),
+    near1hEma200AtrRatio: numberOr(merged.near1hEma200AtrRatio, base.near1hEma200AtrRatio, { min: 0.1, max: 3 }),
+    seedMoney: numberOr(merged.seedMoney, base.seedMoney, { min: 0 }),
+    leverage: numberOr(merged.leverage, base.leverage, { min: 1 }),
+    refreshIntervalMs: numberOr(merged.refreshIntervalMs, base.refreshIntervalMs, { min: CONFIG.refresh.minIntervalMs }),
+    patternScanLimit: CONFIG.patternScanner.scanLimits.includes(Number(merged.patternScanLimit))
+      ? Number(merged.patternScanLimit) : base.patternScanLimit,
+    patternTimeframes: selected.length ? selected : [...PATTERN_TIMEFRAMES],
+    favorites: uniqueSymbols(merged.favorites),
+    excluded: uniqueSymbols(merged.excluded),
+    penalties: { ...base.penalties, ...(merged.penalties && typeof merged.penalties === "object" ? merged.penalties : {}) },
+  };
+}
 
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...defaultSettings };
-    const parsed = JSON.parse(raw);
-    // 버전 마이그레이션: 필드 누락 시 기본값 병합
-    const migrating = parsed.version !== CONFIG.version;
-    const merged = migrating
-      ? { ...defaultSettings, ...parsed, version: CONFIG.version }
-      : { ...defaultSettings, ...parsed };
-    // 제거된 all/reversal/pump_fade/sweep_retest 저장값이 단일 스캐너를 되살리지 않게 한다.
-    merged.scanMode = "early";
-    if (parsed.themeRevision !== 1) {
-      merged.darkMode = true;
-      merged.themeRevision = 1;
-    }
-    merged.direction = "long";
-    if (migrating) merged.minQuoteVolume = CONFIG.earlyDetect.minQuoteVolume;
-    return merged;
+    return normaliseSettings(raw ? JSON.parse(raw) : null);
   } catch {
-    return { ...defaultSettings };
+    return freshDefaultSettings();
   }
 }
 
@@ -69,8 +99,9 @@ export const state = {
   prefiltered: [],     // 1차 통과
   candidates: [],      // 2차 통과
   results: [],         // 최종 스코어링 결과
+  patternResults: [],  // 패턴 모드 결과 — 매매 점수 결과와 별도
+  patternScanMeta: { requestedTimeframes: [], candidateCount: 0, completedRequests: 0, failedRequests: 0 },
   newListings: [],     // 신규 상장 심볼
-  marketRegime: null,  // BTC 4h 기준 시장국면. 점수 보정 없이 후보 설명/기록에 사용
   scan: {
     running: false,
     phase: "idle",     // idle|universe|prefilter|candidate|deep|score|done|error
@@ -80,11 +111,6 @@ export const state = {
     startedAt: 0,
     lastUpdated: 0,
     error: null,
-    currentMode: null,  // 전체 스캔에서 현재 실행 중인 모드
-    modeIndex: 0,
-    modeTotal: 0,
-    modeStats: {},      // mode -> { prefiltered, candidates, results }
-    modeErrors: {},     // mode -> 오류 문구 (다른 모드는 계속 실행)
   },
   apiHealth: {
     connected: null,   // null=미확인 true/false
@@ -117,7 +143,7 @@ export function saveSettings() {
   emit("settings:changed", state.settings);
 }
 export function resetSettings() {
-  state.settings = { ...defaultSettings };
+  state.settings = freshDefaultSettings();
   saveSettings();
 }
 export function updateSettings(patch) {

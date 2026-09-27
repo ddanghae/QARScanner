@@ -2,32 +2,7 @@
 // GitHub Pages 정적 실행. 빌드 과정 없음. ES Module.
 
 export const CONFIG = {
-  version: 2,
-
-  // BTC 4시간 마감봉 시장국면. 아직 점수 보정에는 쓰지 않고 설명·기록에만 사용한다.
-  marketRegime: {
-    minBars: 84,            // 14일 수익률까지 계산
-    emaFast: 20,
-    emaSlow: 50,
-    trendReturnBars: 42,    // 4h × 42 = 7일
-    slopeBars: 6,           // EMA20의 최근 24시간 기울기
-    volLookback: 42,
-    lowVolRatio: 0.75,
-    highVolRatio: 1.35,
-    extremeVolRatio: 1.8,
-    staleMs: 8 * 60 * 60 * 1000,
-  },
-
-  // CRT + Turtle Body Soup: 연구용 규칙. 확률 모델/기존 점수와 독립.
-  crtTbs: {
-    reclaimBars: 6,          // 5m 몸통 이탈 후 30분 내 복귀
-    confirmationBars: 6,    // 복귀 후 30분 내 복귀 봉 반대편 돌파 마감
-    freshBars: 3,           // 확인 신호 유효 시간 15분
-    stopAtrRatio: 0.25,
-    minStopPct: 0.5,
-    maxStopPct: 8,
-    minNetRR: 1.5,          // 왕복 비용 차감 후 반대 경계까지 손익비
-  },
+  version: 1,
 
   // ---- Binance 공개 REST API ----
   api: {
@@ -130,12 +105,6 @@ export const CONFIG = {
     // 격자 최고 효율: ATR×4 · 4R · 90봉 = 평균 +0.155R · PF 1.34 · MDD -22.8R · 승률 36%.
     // (평균만 보면 ATR×2 · 6R 이 +0.171R 로 위지만 승률 27% 의 소수 대박 의존형이라 뺐다)
     stopAtr: 4,             // 손절 = 진입 - ATR × 이 배수
-    // 손절이 너무 멀거나 0 아래로 내려가면 거래 계획처럼 보이지 않게 한다.
-    // 25%는 과거 ATR 규칙을 바꾸지 않는 안전 상한이며, 초과 후보는 관찰만 가능하다.
-    maxPlanRiskPct: 25,
-    // 점수는 마지막 4시간 마감봉으로 계산한다. 현재 시세가 그 기준가에서 이만큼
-    // 벗어나면 진행 중 봉의 정보가 빠진 상태이므로 새 마감봉/재스캔 전 계획을 보류한다.
-    maxSignalPriceDriftPct: 8,
     targetR: 4,             // 주 목표(tp2) = 리스크 × 이 배수
     holdBars: 90,           // 측정에 쓴 보유 상한(4시간봉). 표시용 참고값 — 자동 청산은 없다.
     // 2026-07-29 MFE 진단(research/mfe.mjs, 전체 529종목 · 거래 1,190건).
@@ -156,7 +125,7 @@ export const CONFIG = {
     // research/backtest.mjs 의 배포 규칙 재현치(+0.094R)와 일치한다.
     partialAtR: 1,          // 이 R 배수에 도달하면 부분 익절(tp1)
     partialFrac: 0.5,       // 그때 청산하는 비중. 나머지는 손절을 본전으로 올리고 tp2 를 노린다.
-    // 4단계 확인 / 5단계 추격 금지
+    // 3단계 돌파
     breakoutRelVol: 2.0,    // 돌파 시 상대거래량
     breakoutMaxRunPct: 15,  // 돌파 후 상승폭 이 % 이하만 (초입)
     // 제외
@@ -199,71 +168,36 @@ export const CONFIG = {
   earlyHitBaseline: 3.57,   // 무작위 종목의 같은 기간 적중률. 확률만 보면 크기를 못 느낀다.
   earlyHitLabel: "7일 내 24h +40%",
 
-  // ---- 급등 후 급락 모드 (pump_fade, SHORT 전용) ----
-  // 아래 임계값과 가중치는 검증 완료값이 아닌 초기 연구값이다.
-  // 점수는 규칙 근거의 합이며 성공 확률이나 기대수익률을 뜻하지 않는다.
-  pumpFade: {
-    pump6hMinPct: 12,
-    pump24hMinPct: 25,
-    volumeClimaxRatio: 2.5,
-    volumeBaselineBars: 20,
-    rejectionLookback15m: 6,
-    priorHighLookback15m: 20,
-    upperWickMinRatio: 0.35,
-    rejectionClosePositionMax: 0.5,
-    takerExhaustionBars: 3,
-    takerBuyRatioMax: 0.48,
-    recentHighLookback15m: 96,
-    microBreakdownBars5m: 4,
-    drawdownConfirmPct: 1.5,
-    lateDrawdownPct: 12,
-    lateDrawdownPenalty: -25,
-    rejectionEvidenceMin: 2,
-    atrStopBuffer: 0.5,
-    maxStopDistancePct: 8,
-    minScore: 45,
-    keepMax: 5,
+  // ---- 추세 추종 모드 ----
+  // 조기 포착이 earlyExclusion 으로 버리는 구간(이미 오른 것)이 대상이다.
+  // 조기 포착은 mom14/chg24 의 **절대값**을 쓴다(refit 에서 방향 무관이 이겼다).
+  // 이 모드는 부호를 본다 — 하락에 점수를 주면 추세 추종이 아니다.
+  //
+  // 2026-07-30 측정 (529종목 57,796건, 검증셋 n=17,606, 기준 급등률 3.25%,
+  // 라벨은 early 와 동일한 "7일 내 24h +40%"):
+  //   상위 N/일 리프트  N=3 7.46x · N=5 8.27x · N=10 6.13x
+  //   조기 포착과 상위 5/일 겹침 43% — 추세 추종만 고른 97건이 20.62%(6.34x).
+  //   기존이 놓치는 구간을 잡으므로 별도 모드로 둔다.
+  // 가중치·경계는 격자 탐색을 하지 않은 첫 안이다. 튜닝 없이 나온 수치라
+  // 과적합 여지는 작지만, 재적합하면 더 오를 수 있다.
+  trendFollow: {
+    momMinPct: 10, momFullPct: 60,      // 14일 상승률 램프
+    chgMinPct: 3, chgFullPct: 25,       // 24시간 상승률 램프
+    runawayPct: 120, runawayPenalty: -20,
+    minQuoteVolume: 5e6, thinPenalty: -10,
+    weights: { mom: 45, chg: 35, vol: 20 },
+    // 1차 선별에서 남길 최대 후보 수(정밀 단계 API 호출을 여기서 자른다).
+    keepMax: 60,
+    prefilterMinMomPct: 5,              // 이보다 못 오른 건 1차에서 뺀다
   },
-
-  // 합계 100. 초기 실험 가중치이며 백테스트 결과로 자동 재적합하지 않는다.
-  pumpFadeScoreWeights: {
-    pumpStrength: 20,
-    volumeClimax: 15,
-    upperWick: 15,
-    highSweepFailure: 15,
-    takerBuyExhaustion: 10,
-    ema20Loss: 10,
-    vwapLoss: 5,
-    microBreakdown: 10,
-  },
-
-  // 진행 단계와 독립적인 중립 등급. 성공 확률을 뜻하지 않는다.
-  pumpFadeGrades: [
-    { min: 75, label: "근거 많음", key: "strong" },
-    { min: 60, label: "근거 양호", key: "watch" },
-    { min: 45, label: "관찰 후보", key: "observe" },
-    { min: 0, label: "제외", key: "excluded" },
+  // 2026-07-30 검증셋 구간별 실측. 리프트가 단조 증가한다.
+  trendGrades: [
+    { min: 70, label: "강한 추세", key: "strong", hitRate: 29 },   // n=117  8.93x
+    { min: 55, label: "관심 추세", key: "watch", hitRate: 16 },    // n=131  4.93x
+    { min: 40, label: "관찰 추세", key: "observe", hitRate: 13 },  // n=262  4.10x
+    { min: 25, label: "약한 추세", key: "weak", hitRate: 8 },      // n=439  2.45x
+    { min: 0, label: "제외", key: "excluded", hitRate: 3 },        // n=16657 0.83x
   ],
-
-  // ---- 스윕 후 첫 눌림 (LONG 전용, 순서 탐지) ----
-  // 성과 최적화값이 아니라 사용자가 설명한 패턴을 수치화한 초기 가정이다.
-  // 점수 대신 단계 진행도로 표시하며, 진입가·목표가·포지션 크기는 만들지 않는다.
-  sweepRetest: {
-    crashPct: -15,
-    baseMin: 20,
-    baseMax: 40,
-    baseRangePct: 8,
-    quietRatio: 0.65,
-    sweepDepthPct: 2,
-    defendPct: 1,
-    reclaimBars: 3,
-    volumeRatio: 1.5,
-    retestBandPct: 0.8,
-    setupHours: 12,
-    triggerMinutes: 15,
-    btcDropPct: -3,
-    keepMax: 20,
-  },
 
   // 손익 금액 표시에 빼는 왕복 비용 %. 백테스트와 같은 값(테이커 0.05% + 슬리피지 0.05%, 양쪽).
   // 빼지 않으면 화면 금액이 백테스트보다 좋게 나와 두 숫자가 서로 안 맞는다.
@@ -395,14 +329,23 @@ export const CONFIG = {
     obvEnabled: true,
   },
 
+  // ---- 패턴 스캐너 ----
+  // 패턴 전용 모드: 거래대금 상위 심볼만 선택된 시간봉별로 검사해 요청량을 제한한다.
+  patternScanner: {
+    maxSymbols: 100,
+    scanLimits: [50, 100, 150, 200],
+    pivotDepth: 3,
+  },
+
   // ---- 멀티타임프레임 캔들 요청 수 ----
   klinesLimit: {
     // 4h 는 EMA200 기울기(20봉 전과 비교)까지 봐야 해서 200+20+여유 필요.
     // 220 이면 EMA200 이 마지막 20봉에서만 유효해 기울기가 항상 null 이었다.
     "4h": 240,
     "1h": 260,
-    "15m": 200,
-    "5m": 160,
+    // EMA200 계산을 위해 마감 봉만 남긴 뒤에도 200개가 넘도록 여유를 둔다.
+    "15m": 220,
+    "5m": 220,
   },
 
   // ---- 자동 갱신 (§15 다음 갱신까지 남은 시간 · §18 백그라운드 빈도 감소) ----
@@ -439,14 +382,6 @@ export const STRICTNESS_LEVELS = [
 ];
 export function strictnessPreset(level) {
   return STRICTNESS_LEVELS.find((s) => s.level === level) || STRICTNESS_LEVELS[2];
-}
-
-// 모드별 점수 척도가 다르므로 표시 하한을 한 곳에서 결정한다.
-export function minScoreFor(settings) {
-  if (settings?.scanMode === "sweep_retest") return 0; // 순서 진행도이며 점수 컷 아님
-  if (settings?.scanMode === "early") return CONFIG.earlyMinScore;
-  if (settings?.scanMode === "pump_fade") return CONFIG.pumpFade.minScore;
-  return Number.isFinite(settings?.minScore) ? settings.minScore : strictnessPreset(3).minScore;
 }
 
 // 스테이블/레버리지 판별용 패턴

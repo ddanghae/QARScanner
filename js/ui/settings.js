@@ -2,15 +2,11 @@
 // localStorage 저장은 state.js 가 담당. 여기선 UI 바인딩 + 필터 적용 로직.
 
 import { state, updateSettings, resetSettings, emit } from "../state.js";
-import { CONFIG, minScoreFor, strictnessPreset } from "../config.js";
-import { modesForScan, resultMode } from "../scan-modes.js";
+import { CONFIG, strictnessPreset } from "../config.js";
 import { toast } from "./notifications.js";
-import { crtMatchesCandidate } from "../core/crt-tbs.js";
-import { filterEarlyReviewCandidates, rankEarlyReviewCandidates } from "../core/early-selection.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
 const CHECK_BINDINGS = [
-  { key: "crtTbsOnly", ids: ["filter-crt-tbs"] },
   { key: "showFavoritesOnly", ids: ["filter-favorites-only"] },
   { key: "excludeChaseBan", ids: ["filter-exclude-chase", "set-exclude-chase"] },
   { key: "excludeNewListing", ids: ["filter-exclude-new", "set-exclude-new"] },
@@ -20,95 +16,67 @@ const CHECK_BINDINGS = [
 ];
 const AUTOREFRESH_IDS = ["filter-autorefresh", "set-autorefresh"];
 const REALTIME_IDS = ["set-realtime-candle"];
+const PATTERN_TIMEFRAMES = ["5m", "15m", "1h", "4h"];
 
 // 결과 목록에 현재 설정(필터/정렬) 적용
 export function applyFilters(results) {
   const s = state.settings;
-  const selectedMode = "early";
-  return modesForScan(selectedMode).flatMap((mode) => applyModeFilters(results, mode, s, selectedMode === "all"));
-}
+  const early = s.scanMode === "early";
+  const trend = s.scanMode === "trend";
+  // early·trend 둘 다 상승만 본다. 숏은 따로 재본 적이 없어 만들지 않았다.
+  const longOnly = early || trend;
+  let list = results.slice();
 
-function applyModeFilters(results, mode, s, unified) {
-  const reversal = mode === "reversal";
-  const early = mode === "early";
-  const pumpFade = mode === "pump_fade";
-  // 비싼 CRT·첫 눌림 확인을 보낼 후보와 같은 기본 규칙을 쓴다. CRT 자체는 아직
-  // 계산 전이므로 아래에서 별도로 적용한다.
-  let list = early
-    ? filterEarlyReviewCandidates(results, s, CONFIG)
-    : results.filter((r) => resultMode(r) === mode);
-  // sweep_retest는 자체 5분 구조·BTC 확인을 포함하므로 별도 CRT 필터 대상이 아니다.
-  if (s.crtTbsOnly && mode !== "sweep_retest") list = list.filter((r) => crtMatchesCandidate(r));
-
-  // early/pump_fade는 각각 LONG/SHORT 전용이므로 저장된 reversal 방향을 적용하지 않는다.
-  if (reversal && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
-  if (!early) list = list.filter((r) => r.score >= minScoreFor({ ...s, scanMode: mode }));
+  // 방향 — 롱 전용 모드는 방향 필터를 건너뛴다(안 그러면 결과가 전부 사라짐)
+  if (!longOnly && s.direction !== "both") list = list.filter((r) => r.direction === s.direction);
+  // 최소 점수 — early 는 점수대 자체가 달라(실측 0~61) reversal 기준의
+  // minScore·채점 강도가 안 맞는다. config 의 early 전용 하한을 쓴다.
+  list = list.filter((r) => r.score >= (early ? CONFIG.earlyMinScore : s.minScore));
   // 관심 종목만
-  if (!early && s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
+  if (s.showFavoritesOnly) list = list.filter((r) => s.favorites.includes(r.symbol));
   // 추격 금지(5단계) 제외
-  if (reversal && s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== 5);
+  // 추세 추종은 단계 3(과열)이 early 의 5단계에 해당한다 — 같은 체크박스로 거른다.
+  if (s.excludeChaseBan) list = list.filter((r) => r.stage.stage !== (trend ? 3 : 5));
   // 신규 종목 제외
-  if (!early && s.excludeNewListing) list = list.filter((r) => !r.newListing);
+  if (s.excludeNewListing) list = list.filter((r) => !r.newListing);
   // 골든크로스 리테스트(거부 캔들까지 확인된 것)만
-  if (reversal && s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
+  if (s.goldenCrossOnly) list = list.filter((r) => r.goldenCrossRetest?.detected && r.goldenCrossRetest?.hasRejection);
   // 1시간봉 200일선 밀착만
-  if (reversal && s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
+  if (s.near1hEma200Only) list = list.filter((r) => r.near1hEma200);
   // 노이즈(촙 구간·저거래량) 제외
   // early 모드의 매집 구간은 정의상 횡보(=촙)라 이 필터를 적용하면 후보가 전멸한다.
-  if (reversal && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
+  if (!early && s.filterNoise) list = list.filter((r) => !r.noise?.noisy);
   // 제외 종목
-  if (!early && s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
+  if (s.excluded.length) list = list.filter((r) => !s.excluded.includes(r.symbol));
   // 단계 필터
-  if (!early && !unified && s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
+  if (s.stageFilter !== "all") list = list.filter((r) => String(r.stage.stage) === String(s.stageFilter));
 
   const sortFns = {
-    score: early
-      ? (a, b) => b.score - a.score || b.quoteVolume - a.quoteVolume || a.symbol.localeCompare(b.symbol)
-      : pumpFade
-      ? (a, b) => b.stage.stage - a.stage.stage || b.score - a.score
-      : (a, b) => b.score - a.score,
-    change: pumpFade ? (a, b) => b.change6h - a.change6h
-      : early ? (a, b) => (b.change24h ?? -Infinity) - (a.change24h ?? -Infinity)
-        : (a, b) => a.change6h - b.change6h,
+    score: (a, b) => b.score - a.score,
+    change: (a, b) => a.change6h - b.change6h,
     volume: (a, b) => b.quoteVolume - a.quoteVolume,
   };
   // 두 모드 모두 "확실한 소수" 를 노리므로 상위 N 만 남긴다 — 반드시 점수 기준으로,
   // 사용자 정렬보다 먼저. 정렬 뒤에 자르면 "거래대금" 정렬이 순서가 아니라 보이는
   // 집합 자체를 바꿔(점수 최하위 5개만 남음) 정렬이 필터로 변한다.
-  list = early ? rankEarlyReviewCandidates(list) : list.sort(sortFns.score);
-  const keepMax = mode === "sweep_retest" ? CONFIG.sweepRetest.keepMax : pumpFade ? CONFIG.pumpFade.keepMax : early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop;
-  list = list.slice(0, keepMax);
+  list.sort(sortFns.score);
+  list = list.slice(0, early ? CONFIG.earlyKeepTop : CONFIG.reversalKeepTop);
 
   // 정렬
-  // 통합 화면에서는 서로 의미가 다른 점수를 섞지 않고 각 스캐너의 기본 순위를 유지한다.
-  list.sort(unified ? sortFns.score : (sortFns[s.sort] || sortFns.score));
+  list.sort(sortFns[s.sort] || sortFns.score);
   return list.map((r, i) => ({ ...r, rank: i + 1 }));
-}
-
-// 모드 UI가 실제 필터 계약과 같은지 테스트 가능한 순수 모델.
-export function modeControlModel(settings) {
-  const mode = "early";
-  const all = false;
-  const early = true;
-  const pumpFade = false;
-  const sweep = false;
-  return {
-    mode,
-    all,
-    early,
-    pumpFade,
-    sweep,
-    dedicated: early || pumpFade || sweep,
-    direction: pumpFade ? "short" : (early || sweep) ? "long" : String(settings?.direction || "long"),
-    effectiveCut: minScoreFor({ ...settings, scanMode: "early" }),
-    strictnessEnabled: all || (!early && !pumpFade && !sweep),
-    moneyControlsEnabled: !pumpFade && !sweep,
-  };
 }
 
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
   bindSelect("filter-scanmode", "scanMode");
+  bindPatternTimeframes();
+  const patternLimit = document.getElementById("filter-pattern-limit");
+  if (patternLimit) patternLimit.addEventListener("change", () => {
+    updateSettings({ patternScanLimit: Number(patternLimit.value) });
+    toast("검사 범위는 다음 스캔부터 적용됩니다.", "info");
+  });
+  bindSelect("filter-pattern-family", "patternFamily");
   bindSelect("filter-direction", "direction");
   bindSelect("filter-minscore", "minScore", Number);
   bindSelect("filter-stage", "stageFilter");
@@ -182,10 +150,12 @@ export function initSettingsUI() {
   });
 
   // 초기화 버튼 — 사이드바 + 설정 탭 양쪽
-  for (const id of ["settings-reset", "settings-reset-2"]) {
+  for (const id of ["settings-reset-2"]) {
     const btn = document.getElementById(id);
     if (btn) btn.addEventListener("click", () => {
       resetSettings();
+      // 상태만 초기화하면 기존 타이머가 계속 돌 수 있으므로 실행 서비스도 함께 끈다.
+      emit("autorefresh:toggle", { active: false, silent: true });
       syncControls();
       applyDarkMode();
       emit("filters:apply");
@@ -212,6 +182,24 @@ function bindSelect(id, key, cast) {
   });
 }
 
+function bindPatternTimeframes() {
+  for (const timeframe of PATTERN_TIMEFRAMES) {
+    const input = document.getElementById(`filter-pattern-tf-${timeframe}`);
+    if (!input) continue;
+    input.addEventListener("change", () => {
+      const selected = PATTERN_TIMEFRAMES.filter((tf) =>
+        document.getElementById(`filter-pattern-tf-${tf}`)?.checked);
+      if (!selected.length) {
+        input.checked = true;
+        toast("시간봉은 하나 이상 선택해야 합니다.", "info");
+        return;
+      }
+      updateSettings({ patternTimeframes: selected });
+      toast("선택한 시간봉은 다음 스캔부터 적용됩니다.", "info");
+    });
+  }
+}
+
 // 같은 설정을 가리키는 여러 체크박스를 묶어 바인딩. 하나 바뀌면 상태 갱신 + 나머지 동기화.
 function bindCheckGroup(ids, key, applyFilter, after) {
   for (const id of ids) {
@@ -230,6 +218,16 @@ function bindCheckGroup(ids, key, applyFilter, after) {
 export function syncControls() {
   const s = state.settings;
   setVal("filter-scanmode", s.scanMode);
+  const selectedTimeframes = Array.isArray(s.patternTimeframes)
+    ? PATTERN_TIMEFRAMES.filter((timeframe) => s.patternTimeframes.includes(timeframe))
+    : PATTERN_TIMEFRAMES;
+  if (!selectedTimeframes.length) selectedTimeframes.push(...PATTERN_TIMEFRAMES);
+  for (const timeframe of PATTERN_TIMEFRAMES) {
+    setChk(`filter-pattern-tf-${timeframe}`, selectedTimeframes.includes(timeframe));
+  }
+  setVal("filter-pattern-limit", s.patternScanLimit);
+  setVal("filter-pattern-family", s.patternFamily);
+  syncModeControls(s.scanMode);
   setVal("filter-direction", s.direction);
   setVal("filter-minscore", s.minScore);
   setVal("filter-stage", s.stageFilter);
@@ -244,120 +242,68 @@ export function syncControls() {
   setVal("filter-strictness", s.strictnessLevel);
   setVal("set-ema200-ratio", s.near1hEma200AtrRatio);
   setVal("set-refresh-sec", Math.round(s.refreshIntervalMs / 1000));
-  syncModeControls(s);
 }
 function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = String(v); }
 function setChk(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
 
-// 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계, 방향, 정렬, 점수/강도, 금액 표시.
-const STAGE_OPTIONS = {
-  sweep_retest: [["all", "전체"], ["1", "1 급락·매집"], ["2", "2 W·회수"], ["3", "3 구조전환"], ["4", "4 첫 눌림"], ["5", "5 확인 후보"]],
-  all: [["all", "전체 모드 단계"]],
-  reversal: [["all", "전체"], ["1", "1 매집"], ["2", "2 유동성 회수"], ["3", "3 구조전환"], ["4", "4 진입 구간"], ["5", "5 추격 금지"]],
-  early: [["all", "전체"], ["1", "1 관찰"], ["2", "2 준비"], ["3", "3 회복 관찰"], ["4", "4 돌파 관찰"], ["5", "5 추격 금지"]],
-  pump_fade: [["all", "전체"], ["1", "1 과열 감시"], ["2", "2 고점 거절"], ["3", "3 급락 확인"]],
+// 스캔 모드에 따라 필터 컨트롤을 맞춘다 — 단계 라벨/사용가능 단계, 정렬, 최소 점수.
+// early 는 3단계까지만 있으므로 4·5 는 비활성화한다(고르면 조용히 빈 결과가 됐다).
+const STAGE_LABELS = {
+  reversal: ["전체", "1 매집", "2 유동성 회수", "3 구조전환", "4 진입 구간", "5 추격 금지"],
+  early: ["전체", "1 매집", "2 임박", "3 돌파", "— (early 없음)", "— (early 없음)"],
+  trend: ["전체", "1 초기", "2 진행", "3 과열", "— (trend 없음)", "— (trend 없음)"],
 };
-function syncModeControls(settings) {
-  const model = modeControlModel(settings);
-  const stageEl = document.getElementById("filter-stage");
-  if (stageEl) {
-    const options = STAGE_OPTIONS[model.mode] || STAGE_OPTIONS.early;
-    stageEl.innerHTML = options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
-    const wanted = options.some(([value]) => value === String(settings.stageFilter))
-      ? String(settings.stageFilter) : "all";
-    stageEl.value = wanted;
-    if (wanted !== String(settings.stageFilter)) updateSettings({ stageFilter: "all" });
+function syncModeControls(mode) {
+  const early = mode === "early";
+  const trend = mode === "trend";
+  const patterns = mode === "patterns";
+  for (const id of ["pattern-timeframes-control", "pattern-scan-limit-control", "pattern-family-control", "pattern-scan-note"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !patterns;
   }
-
-  const direction = document.getElementById("filter-direction");
-  if (direction) {
-    direction.disabled = model.dedicated;
-    direction.value = model.direction;
-    direction.title = "조기 포착은 LONG 후보 전용입니다.";
+  document.querySelectorAll("[data-trading-filter]").forEach((el) => { el.hidden = patterns; });
+  // 3단계까지만 있는 모드가 둘이다. 4·5 를 고르면 조용히 빈 결과가 된다.
+  const threeStage = early || trend;
+  const el = document.getElementById("filter-stage");
+  if (el) {
+    const labels = STAGE_LABELS[mode] || STAGE_LABELS.reversal;
+    for (let i = 0; i < el.options.length && i < labels.length; i++) {
+      el.options[i].textContent = labels[i];
+      el.options[i].disabled = threeStage && i >= 4;
+    }
+    if (threeStage && (el.value === "4" || el.value === "5")) {
+      el.value = "all";
+      updateSettings({ stageFilter: "all" });
+    }
   }
-  const directionNote = document.getElementById("filter-direction-note");
-  if (directionNote) {
-    directionNote.hidden = !model.dedicated && !model.all;
-    directionNote.textContent = "LONG 후보 전용";
-  }
-
+  // early 결과는 change6h 를 계산하지 않아(0 고정) "하락률" 정렬이 무동작이었다.
   const sortEl = document.getElementById("filter-sort");
-  const scoreOpt = sortEl && [...sortEl.options].find((o) => o.value === "score");
   const changeOpt = sortEl && [...sortEl.options].find((o) => o.value === "change");
-  if (scoreOpt) scoreOpt.textContent = model.all ? "모드별 기본 순위" : model.sweep ? "진행도" : "점수";
   if (changeOpt) {
-    changeOpt.disabled = model.early || model.sweep || model.all;
-    changeOpt.textContent = model.all ? "모드별 기본 순위" : model.pumpFade ? "급등률" : "하락률";
-    if ((model.early || model.sweep) && sortEl.value === "change") {
+    changeOpt.disabled = threeStage;
+    if (threeStage && sortEl.value === "change") {
       sortEl.value = "score";
       updateSettings({ sort: "score" });
     }
   }
-  if (sortEl) {
-    sortEl.disabled = model.all;
-    sortEl.title = model.all ? "전체 스캔은 각 모드의 기본 순위를 유지합니다." : "";
-  }
-
+  // 최소 점수는 reversal 점수대(0~100 중 55 가 기본) 기준이라 early 에 그대로 못 쓴다.
+  // early 는 config.earlyMinScore 를 하한으로 쓰므로 컨트롤을 잠그고 이유를 보여준다.
   const msEl = document.getElementById("filter-minscore");
   if (msEl) {
-    msEl.disabled = model.dedicated;
-    msEl.title = model.sweep ? "점수 컷 없이 발생 순서를 판정합니다." : model.dedicated ? `${model.mode} 전용 하한 ${model.effectiveCut}점을 씁니다.` : "";
+    msEl.disabled = early || patterns;
+    msEl.title = early
+      ? `조기 포착 모드는 점수대가 달라 전용 하한(${CONFIG.earlyMinScore}점)을 씁니다.`
+      : patterns ? "패턴 모드는 점수 필터를 사용하지 않습니다." : "";
   }
   const msLabel = msEl?.closest("label");
   if (msLabel) {
-    msLabel.childNodes[0].nodeValue = model.sweep ? "순서 판정 (점수 컷 없음)" : model.all ? "급락 반등 최소 점수"
-      : model.dedicated
-      ? `최소 점수 (${model.effectiveCut} 고정)` : "최소 점수";
-  }
-
-  const strictness = document.getElementById("filter-strictness");
-  if (strictness) {
-    strictness.disabled = !model.strictnessEnabled;
-    strictness.title = model.sweep ? "실험적 고정 조건 · 수익성 미검증" : model.strictnessEnabled ? "" : `${model.mode}는 고정 컷을 사용합니다.`;
-  }
-  const strictnessNote = document.getElementById("filter-strictness-note");
-  if (strictnessNote) {
-    strictnessNote.hidden = model.strictnessEnabled;
-    strictnessNote.textContent = model.sweep ? "마감봉만 사용 · 1~5는 순서 진행도이며 확률이 아닙니다."
-      : model.pumpFade
-      ? "급등 후 급락은 실험 컷 45점을 고정 사용합니다."
-      : "잠재력 순위는 검증 컷 40점을 사용하고, 준비도·위험도는 별도 체크합니다.";
-  }
-
-  for (const id of ["filter-seed", "filter-leverage", "filter-partial"]) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.disabled = !model.moneyControlsEnabled;
-    el.title = model.moneyControlsEnabled ? "" : model.sweep
-      ? "스윕 후 첫 눌림은 패턴 탐지 전용이며 진입·목표·금액 계산을 사용하지 않습니다."
-      : "pump_fade는 실험 신호만 제공하며 금액·레버리지 계산을 사용하지 않습니다.";
-  }
-
-  const crt = document.getElementById("filter-crt-tbs");
-  if (crt) {
-    crt.disabled = model.sweep;
-    crt.title = model.sweep ? "이 모드는 자체 5분 구조전환과 BTC 조건을 사용합니다." : "";
-  }
-
-  for (const id of [
-    "filter-exclude-chase", "filter-golden-cross", "filter-near-ema200",
-    "set-exclude-chase", "set-golden-cross", "set-near-ema200", "set-filter-noise",
-  ]) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.disabled = !id.includes("exclude-chase");
-    el.title = id.includes("exclude-chase") ? "추격 금지 후보를 목록에서 숨깁니다." : "이전 전략 전용 설정이라 조기 포착에서는 사용하지 않습니다.";
+    msLabel.childNodes[0].nodeValue = early ? `최소 점수 (early ${CONFIG.earlyMinScore} 고정)`
+      : patterns ? "최소 점수 (미사용)" : "최소 점수";
   }
 }
 
 export function applyDarkMode() {
   document.documentElement.classList.toggle("dark", !!state.settings.darkMode);
-  const toggle = document.getElementById("toggle-dark");
-  if (toggle) {
-    toggle.setAttribute("aria-pressed", String(!!state.settings.darkMode));
-    const label = toggle.querySelector("span");
-    if (label) label.textContent = state.settings.darkMode ? "라이트 테마" : "다크 테마";
-  }
 }
 
 export default { applyFilters, initSettingsUI, syncControls, applyDarkMode };

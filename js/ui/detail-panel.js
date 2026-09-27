@@ -3,22 +3,53 @@
 
 import { fmtPrice, fmtPct, fmtVolume, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { openTradingView, copyTvLink, tvChartUrl, binanceFuturesUrl } from "./tradingview.js";
-import { toggleFavorite, isFavorite, state, on } from "../state.js";
+import { toggleFavorite, isFavorite, state } from "../state.js";
 import { CONFIG } from "../config.js";
 import { toast } from "./notifications.js";
-import { SCAN_MODE_META, resultMode, resultKey } from "../scan-modes.js";
-import { crtSection } from "./crt-tbs.js";
-import { expireResult } from "../core/signal-freshness.js";
-import { buildDecisionGate } from "../core/decision-gate.js";
 
 let panelEl = null;
-let activeResultKey = null;
+
+// 1시간봉 물량 흐름 — 대량거래 봉과 CVD 다이버전스.
+//
+// 점수에 반영하지 않는다(deep-scanner.js 주석의 측정 근거 참조).
+//
+// 매수 비율과 종가 위치는 **일부러 렌더하지 않는다.** 실측에서 방향 예측력이 없었고
+// (매도 흡수 0.79x · 혼재 1.36x — 가설과 뒤집힘) 경고 문구를 붙여도 "매수 75%" 같은 숫자를
+// 보면 사람은 방향으로 읽는다. 예측력 없는 숫자를 방향처럼 읽히게 두는 게 안 보여주는 것보다
+// 나쁘다. 값 자체는 volumeSpikes 가 계속 계산하고 research/predict-dump.mjs 가 열로 뽑는다
+// — 다시 재서 예측력이 나오면 그때 여기에 붙일 것.
+function volumeFlowSection(r) {
+  const sp = r.volSpike1h;
+  const dv = r.cvdDiv1h;
+  if (!sp && !(dv?.bullish || dv?.bearish)) return "";
+
+  const rows = [];
+  if (sp) {
+    const ago = sp.barsAgo === 0 ? "직전 봉" : `${sp.barsAgo}봉 전`;
+    const held = sp.pctAbove == null ? "—"
+      : `이후 종가 ${Math.round(sp.pctAbove * 100)}% 가 그 위`;
+    rows.push(`<tr><td>대량거래 봉</td><td>${sp.relVol.toFixed(1)}배 · ${ago}</td></tr>`);
+    rows.push(`<tr><td>물량대 (${fmtPrice(sp.level)})</td><td>${held}</td></tr>`);
+  }
+  if (dv?.bullish) rows.push(`<tr><td>CVD</td><td>상승 다이버전스 <small>(가격 저점↓ / CVD 저점↑)</small></td></tr>`);
+  if (dv?.bearish) rows.push(`<tr><td>CVD</td><td>하락 다이버전스 <small>(가격 고점↑ / CVD 고점↓)</small></td></tr>`);
+
+  return `
+    <section class="detail-section">
+      <h3>1시간봉 물량 흐름 <small>(점수 미반영 · 참고용)</small></h3>
+      <table class="plan-table">${rows.join("")}</table>
+      <p class="muted">529종목 57,796건(4시간봉) 측정 결과입니다.
+      <b>대량거래 봉</b>: 점수 40 이상 구간에서는 있든 없든 급등률이 같았습니다(16.2% 대 16.1%)
+      — 이미 점수에 든 거래량 확장이 같은 것을 더 잘 잡습니다.
+      <b>CVD 다이버전스</b>: 학습 1.20배 / 검증 1.15배 — 방향은 맞지만 약합니다.
+      둘 다 점수를 대체하지 못하며 위치 참고용입니다.</p>
+    </section>`;
+}
 
 // 시드머니를 넣었을 때의 손익 금액. 레버리지 없음, 왕복 비용 반영.
 // "계획대로 지켰을 때" 의 산수다 — 목표 도달을 보장하지 않으므로 문구로 못 박는다.
 function moneySection(p) {
   const s = state.settings;
-  if (!p?.valid) return `<p class="muted">계획이 보류되어 손익 금액도 계산하지 않습니다.</p>`;
   const on = s.partialTake !== false;
   const m = planMoney(p, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, on ? undefined : 0);
@@ -42,8 +73,10 @@ function moneySection(p) {
     ? `<tr><td>TP1 에서 ${pct}% 빼고 본전에 걸리면</td><td class="up">+${fmtWon(m.partial)} <small>(+${m.partialPct.toFixed(1)}%)</small></td></tr>`
     : "";
   const how = on
-    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올렸을 때의 계산입니다. 본전 청산에도 비용이 발생합니다.`
-    : `목표까지 전량 보유했을 때의 계산입니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
+    ? `TP1 에서 ${pct}% 를 빼고 손절을 본전(${fmtPrice(p.entry)})으로 올리는 전제입니다 —
+       평균 수익은 낮지만 아픈 구간이 절반이고 승률이 37% → 49% 입니다.`
+    : `목표까지 통째로 버티는 전제입니다 — 평균 수익이 더 높은 대신 아픈 구간이 2배이고
+       10번 중 3.7번만 이깁니다. 필터의 "파는 방식" 에서 바꿀 수 있습니다.`;
   return `<table class="plan-table money-table">
     <tr><td>넣는 금액</td><td>${fmtWon(s.seedMoney)}</td></tr>
     ${levRow}
@@ -59,11 +92,6 @@ function moneySection(p) {
 export function initDetailPanel() {
   panelEl = document.getElementById("detail-panel");
   if (!panelEl) return;
-  on("signals:expired", () => {
-    if (!panelEl.classList.contains("open")) return;
-    const r = state.results.find((r) => resultKey(r) === activeResultKey);
-    if (r) showDetail(r);
-  });
   panelEl.addEventListener("click", (e) => {
     if (e.target.dataset.close !== undefined || e.target === panelEl) closeDetail();
   });
@@ -71,19 +99,13 @@ export function initDetailPanel() {
 }
 
 export function closeDetail() {
-  if (panelEl) {
-    panelEl.classList.remove("open");
-    panelEl.setAttribute("aria-hidden", "true");
-  }
+  if (panelEl) panelEl.classList.remove("open");
 }
 
 export function showDetail(r) {
   if (!panelEl) return;
-  r = expireResult(r);
-  activeResultKey = resultKey(r);
   panelEl.innerHTML = renderDetail(r);
   panelEl.classList.add("open");
-  panelEl.setAttribute("aria-hidden", "false");
 
   // 버튼 바인딩 (실제 클릭 이벤트 안에서 새 탭 — 팝업 차단 회피)
   panelEl.querySelector("[data-tv-open]")?.addEventListener("click", () => openTradingView(r.symbol));
@@ -97,24 +119,10 @@ export function showDetail(r) {
   });
 }
 
-export function renderDetail(r) {
+function renderDetail(r) {
   const p = r.plan;
-  const mode = resultMode(r);
-  const modeMeta = SCAN_MODE_META[mode];
-  const isPumpFade = mode === "pump_fade";
-  const isSweep = mode === "sweep_retest";
-  const isEarly = mode === "early";
-  const marketChange = isEarly
-    ? { label: "24h", value: r.change24h }
-    : { label: "6h", value: r.change6h };
-  const stageLabel = isPumpFade ? String(r.stage.label || "").replace(/^\d+\s*/, "") : r.stage.label;
-  const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${escapeHtml(stageLabel)}</span>`;
+  const stageBadge = `<span class="badge badge-${r.stage.badge}">${r.stage.stage}단계 · ${r.stage.label}</span>`;
   const dirBadge = `<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>`;
-  const planSection = !p?.valid ? `<section class="detail-section">
-      <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
-      <p class="warn"><b>계획 보류</b> · ${escapeHtml(p?.warning || "새 마감봉 뒤 다시 계산해 주세요.")}</p>
-      <p class="muted">이 후보의 잠재력 점수와 관찰 체크리스트는 남지만, 손절·목표·예상 손익은 유효한 가격 계획이 생길 때만 표시합니다.</p>
-    </section>` : null;
 
   return `
   <div class="detail-card" role="dialog" aria-modal="true">
@@ -123,18 +131,15 @@ export function renderDetail(r) {
       <div class="detail-title">
         <button class="fav-btn ${isFavorite(r.symbol) ? "active" : ""}" data-fav aria-label="관심 종목">★</button>
         <h2>${escapeHtml(r.symbol)}</h2>
-        <span class="badge badge-mode badge-mode-${modeMeta.badge}">${modeMeta.label}</span>
-        <span class="score-pill score-${r.grade.key}">${isSweep ? `진행 ${r.stage.stage}/5` : `${isPumpFade ? "실험 점수 " : ""}${r.score}`}</span>
+        <span class="score-pill score-${r.grade.key}">${r.score}</span>
         ${dirBadge}
       </div>
       <div class="detail-sub">
         ${stageBadge}
-        <span>스캔 시세 ${fmtPrice(r.price)}</span>
-        <span class="${pctClass(marketChange.value)}">${marketChange.label} ${fmtPct(marketChange.value)}</span>
-        ${isEarly && Number.isFinite(r.signalPrice) ? `<span>신호 기준(4h 마감) ${fmtPrice(r.signalPrice)}</span>` : ""}
+        <span>현재가 ${fmtPrice(r.price)}</span>
+        <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
         <span>거래대금 ${fmtVolume(r.quoteVolume)}</span>
         ${r.newListing ? '<span class="badge badge-blue">신규</span>' : ""}
-        ${r.provisional ? '<span class="badge badge-yellow">진행 중 캔들 포함 · 변경 가능</span>' : ""}
       </div>
     </header>
 
@@ -144,33 +149,26 @@ export function renderDetail(r) {
       <p class="absorption">흡수 추정: <b>${escapeHtml(r.absorption.label)}</b></p>
     </section>
 
-    ${earlyAxesSection(r)}
+    ${volumeFlowSection(r)}
 
-    ${decisionGateSection(r)}
-
-    ${isSweep ? "" : forecastSection(r)}
-    ${isSweep ? "" : crtSection(r)}
-
-    ${isSweep ? sweepRetestSection(r) : planSection || `<section class="detail-section">
+    <section class="detail-section">
       <h3>진입 · 손절 · 목표 <small>(자동 주문 아님 · 기술적 참고 구간)</small></h3>
       <table class="plan-table">
         <tr><td>진입 후보</td><td>${fmtPrice(p.entry)}</td></tr>
         <tr><td>무효화(손절)</td><td>${fmtPrice(p.invalidation)}</td></tr>
-        <tr><td>TP1 ${isPumpFade ? "(1R)" : p.partialFrac ? `(${Math.round(p.partialFrac * 100)}% 익절 · 손절을 본전으로)` : (r.direction === "short" ? "(내부 저점)" : "(내부 고점)")}</td><td>${fmtPrice(p.tp1)}</td></tr>
-        <tr><td>TP2 (${isPumpFade ? "2R" : r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
-        <tr><td>TP3 (${isPumpFade ? "3R" : r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
+        <tr><td>TP1 ${p.partialFrac ? `(${Math.round(p.partialFrac * 100)}% 익절 · 손절을 본전으로)` : (r.direction === "short" ? "(내부 저점)" : "(내부 고점)")}</td><td>${fmtPrice(p.tp1)}</td></tr>
+        <tr><td>TP2 (${r.direction === "short" ? "주요 저점" : "주요 고점"})</td><td>${fmtPrice(p.tp2)}</td></tr>
+        <tr><td>TP3 (${r.direction === "short" ? "Sell-side" : "Buy-side"})</td><td>${fmtPrice(p.tp3)}</td></tr>
         <tr class="rr"><td>예상 손익비</td><td>${p.rrText}</td></tr>
-        ${p.warning ? `<tr><td>위험 경고</td><td>${escapeHtml(p.warning)}</td></tr>` : ""}
       </table>
-      ${isPumpFade ? '<p class="muted">pump_fade는 공개 데이터 기반 실험 신호만 제공하며 금액·레버리지·청산 계산을 적용하지 않습니다.</p>' : moneySection(p)}
+      ${moneySection(p)}
       ${p.note ? `<p class="plan-note">${escapeHtml(p.note)}</p>` : ""}
-      ${isPumpFade ? '<p class="plan-note">초기 임계값과 가중치이며 성공 확률이나 기대수익률로 해석할 수 없습니다.</p>' : ""}
-    </section>`}
+    </section>
 
     ${tfSection(r)}
 
     <section class="detail-section">
-      <h3>${isSweep ? "패턴 순서" : "점수 근거"}</h3>
+      <h3>점수 근거</h3>
       <ul class="breakdown">
         ${r.breakdown.map((b) => `<li class="${b.hit ? "hit" : "miss"}"><span>${escapeHtml(b.label)}</span><span>${b.got}/${b.weight}</span></li>`).join("")}
         ${r.penalties.map((p) => `<li class="penalty"><span>${escapeHtml(p.label)}</span><span>${p.val}</span></li>`).join("")}
@@ -183,101 +181,6 @@ export function renderDetail(r) {
       <a class="btn btn-ghost" href="${binanceFuturesUrl(r.symbol)}" target="_blank" rel="noopener noreferrer">Binance</a>
     </footer>
   </div>`;
-}
-
-function earlyAxesSection(r) {
-  const a = r?.earlyAxes;
-  if (!a) return "";
-  const list = (items) => items?.length ? items.map(escapeHtml).join(" · ") : "추가 확인 없음";
-  const sweep = r?.earlyConfirmation?.sweepRetest;
-  const sweepText = sweep?.confirmed ? `확인 · ${sweep.reason}` : (sweep?.label || "확인 없음");
-  return `<section class="detail-section">
-    <h3>조기포착 3축 <small>(한 숫자로 섞지 않음)</small></h3>
-    <table class="plan-table">
-      <tr><td>급등 잠재력</td><td><b>${a.potential.score} · ${escapeHtml(a.potential.label)}</b><br><small>규칙 기반 순위 점수 · 현재 적중률 재검증 보류</small></td></tr>
-      <tr><td>현재 준비도</td><td><b>${a.readiness.score} · ${escapeHtml(a.readiness.label)}</b><br><small>${list(a.readiness.reasons)}</small></td></tr>
-      <tr><td>관찰 위험도</td><td><b>${a.risk.score} · ${escapeHtml(a.risk.label)}</b><br><small>${list(a.risk.reasons)}</small></td></tr>
-      <tr><td>첫 눌림 확인</td><td>${escapeHtml(sweepText)}</td></tr>
-    </table>
-    <p class="plan-note">관찰·모의 기록용입니다. 15개 알트의 24시간 보유 시험: 유효 24건 중 7건 수익(29.2%), 비용 후 평균 -0.219R. 표본이 작고 전체 시장 순위·실시간 확인 흐름을 재현하지 않아 현재 코인의 승률로 읽을 수 없습니다. 3·4단계는 가격 상태이며 진입 승인 단계가 아닙니다. CRT 확인에도 관찰 전용 상태를 유지합니다.</p>
-  </section>`;
-}
-
-export function sweepRetestSection(r) {
-  const s = r?.sweepRetest || {};
-  const b = s.base || {};
-  const levels = s.levels || {};
-  const time = value => Number.isFinite(value)
-    ? new Date(value).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "-";
-  const events = (s.events || []).map(event => `<li><b>${escapeHtml(event.label)}</b><span>${time(event.time)}</span></li>`).join("");
-  const confluence = (s.confluence || []).length
-    ? s.confluence.map(x => `<span class="badge badge-blue">${escapeHtml(x)}</span>`).join(" ")
-    : '<span class="muted">겹치는 보조 구간 없음 — 필수 조건은 아님</span>';
-  return `<section class="detail-section">
-    <h3>스윕 후 첫 눌림 탐지 <small>(마감봉 순서 판정)</small></h3>
-    <p><b>${escapeHtml(s.label || "판정 보류")}</b> · ${escapeHtml(s.reason || "자료가 부족합니다.")}</p>
-    <ul class="decision-checks">${events || '<li class="decision-info"><span>아직 확정된 이벤트가 없습니다.</span></li>'}</ul>
-    <table class="plan-table">
-      <tr><td>선행 급락</td><td>${Number.isFinite(b.drop) ? b.drop.toFixed(1) + "%" : "-"}</td></tr>
-      <tr><td>저거래량 횡보</td><td>${b.bars || "-"}시간 · 급락 구간 대비 ${Number.isFinite(b.volumeRatio) ? (b.volumeRatio * 100).toFixed(0) + "%" : "-"}</td></tr>
-      <tr><td>기준 지지</td><td>${fmtPrice(levels.support ?? b.support)}</td></tr>
-      <tr><td>W 넥라인</td><td>${fmtPrice(levels.neckline)}</td></tr>
-      <tr><td>스윕 저점</td><td>${fmtPrice(levels.sweepLow)}</td></tr>
-      <tr><td>확인 만료</td><td>${time(s.expiresAt)}</td></tr>
-    </table>
-    <p class="muted">보조 겹침: ${confluence}</p>
-    <p class="plan-note">초기 규칙: 6시간 -15% 이하 · 20~40시간 횡보 · 횡보 폭 8% 이하 · 거래량 65% 이하 · 3개 15분봉 내 회수 · 돌파/5분 거래량 1.5배. 수익성 검증값이 아니며 진입가·목표가·포지션 크기를 만들지 않습니다.</p>
-  </section>`;
-}
-
-function decisionGateSection(r) {
-  const gate = buildDecisionGate(r);
-  const icon = { pass: "✓", warn: "!", block: "×", info: "·" };
-  return `<section class="detail-section decision-gate decision-gate-${gate.status}">
-    <div class="decision-gate-head">
-      <h3>후보 검토 체크리스트</h3>
-      <span class="badge badge-gate-${gate.status}">${escapeHtml(gate.label)}</span>
-    </div>
-    <ul class="decision-checks">${gate.checks.map((check) => `
-      <li class="decision-${check.level}"><b>${icon[check.level]} ${escapeHtml(check.label)}</b><span>${escapeHtml(check.detail)}</span></li>`).join("")}</ul>
-    <p class="plan-note">${escapeHtml(gate.note)} 점수와 정렬에는 반영하지 않습니다.</p>
-  </section>`;
-}
-
-function forecastSection(r) {
-  const f = r?.forecast;
-  if (!f?.available) return `<section class="detail-section forecast-detail forecast-detail-unavailable">
-    <h3>24시간 방향 전망 <small>(스캐너 점수와 별도)</small></h3>
-    <p class="muted">${escapeHtml(f?.reason || "방향 모델을 검증 중이라 숫자를 표시하지 않습니다.")}</p>
-  </section>`;
-  const label = { up: "상승 우세", down: "하락 우세", neutral: "횡보 우세" }[f.lead];
-  const confidence = { high: "높음", medium: "보통", low: "낮음" }[f.confidence];
-  const upper = f.upperBoundary;
-  const lower = f.lowerBoundary;
-  const dataDate = f.dataAsOf ? new Date(f.dataAsOf).toISOString().slice(0, 10) : "-";
-  const drivers = (f.drivers || []).map((d) => `<li>${escapeHtml(d.label)}</li>`).join("");
-  const extraWarn = f.outOfDistribution
-    ? '<p class="warn">현재 입력이 학습 범위를 크게 벗어나 신뢰도를 낮췄습니다.</p>' : "";
-  return `<section class="detail-section forecast-detail">
-    <h3>24시간 방향 전망 <small>(스캐너 점수와 별도 · 자동 주문 아님)</small></h3>
-    <div class="forecast-headline forecast-${f.lead}"><b>${label}</b><span>신뢰도 ${confidence}</span></div>
-    <div class="forecast-bars" aria-label="상승 ${f.up}%, 하락 ${f.down}%, 횡보 ${f.neutral}%">
-      <div class="forecast-bar forecast-bar-up" style="--forecast-width:${f.up}%"><span>상승</span><b>${f.up}%</b></div>
-      <div class="forecast-bar forecast-bar-down" style="--forecast-width:${f.down}%"><span>하락</span><b>${f.down}%</b></div>
-      <div class="forecast-bar forecast-bar-neutral" style="--forecast-width:${f.neutral}%"><span>횡보</span><b>${f.neutral}%</b></div>
-    </div>
-    <table class="plan-table">
-      <tr><td>예측 질문</td><td>${f.horizonHours}시간 안에 어느 경계에 먼저 닿나?</td></tr>
-      <tr><td>기준 가격</td><td>${fmtPrice(f.referencePrice)} (마지막 4시간 마감가)</td></tr>
-      <tr><td>상승 경계</td><td class="up">${fmtPrice(upper)} (+${f.thresholdPct.toFixed(1)}%)</td></tr>
-      <tr><td>하락 경계</td><td class="down">${fmtPrice(lower)} (-${f.thresholdPct.toFixed(1)}%)</td></tr>
-      <tr><td>학습 표본</td><td>${f.sampleCount?.toLocaleString?.() ?? "-"}건 · 데이터 ${dataDate}까지</td></tr>
-    </table>
-    ${drivers ? `<p class="muted">이 전망에 크게 작용한 입력</p><ul class="signal-list">${drivers}</ul>` : ""}
-    ${extraWarn}
-    <p class="plan-note">위 숫자는 TP·손절 도달률이나 수익 확률이 아닙니다. 마지막 4시간 마감가에서 코인별 변동성 경계 중
-    어느 쪽을 먼저 건드릴지 추정한 값이며, 최근 약 166일·현재 거래 중인 종목만 사용한 한계가 있습니다.</p>
-  </section>`;
 }
 
 // 조기 포착 모드 결과는 멀티타임프레임 분석을 하지 않아 timeframes 가 비어 있다.

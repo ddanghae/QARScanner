@@ -2,7 +2,7 @@
 // 앱 셸(정적 파일)만 캐시. Binance API 응답은 절대 캐시하지 않음(데이터 최신성).
 // 캐시 버전을 명확히 관리 → 최신 코드 미반영 문제 방지.
 
-const CACHE_VERSION = "qar-ict-v20";
+const CACHE_VERSION = "qar-ict-v16";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -11,7 +11,6 @@ const APP_SHELL = [
   "./js/main.js",
   "./js/config.js",
   "./js/state.js",
-  "./js/scan-modes.js",
   "./js/api/binance.js",
   "./js/core/indicators.js",
   "./js/core/volume-analysis.js",
@@ -24,20 +23,17 @@ const APP_SHELL = [
   "./js/core/golden-cross-retest.js",
   "./js/core/noise-filter.js",
   "./js/core/early-detect.js",
-  "./js/core/pump-fade.js",
-  "./js/core/sweep-retest.js",
   "./js/core/correlation.js",
-  "./js/core/direction-forecast.js",
-  "./js/core/crt-tbs.js",
-  "./js/core/signal-freshness.js",
-  "./js/core/market-regime.js",
-  "./js/core/decision-gate.js",
-  "./js/ui/crt-tbs.js",
-  "./js/core/direction-model-params.js",
+  "./js/core/chart-patterns.js",
+  "./js/core/pattern-direction.js",
+  "./js/core/pattern-entry.js",
+  "./docs/CHART-PATTERNS.md",
   "./js/scanner/prefilter.js",
   "./js/scanner/deep-scanner.js",
   "./js/scanner/scan-controller.js",
   "./js/ui/dashboard.js",
+  "./js/ui/pattern-results.js",
+  "./js/core/pattern-validation.js",
   "./js/ui/detail-panel.js",
   "./js/ui/settings.js",
   "./js/ui/notifications.js",
@@ -52,7 +48,6 @@ self.addEventListener("install", (e) => {
     caches.open(CACHE_VERSION).then((c) => c.addAll(APP_SHELL).catch(() => {}))
   );
 });
-
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
@@ -60,7 +55,6 @@ self.addEventListener("activate", (e) => {
     ).then(() => self.clients.claim())
   );
 });
-
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 

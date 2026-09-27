@@ -1,20 +1,16 @@
 // ui/dashboard.js — 상단 상태(§15) + 결과 카드/테이블 렌더.
 // 스캔 이벤트 구독 → 진행률/상태/결과 갱신. 모바일은 카드 UI.
 
-import { state, on, emit, isFavorite, toggleFavorite } from "../state.js";
+import { state, on, isFavorite, toggleFavorite } from "../state.js";
 import { CONFIG } from "../config.js";
 import { fmtPrice, fmtPct, fmtVolume, fmtTime, fmtWon, planMoney, pctClass, escapeHtml } from "./format.js";
 import { applyFilters, syncControls } from "./settings.js";
 import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
-import { SCAN_MODES, SCAN_MODE_META, modesForScan, resultKey, resultMode } from "../scan-modes.js";
-import { crtBadge } from "./crt-tbs.js";
-import { expireResult } from "../core/signal-freshness.js";
-import { buildDecisionGate } from "../core/decision-gate.js";
+import { renderPatternResults } from "./pattern-results.js";
 
 let resultsEl, statusEl, progressEl;
-let expiryTimer;
 
 export function initDashboard() {
   resultsEl = document.getElementById("results");
@@ -24,28 +20,16 @@ export function initDashboard() {
   // 스캔 이벤트 구독
   on("scan:start", () => { renderStatus(); setBusy(true); });
   on("scan:phase", renderStatus);
-  on("scan:mode", renderStatus);
   on("scan:progress", renderProgress);
   on("scan:prefiltered", renderStatus);
   on("scan:candidates", renderStatus);
   on("scan:done", () => { setBusy(false); renderStatus(); renderResults(); });
   on("scan:error", () => { setBusy(false); renderStatus(); });
   on("scan:aborted", () => { setBusy(false); renderStatus(); });
-  on("market:regime", renderStatus);
   // 설정 변경 시 컨트롤(단계 라벨 등 부수효과 포함) 재동기화 후 결과 재렌더
-  on("filters:apply", () => { syncControls(); renderStatus(); renderResults(); });
+  on("filters:apply", () => { syncControls(); renderResults(); });
   on("apihealth:changed", renderStatus);
   on("refresh:tick", renderCountdown);
-  clearInterval(expiryTimer);
-  expiryTimer = setInterval(() => {
-    let changed = false;
-    state.results = state.results.map((r) => {
-      const fresh = expireResult(r);
-      changed ||= fresh !== r;
-      return fresh;
-    });
-    if (changed) { renderResults(); emit("signals:expired"); }
-  }, 1000);
 
   renderStatus();
   renderResults();
@@ -61,50 +45,26 @@ function renderCountdown(e) {
 const PHASE_LABEL = {
   idle: "대기", universe: "종목 수집", prefilter: "유동성 필터",
   candidate: "1차 분석", deep: "정밀 분석", score: "점수 계산",
-  confirmation: "CRT + TBS 확인", done: "완료", error: "오류",
+  done: "완료", error: "오류",
 };
 
 function renderStatus() {
   const sc = state.scan;
   const h = state.apiHealth;
+  const patternMode = state.settings.scanMode === "patterns";
   const conn = h.connected === true ? "Binance 연결됨" : h.connected === false ? "연결 실패" : "미확인";
   const connClass = h.connected === true ? "ok" : h.connected === false ? "bad" : "";
   const pill = document.getElementById("conn-pill");
   if (pill) { pill.textContent = conn; pill.className = `conn-pill ${connClass}`; }
 
   if (!statusEl) return;
-  const unifiedDone = state.settings.scanMode === "all" && sc.phase === "done";
-  const visibleCount = applyFilters(state.results).length;
-  const phase = `${modeProgressLabel(sc)}${PHASE_LABEL[sc.phase] || sc.phase}`;
-  const firstPass = unifiedDone ? modeStatText("prefiltered") : `${state.prefiltered.length}개`;
   statusEl.innerHTML = `
-    ${marketRegimeCard()}
-    <div class="stat-card"><span class="stat-label">스캔 상태</span><span class="stat-val stat-val-compact">${escapeHtml(phase)}</span><small>마지막 갱신 ${fmtTime(sc.lastUpdated)}</small></div>
-    <div class="stat-card"><span class="stat-label">검색 범위</span><span class="stat-val">${state.universe.length}</span><small>1차 통과 ${escapeHtml(firstPass)}</small></div>
-    <div class="stat-card stat-card-hero"><span class="stat-label">표시 후보</span><span class="stat-val">${visibleCount}</span><small>정밀 분석 ${state.candidates.length}개</small></div>
+    <div class="stat-card"><span class="stat-label">마지막 갱신</span><span class="stat-val">${fmtTime(sc.lastUpdated)}</span></div>
+    <div class="stat-card"><span class="stat-label">선물 종목</span><span class="stat-val">${state.universe.length}</span></div>
+    <div class="stat-card"><span class="stat-label">거래대금 통과</span><span class="stat-val">${state.prefiltered.length}</span></div>
+    <div class="stat-card"><span class="stat-label">${patternMode ? "패턴 종목" : "후보"}</span><span class="stat-val">${patternMode ? state.patternResults.length : state.candidates.length}</span></div>
+    <div class="stat-card stat-card-hero"><span class="stat-label">상태</span><span class="stat-val">${PHASE_LABEL[sc.phase] || sc.phase}</span></div>
   `;
-}
-
-function marketRegimeCard() {
-  const regime = state.marketRegime;
-  if (!regime?.available) {
-    return `<div class="stat-card stat-card-regime"><span class="stat-label">BTC 시장국면</span><span class="stat-val stat-val-compact">산출 보류</span><small>${escapeHtml(regime?.reason || "스캔 후 표시")}</small></div>`;
-  }
-  const m = regime.metrics || {};
-  const ret = Number.isFinite(m.ret7d) ? `${m.ret7d >= 0 ? "+" : ""}${m.ret7d.toFixed(1)}%` : "—";
-  return `<div class="stat-card stat-card-regime regime-${regime.key}"><span class="stat-label">BTC 시장국면</span>`
-    + `<span class="stat-val stat-val-compact">${escapeHtml(regime.label)}</span>`
-    + `<small>7일 ${ret} · 점수 보정 없음</small></div>`;
-}
-
-function modeStatText(key) {
-  return SCAN_MODES.map((mode) => `${SCAN_MODE_META[mode].shortLabel} ${state.scan.modeStats?.[mode]?.[key] ?? 0}`).join(" · ");
-}
-
-function modeProgressLabel(sc) {
-  if (!sc.currentMode) return "";
-  const label = SCAN_MODE_META[sc.currentMode]?.label || sc.currentMode;
-  return sc.modeTotal > 1 ? `${label} ${sc.modeIndex}/${sc.modeTotal} · ` : `${label} · `;
 }
 
 function renderProgress(e) {
@@ -113,7 +73,7 @@ function renderProgress(e) {
   progressEl.style.width = pct + "%";
   progressEl.parentElement?.setAttribute("aria-valuenow", String(pct));
   const txt = document.getElementById("progress-text");
-  if (txt) txt.textContent = `${modeProgressLabel(state.scan)}${PHASE_LABEL[state.scan.phase] || ""} ${e.done}/${e.total} (${pct}%)`;
+  if (txt) txt.textContent = `${PHASE_LABEL[state.scan.phase] || ""} ${e.done}/${e.total} (${pct}%)`;
 }
 
 function setBusy(busy) {
@@ -125,104 +85,50 @@ function setBusy(busy) {
 
 export function renderResults() {
   if (!resultsEl) return;
+  if (state.settings.scanMode === "patterns") return renderPatternResults(resultsEl);
   const view = applyFilters(state.results);
   visibleSyms = new Set(view.map((r) => r.symbol));
-  const modes = modesForScan(state.settings.scanMode);
-  if (!view.length && state.settings.scanMode !== "all") {
+  if (!view.length) {
     resultsEl.innerHTML = `<div class="empty">${emptyMessage()}</div>`;
     return;
   }
-  const summary = state.settings.scanMode === "all" ? unifiedSummary(view) : "";
-  resultsEl.innerHTML = summary + modes.map((mode) => modeSection(mode, view.filter((r) => resultMode(r) === mode))).join("");
-  bindRows(view);
-}
-
-function unifiedSummary(view) {
-  const counts = modesForScan("all").map((mode) => {
-    const n = view.filter((r) => resultMode(r) === mode).length;
-    return `<span class="mode-count">${modeBadge(mode)} <b>${n}</b></span>`;
-  }).join("");
-  return `<div class="mode-summary" aria-label="모드별 검색 결과">${counts}</div>`;
-}
-
-function modeSection(mode, rows) {
-  const meta = SCAN_MODE_META[mode];
-  const error = state.scan.modeErrors?.[mode];
-  const body = rows.length ? resultTables(rows)
-    : `<div class="mode-empty">${error ? `실행 실패 · ${escapeHtml(error)}` : state.settings.crtTbsOnly ? "기존 후보와 방향이 같은 CRT + TBS 확인 신호가 없습니다. 재스캔으로 갱신하세요." : "조건을 만족하는 후보가 없습니다."}</div>`;
-  return `<section class="mode-results mode-results-${meta.badge}">
-    <div class="mode-results-head"><h3>${modeBadge(mode)}</h3><span>${rows.length}개</span></div>
-    ${body}
-  </section>`;
-}
-
-function resultTables(view) {
-  // 데스크톱은 의미별 7개 열, 모바일은 같은 정보를 카드로 묶는다.
-  return `
+  // 데스크톱 테이블 + 모바일 카드 — CSS 로 전환. 둘 다 생성.
+  resultsEl.innerHTML = `
     <table class="result-table">
       <thead><tr>
-        <th>후보</th><th>검토 상태</th><th>스캔 시세</th><th>24h 전망</th>
-        <th>계획</th><th>예상 손익</th><th></th>
+        <th>#</th><th>종목</th><th>현재가</th><th>6h</th><th>거래대금</th>
+        <th>점수</th><th>단계</th><th>방향</th><th>${isEarly() ? "급등확률" : "손익비"}</th>
+        <th>${partialOn() ? "손절 / 절반 / 끝까지" : "손절 / 목표"}</th><th></th><th></th>
       </tr></thead>
       <tbody>${view.map(rowHtml).join("")}</tbody>
     </table>
     <div class="result-cards">${view.map(cardHtml).join("")}</div>
   `;
+  bindRows(view);
 }
 
 // 후보가 없을 때 — 스캐너가 고장난 건지 시장에 없는 건지 구분되게 깔때기를 보여준다.
 // early 는 확실한 소수만 고르므로 0건이 정상 결과일 수 있다.
 function emptyMessage() {
   if (state.scan.phase !== "done") return "스캔을 시작하세요.";
-  if (state.settings.crtTbsOnly) return "기존 후보와 방향이 같은 CRT + TBS 확인 신호가 없습니다.<br>범위 복귀와 5분 전환 확인을 기다린 뒤 재스캔하세요. 필터를 끄면 기존 후보를 볼 수 있습니다.";
   // 단계 이름은 모드마다 달라 라벨을 붙이면 한쪽이 거짓이 된다(reversal 은 압축·박스가 아니라 급락·RSI).
   const funnel = `깔때기 ${state.universe.length} → ${state.prefiltered.length}`
     + ` → ${state.candidates.length} → ${state.results.length}`;
-  const why = `조기 포착은 잠재력 ${CONFIG.earlyMinScore}점 이상만 보여주고, 준비도와 위험도를 따로 확인합니다.`;
+  const why = state.settings.scanMode === "early"
+    ? `조기 포착은 14일 추세·24시간 변동·최근 상장으로 채점해 ${CONFIG.earlyMinScore}점 이상만 보여줍니다.`
+    : "필터를 완화하거나 채점 강도를 낮춰보세요.";
   return `<b>조건을 만족하는 후보가 없습니다.</b><br><span class="muted">${funnel}</span><br><span class="muted">${why}</span>`;
 }
 
 // 조기 포착은 목표가 R 배수 고정이라 손익비가 항상 1:2.00 — 정보가 없다.
 // 대신 그 점수대의 실측 급등 확률을 보여준다(검증셋 17,597행). 그게 이 모드가 실제로 파는 것이다.
-const isEarly = (r) => resultMode(r) === "early";
-const isPumpFade = (r) => r?.scanMode === "pump_fade";
-const isSweep = (r) => resultMode(r) === "sweep_retest";
-const scoreLabel = (r) => isSweep(r) ? `진행 ${r.stage.stage}/5` : String(r.score);
-
-// 조기포착은 4시간봉으로 신호를 계산하지만, 가격 칸은 티커를 받은 순간의 시장가다.
-// 예전 6h 값은 실제로 계산하지 않고 0으로 표시했으므로, 검증 가능한 24h 티커 변동만 쓴다.
-function marketChange(r) {
-  return isEarly(r)
-    ? { label: "24h", value: r.change24h }
-    : { label: "6h", value: r.change6h };
-}
-
-function modeBadge(mode) {
-  const meta = SCAN_MODE_META[mode] || SCAN_MODE_META.early;
-  return `<span class="badge badge-mode badge-mode-${meta.badge}">${meta.label}</span>`;
-}
+const isEarly = () => state.settings.scanMode === "early";
 
 function oddsCell(r) {
-  if (isSweep(r)) return `진행 ${r.stage.stage}/5`;
-  if (!isEarly(r)) return escapeHtml(r.plan.rrText);
-  return `<span class="odds" title="과거 등급별 적중률을 현재 코인의 성공 확률로 적용할 근거가 부족합니다.">재검증 보류</span>`;
-}
-
-const FORECAST_LABEL = { up: "상승 우세", down: "하락 우세", neutral: "횡보 우세" };
-const CONFIDENCE_LABEL = { high: "높음", medium: "보통", low: "낮음" };
-
-function forecastCell(r) {
-  if (isSweep(r)) return `<span class="forecast-unavailable">패턴 순서 판정 전용</span>`;
-  const f = r?.forecast;
-  if (!f?.available) {
-    const reason = escapeHtml(f?.reason || "검증 가능한 방향 모델 없음");
-    return `<span class="forecast-unavailable" title="${reason}">산출 보류</span>`;
-  }
-  const title = `${f.horizonHours}시간 안에 마지막 4시간 마감가 ±${f.thresholdPct.toFixed(1)}% 경계 중 먼저 닿는 방향 · `
-    + `상승 ${f.up}% / 하락 ${f.down}% / 횡보 ${f.neutral}% · 신뢰도 ${CONFIDENCE_LABEL[f.confidence]}`;
-  return `<span class="forecast forecast-${f.lead}" title="${escapeHtml(title)}">`
-    + `<b>${FORECAST_LABEL[f.lead]}</b> <span class="forecast-pair">↑${f.up}% · ↓${f.down}%</span>`
-    + `<small>횡보 ${f.neutral}% · 신뢰 ${CONFIDENCE_LABEL[f.confidence]}</small></span>`;
+  if (!isEarly()) return escapeHtml(r.plan.rrText);
+  const b = CONFIG.earlyHitBaseline;
+  const lift = (r.grade.hitRate / b).toFixed(1);
+  return `<span class="odds" title="${CONFIG.earlyHitLabel} · 무작위 ${b}% 대비 ${lift}배">${r.grade.hitRate}% <span class="muted">(${lift}x)</span></span>`;
 }
 
 // 시드머니를 이 종목에 넣었을 때 손절 시 잃는 돈 / 목표 도달 시 버는 돈.
@@ -230,9 +136,6 @@ function forecastCell(r) {
 const partialOn = () => state.settings.partialTake !== false;
 
 function moneyCell(r) {
-  if (isSweep(r)) return `<span class="muted">탐지 전용 · 금액 계산 안 함</span>`;
-  if (isPumpFade(r)) return `<span class="muted">실험 신호 · 금액 계산 안 함</span>`;
-  if (!r.plan?.valid) return `<span class="muted">계획 보류</span>`;
   const s = state.settings;
   const m = planMoney(r.plan, s.seedMoney, CONFIG.tradeCostRoundTripPct, s.leverage,
     CONFIG.maintenanceMarginPct, partialOn() ? undefined : 0);
@@ -281,99 +184,53 @@ function noiseBadge(r) {
   return r.noise?.noisy ? `<span class="badge badge-noise">노이즈 · ${r.noise.reasons.join("/")}</span>` : "";
 }
 
-function planCell(r) {
-  if (isSweep(r)) return `<div class="plan-stack plan-stack-wrap"><b>${escapeHtml(r.sweepRetest?.label || r.stage.label)}</b>`
-    + `<small>${escapeHtml(r.sweepRetest?.reason || "다음 순서를 기다립니다.")}</small></div>`;
-  if (!r.plan?.valid) return `<div class="plan-stack plan-stack-wrap"><b>계획 보류</b>`
-    + `<small>${escapeHtml(r.plan?.warning || "새 마감봉 뒤 다시 계산해 주세요.")}</small></div>`;
-  return `<div class="plan-stack"><span>진입 <b>${fmtPrice(r.plan.entry)}</b></span>`
-    + `<span>손절 <b class="down">${fmtPrice(r.plan.invalidation)}</b></span>`
-    + `<small>${isEarly(r) ? "예측 근거" : "손익비"} ${oddsCell(r)}</small></div>`;
-}
-
-function paperButton(r, key) {
-  return isSweep(r)
-    ? '<button class="btn-mini" disabled title="진입·손절·목표 계획을 만들지 않는 탐지 전용 모드입니다.">기록 불가</button>'
-    : !r.plan?.valid
-      ? `<button class="btn-mini" disabled title="${escapeHtml(r.plan?.warning || "계획이 유효하지 않습니다.")}">기록 보류</button>`
-    : `<button class="btn-mini" data-paper="${key}">기록</button>`;
-}
-
-function regimeBadge(r) {
-  const fit = r?.regimeFit;
-  if (!fit || fit.key === "unknown") return "";
-  const title = r.marketRegime?.label ? `BTC ${r.marketRegime.label} · 아직 점수에는 반영하지 않음` : "시장국면 확인";
-  return `<span class="badge badge-regime-${fit.key}" title="${escapeHtml(title)}">${escapeHtml(fit.label)}</span>`;
-}
-
-function decisionGateBadge(r) {
-  const gate = buildDecisionGate(r);
-  const title = `${gate.note} · 통과 ${gate.passes} / 주의 ${gate.warnings} / 차단 ${gate.blockers}`;
-  return `<span class="badge badge-gate-${gate.status}" title="${escapeHtml(title)}">${escapeHtml(gate.label)}</span>`;
-}
-
-function earlyAxisBadges(r) {
-  const a = r?.earlyAxes;
-  if (!a) return "";
-  const riskKey = a.risk.score >= 75 ? "green" : a.risk.score >= 50 ? "yellow" : "red";
-  return `<span class="badge badge-blue" title="과거 규칙 기반 후보 점수 · 현재 성공 확률 미검증">잠재력 ${a.potential.score}</span>`
-    + `<span class="badge badge-purple" title="방향·상단 접근·거래량·변동성의 현재 준비 상태이며 확률이 아닙니다">준비도 ${a.readiness.score}</span>`
-    + `<span class="badge badge-${riskKey}" title="100에 가까울수록 관찰 위험이 낮습니다. 성공 확률이 아닙니다">위험 ${a.risk.label}</span>`;
-}
-
-function sweepConfirmationBadge(r) {
-  const s = r?.earlyConfirmation?.sweepRetest;
-  if (!s?.confirmed) return "";
-  return `<span class="badge badge-green" title="${escapeHtml(s.reason || "발생 순서를 충족했습니다.")}">첫 눌림 확인</span>`;
-}
-
-function candidateTags(r) {
-  return `${decisionGateBadge(r)}<span class="badge badge-${r.stage.badge}">${r.stage.label}</span>`
-    + `${earlyAxisBadges(r)}${regimeBadge(r)}${sweepConfirmationBadge(r)}${corrBadge(r)}${crtBadge(r)}`;
-}
-
 function rowHtml(r) {
-  const key = resultKey(r);
-  const change = marketChange(r);
-  return `<tr data-result-key="${key}">
-    <td class="candidate-cell"><div class="candidate-main"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button><b>${escapeHtml(r.symbol)}</b><span class="score-pill score-${r.grade.key}">${scoreLabel(r)}</span></div><div class="candidate-sub"><span>#${r.rank}</span>${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></div></td>
-    <td><div class="decision-stack">${candidateTags(r)}</div></td>
-    <td><div class="market-stack"><b>${fmtPrice(r.price)}</b><span class="${pctClass(change.value)}">${change.label} ${fmtPct(change.value)}</span><small>${fmtVolume(r.quoteVolume)}</small></div></td>
-    <td>${forecastCell(r)}</td>
-    <td>${planCell(r)}</td>
-    <td class="risk-cell">${moneyCell(r)}</td>
-    <td><div class="row-actions"><button class="btn-mini" data-detail="${key}">상세</button>${paperButton(r, key)}<button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></div></td>
+  return `<tr data-sym="${r.symbol}">
+    <td>${r.rank}</td>
+    <td class="sym"><button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>${escapeHtml(r.symbol)}</td>
+    <td>${fmtPrice(r.price)}</td>
+    <td class="${pctClass(r.change6h)}">${fmtPct(r.change6h)}</td>
+    <td>${fmtVolume(r.quoteVolume)}</td>
+    <td><span class="score-pill score-${r.grade.key}">${r.score}</span></td>
+    <td><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${goldenCrossBadge(r)}${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}</td>
+    <td><span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span></td>
+    <td>${oddsCell(r)}</td>
+    <td>${moneyCell(r)}</td>
+    <td><button class="btn-mini" data-detail="${r.symbol}">상세</button><button class="btn-mini" data-paper="${r.symbol}">기록</button></td>
+    <td><button class="btn-mini tv" data-tv="${r.symbol}" aria-label="TradingView">TV</button></td>
   </tr>`;
 }
 
 function cardHtml(r) {
   const p = r.plan;
-  const key = resultKey(r);
-  const change = marketChange(r);
-  return `<div class="rcard" data-result-key="${key}">
+  return `<div class="rcard" data-sym="${r.symbol}">
     <div class="rcard-top">
       <button class="fav-mini ${isFavorite(r.symbol) ? "active" : ""}" data-fav="${r.symbol}">★</button>
       <b class="rcard-sym">${escapeHtml(r.symbol)}</b>
-      <span class="score-pill score-${r.grade.key}">${scoreLabel(r)}</span>
+      <span class="score-pill score-${r.grade.key}">${r.score}</span>
+      <span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span>
     </div>
-    <div class="rcard-meta">${modeBadge(resultMode(r))}<span class="dir dir-${r.direction}">${r.direction === "long" ? "LONG" : "SHORT"}</span><span class="muted">#${r.rank}</span></div>
-    <div class="rcard-decision">${candidateTags(r)}</div>
-    <div class="rcard-grid">
-      <div class="rcard-metric"><small>스캔 시세</small><b>${fmtPrice(r.price)}</b><span class="${pctClass(change.value)}">${change.label} ${fmtPct(change.value)} · ${fmtVolume(r.quoteVolume)}</span></div>
-      <div class="rcard-metric"><small>24h 전망</small>${forecastCell(r)}</div>
-      <div class="rcard-metric"><small>${isSweep(r) ? "패턴 상태" : "계획"}</small>${planCell(r)}</div>
-      <div class="rcard-metric"><small>예상 손익</small>${moneyCell(r)}</div>
+    <div class="rcard-stage"><span class="badge badge-${r.stage.badge}">${r.stage.label}</span>${nearEma200Badge(r)}${noiseBadge(r)}${corrBadge(r)}
+      <span class="${pctClass(r.change6h)}">6h ${fmtPct(r.change6h)}</span>
+      <span class="muted">${fmtPrice(r.price)}</span>
+    </div>
+    <ul class="rcard-signals">${r.goldenCrossRetest?.detected ? `<li>${goldenCrossBadge(r)}</li>` : ""}${r.topSignals.map((s) => `<li>· ${escapeHtml(s)}</li>`).join("")}</ul>
+    <div class="rcard-plan">
+      <span>진입 ${fmtPrice(p.entry)}</span>
+      <span>손절 ${fmtPrice(p.invalidation)}</span>
+      <span>${isEarly() ? "급등확률" : "손익비"} ${oddsCell(r)}</span>
+      <span>${moneyCell(r)}</span>
     </div>
     <div class="rcard-actions">
-      <button class="btn-mini btn-detail" data-detail="${key}">상세</button>
-      ${paperButton(r, key)}
-      <button class="btn-mini tv" data-tv="${r.symbol}">차트</button>
+      <button class="btn-mini" data-detail="${r.symbol}">상세 보기</button>
+      <button class="btn-mini" data-paper="${r.symbol}">기록</button>
+      <button class="btn-mini tv" data-tv="${r.symbol}">TradingView</button>
     </div>
   </div>`;
 }
 
 function bindRows(view) {
-  const byId = (key) => view.find((r) => resultKey(r) === key);
+  const byId = (sym) => view.find((r) => r.symbol === sym);
   resultsEl.querySelectorAll("[data-detail]").forEach((b) =>
     b.addEventListener("click", (e) => { e.stopPropagation(); const r = byId(b.dataset.detail); if (r) showDetail(r); }));
   resultsEl.querySelectorAll("[data-tv]").forEach((b) =>
@@ -387,8 +244,8 @@ function bindRows(view) {
       b.classList.toggle("active", isFavorite(b.dataset.fav));
     }));
   // 카드/행 전체 클릭 → 상세
-  resultsEl.querySelectorAll("[data-result-key]").forEach((el) =>
-    el.addEventListener("click", () => { const r = byId(el.dataset.resultKey); if (r) showDetail(r); }));
+  resultsEl.querySelectorAll("[data-sym]").forEach((el) =>
+    el.addEventListener("click", () => { const r = byId(el.dataset.sym); if (r) showDetail(r); }));
 }
 
 export default { initDashboard, renderResults };

@@ -35,6 +35,37 @@ export function ema(values, period) {
   return out;
 }
 
+// Money Flow Index — RSI 와 같은 0~100 이지만 거래량을 곱한다.
+// RSI 는 가격 변화만 보므로 거래량 없이 오른 가짜 반등과 물량 실린 반등을 구분하지 못한다.
+// 대표가격(고+저+종)/3 이 전봉보다 오르면 그 봉 거래대금을 매수 쪽, 내리면 매도 쪽에 쌓는다.
+// 같으면 어느 쪽에도 넣지 않는다(표준 정의).
+export function mfi(candles, period = 14) {
+  const out = new Array(candles.length).fill(null);
+  if (candles.length <= period) return out;
+  const tp = candles.map((c) => (c.high + c.low + c.close) / 3);
+  const flow = candles.map((c, i) => tp[i] * c.volume);
+
+  // 슬라이딩 윈도우. pos/neg 를 매번 다시 더하면 O(n*period) 가 된다.
+  let pos = 0, neg = 0;
+  const signed = new Array(candles.length).fill(0); // +flow / -flow / 0
+  for (let i = 1; i < candles.length; i++) {
+    signed[i] = tp[i] > tp[i - 1] ? flow[i] : tp[i] < tp[i - 1] ? -flow[i] : 0;
+  }
+  for (let i = 1; i < candles.length; i++) {
+    if (signed[i] > 0) pos += signed[i]; else neg -= signed[i];
+    const drop = i - period;
+    if (drop >= 1) {
+      if (signed[drop] > 0) pos -= signed[drop]; else neg += signed[drop];
+    }
+    if (i >= period) {
+      const tot = pos + neg;
+      // 창 전체가 보합(거래량 0 포함)이면 압력을 정의할 수 없다 — 50 으로 때우면 거짓 신호가 된다.
+      out[i] = tot > 0 ? (100 * pos) / tot : null;
+    }
+  }
+  return out;
+}
+
 // Wilder RSI
 export function rsi(closes, period = 14) {
   const out = new Array(closes.length).fill(null);
@@ -209,6 +240,6 @@ export function computeIndicators(candles, cfg) {
 }
 
 export default {
-  sma, ema, rsi, macd, trueRange, atr, bollinger, dailyVwap, obv, stochRsi,
+  sma, ema, rsi, mfi, macd, trueRange, atr, bollinger, dailyVwap, obv, stochRsi,
   last, lastIndexValid, computeIndicators,
 };

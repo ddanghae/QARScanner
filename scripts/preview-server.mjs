@@ -19,6 +19,7 @@ function isPublic(relativePath) {
     || relativePath === `docs${sep}CHART-PATTERNS.md`
     || relativePath === `docs${sep}TRADINGVIEW-PATTERNS.md`
     || relativePath === `pine${sep}qar_pattern_snapshot.pine`
+    || relativePath === `pine${sep}qar_pattern_detector.pine`
     || relativePath.startsWith(`css${sep}`) || relativePath.startsWith(`js${sep}`);
 }
 

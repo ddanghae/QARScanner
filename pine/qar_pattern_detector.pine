@@ -1,0 +1,618 @@
+//@version=6
+indicator("마켓 스캐너 · 멀티 시간봉 패턴 탐지", overlay = true, max_labels_count = 100)
+
+// This indicator evaluates each requested timeframe in its own candle context.
+// Only closed source-timeframe bars are returned to the chart.
+
+const string GROUP_TF = "탐지 시간봉"
+const string GROUP_VIEW = "표시"
+bool use5m = input.bool(true, "5분", inline = "tf1", group = GROUP_TF)
+bool use15m = input.bool(true, "15분", inline = "tf1", group = GROUP_TF)
+bool use1h = input.bool(true, "1시간", inline = "tf2", group = GROUP_TF)
+bool use4h = input.bool(true, "4시간", inline = "tf2", group = GROUP_TF)
+int pivotDepth = input.int(3, "피벗 확정 깊이", minval = 2, maxval = 5, group = GROUP_TF)
+int maxRows = input.int(8, "시간봉별 표시 패턴 수", minval = 1, maxval = 20, group = GROUP_VIEW)
+bool showMarkers = input.bool(true, "새 탐지 시 차트에 시간봉 표시", group = GROUP_VIEW)
+string panelPosition = input.string("우측 상단", "결과 패널 위치", options = ["우측 상단", "좌측 상단", "우측 하단", "좌측 하단"], group = GROUP_VIEW)
+
+f_clamp(float v, float lo, float hi) => math.max(lo, math.min(hi, v))
+
+f_fit(float value, float lo, float hi, float tol) =>
+    float miss = value < lo ? lo - value : value > hi ? value - hi : 0.0
+    miss > tol ? na : math.max(0.0, 100.0 - 35.0 * miss / tol - 7.0 * math.abs(value - (lo + hi) / 2.0) / math.max(hi - lo, tol))
+
+f_complete(float trigger, float invalidation, float price, bool done) =>
+    if done
+        100
+    else
+        float span = math.abs(trigger - invalidation)
+        span > 0 ? int(math.round(f_clamp(1.0 - math.abs(trigger - price) / span, 0.0, 0.95) * 100.0)) : 0
+
+f_add(string payloadText, string name, int direction, float score, int completion, string state, int alreadyShown) =>
+    string side = direction > 0 ? "롱" : direction < 0 ? "숏" : "중립"
+    string item = side + " · " + name + " " + str.tostring(f_clamp(score, 0, 100), "#.0") + "점 · " + state + " " + str.tostring(completion) + "%"
+    alreadyShown < maxRows ? (payloadText == "" ? item : payloadText + "\n" + item) : payloadText
+
+f_pushPivot(array<float> prices, array<int> indices, array<int> kinds, float price, int index, int kind) =>
+    int count = array.size(kinds)
+    if count == 0
+        array.push(prices, price)
+        array.push(indices, index)
+        array.push(kinds, kind)
+    else
+        int last = count - 1
+        int priorKind = array.get(kinds, last)
+        float priorPrice = array.get(prices, last)
+        bool moreExtreme = kind > 0 ? price > priorPrice : price < priorPrice
+        if priorKind == kind
+            if moreExtreme
+                array.set(prices, last, price)
+                array.set(indices, last, index)
+        else
+            array.push(prices, price)
+            array.push(indices, index)
+            array.push(kinds, kind)
+    while array.size(kinds) > 12
+        array.shift(prices)
+        array.shift(indices)
+        array.shift(kinds)
+
+f_addRawPivot(array<float> prices, array<int> indices, float price, int index) =>
+    array.push(prices, price)
+    array.push(indices, index)
+    while array.size(prices) > 6
+        array.shift(prices)
+        array.shift(indices)
+
+f_slope3(array<float> prices, array<int> indices) =>
+    int n = array.size(prices)
+    float slope = na
+    if n >= 3
+        float x0 = array.get(indices, n - 3)
+        float x1 = array.get(indices, n - 2)
+        float x2 = array.get(indices, n - 1)
+        float y0 = array.get(prices, n - 3)
+        float y1 = array.get(prices, n - 2)
+        float y2 = array.get(prices, n - 1)
+        float mx = (x0 + x1 + x2) / 3.0
+        float my = (y0 + y1 + y2) / 3.0
+        float den = math.pow(x0 - mx, 2) + math.pow(x1 - mx, 2) + math.pow(x2 - mx, 2)
+        float num = (x0 - mx) * (y0 - my) + (x1 - mx) * (y1 - my) + (x2 - mx) * (y2 - my)
+        slope := den > 0 ? num / den : na
+    slope
+
+f_recentBreak(float level, bool below) =>
+    bool crossed = false
+    for i = 0 to 3
+        bool hit = below ? close[i] < level and close[i + 1] >= level : close[i] > level and close[i + 1] <= level
+        crossed := crossed or hit
+    crossed
+
+f_scan() =>
+    var array<float> swingPrices = array.new_float()
+    var array<int> swingIndices = array.new_int()
+    var array<int> swingKinds = array.new_int()
+    var array<float> highPrices = array.new_float()
+    var array<int> highIndices = array.new_int()
+    var array<float> lowPrices = array.new_float()
+    var array<int> lowIndices = array.new_int()
+
+    float atr = ta.atr(14)
+    float ph = ta.pivothigh(high, pivotDepth, pivotDepth)
+    float pl = ta.pivotlow(low, pivotDepth, pivotDepth)
+    if not na(ph)
+        int pivotIndex = bar_index - pivotDepth
+        f_pushPivot(swingPrices, swingIndices, swingKinds, ph, pivotIndex, 1)
+        f_addRawPivot(highPrices, highIndices, ph, pivotIndex)
+    if not na(pl)
+        int pivotIndex = bar_index - pivotDepth
+        f_pushPivot(swingPrices, swingIndices, swingKinds, pl, pivotIndex, -1)
+        f_addRawPivot(lowPrices, lowIndices, pl, pivotIndex)
+
+    string found = ""
+    int longCount = 0
+    int shortCount = 0
+    int neutralCount = 0
+    int shown = 0
+    int n = array.size(swingKinds)
+
+    // Candlestick reversals: same candle-body rules as the browser scanner.
+    if bar_index > 2 and atr > 0
+        float body = math.max(math.abs(close - open), syminfo.mintick)
+        float candleRange = math.max(high - low, syminfo.mintick)
+        float upperWick = high - math.max(open, close)
+        float lowerWick = math.min(open, close) - low
+        float prevBody = math.abs(close[1] - open[1])
+        if close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+            found := f_add(found, "상승 장악형", 1, 82, 100, "반응", shown)
+            longCount += 1
+            shown += 1
+        if close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+            found := f_add(found, "하락 장악형", -1, 82, 100, "반응", shown)
+            shortCount += 1
+            shown += 1
+        if body / candleRange <= 0.34 and lowerWick >= body * 2 and upperWick <= body * 0.8 and close >= open
+            float score = 75 + math.min(15, lowerWick / body * 3)
+            found := f_add(found, "망치형", 1, score, 100, "반응", shown)
+            longCount += 1
+            shown += 1
+        if body / candleRange <= 0.34 and upperWick >= body * 2 and lowerWick <= body * 0.8 and close <= open
+            float score = 75 + math.min(15, upperWick / body * 3)
+            found := f_add(found, "유성형", -1, score, 100, "반응", shown)
+            shortCount += 1
+            shown += 1
+        float firstBody = math.abs(close[2] - open[2])
+        float middleBody = prevBody
+        if close[2] < open[2] and firstBody > middleBody * 1.2 and middleBody < firstBody * 0.55 and close > open and close >= (open[2] + close[2]) / 2
+            found := f_add(found, "샛별형", 1, 78, 100, "반응", shown)
+            longCount += 1
+            shown += 1
+        if close[2] > open[2] and firstBody > middleBody * 1.2 and middleBody < firstBody * 0.55 and close < open and close <= (open[2] + close[2]) / 2
+            found := f_add(found, "저녁별형", -1, 78, 100, "반응", shown)
+            shortCount += 1
+            shown += 1
+
+    // Pole and consolidation: flag / pennant continuation setups.
+    if atr > 0 and bar_index > 40
+        bool flagFound = false
+        for consLen = 8 to 12 by 2
+            float topStart = (high[consLen - 1] + high[consLen - 2] + high[consLen - 3]) / 3.0
+            float topEnd = (high + high[1] + high[2]) / 3.0
+            float botStart = (low[consLen - 1] + low[consLen - 2] + low[consLen - 3]) / 3.0
+            float botEnd = (low + low[1] + low[2]) / 3.0
+            float widthStart = topStart - botStart
+            float widthEnd = topEnd - botEnd
+            float consLow = low
+            float consHigh = high
+            for c = 1 to consLen - 1
+                consLow := math.min(consLow, low[c])
+                consHigh := math.max(consHigh, high[c])
+            bool narrowing = widthStart > atr and widthEnd > 0 and widthEnd / widthStart < 0.72
+            bool parallel = math.abs((topEnd - topStart) - (botEnd - botStart)) / atr <= 1.35
+            for poleLen = 12 to 12
+                float poleHigh = high[consLen + 1]
+                float poleLow = low[consLen + 1]
+                for k = 2 to 12
+                    poleHigh := math.max(poleHigh, high[consLen + k])
+                    poleLow := math.min(poleLow, low[consLen + k])
+                float base = close[consLen + poleLen]
+                float height = poleHigh - poleLow
+                float bullRetrace = height > 0 ? (poleHigh - consLow) / height : na
+                float bearRetrace = height > 0 ? (consHigh - poleLow) / height : na
+                bool upPole = close[consLen + 1] > base and height >= math.max(base * 0.055, atr * 3.5)
+                bool downPole = close[consLen + 1] < base and height >= math.max(base * 0.055, atr * 3.5)
+                if not flagFound and upPole and bullRetrace >= -0.12 and bullRetrace <= 0.58 and topEnd - topStart < atr * 0.25 and botEnd - botStart < atr * 0.35 and (parallel or narrowing) and close >= botEnd - atr * 0.35
+                    bool broke = close > topEnd + atr * 0.12
+                    float score = 58 + math.min(18, height / atr) + math.max(0, 14 - bullRetrace * 20)
+                    found := f_add(found, narrowing ? "상승 페넌트" : "상승 플래그", 1, score, f_complete(topEnd, botEnd, close, broke), broke ? "돌파" : "형성", shown)
+                    longCount += 1
+                    shown += 1
+                    flagFound := true
+                if not flagFound and downPole and bearRetrace >= -0.12 and bearRetrace <= 0.58 and topEnd - topStart > -atr * 0.35 and botEnd - botStart > -atr * 0.25 and (parallel or narrowing) and close <= topEnd + atr * 0.35
+                    bool broke = close < botEnd - atr * 0.12
+                    float score = 58 + math.min(18, height / atr) + math.max(0, 14 - bearRetrace * 20)
+                    found := f_add(found, narrowing ? "하락 페넌트" : "하락 플래그", -1, score, f_complete(botEnd, topEnd, close, broke), broke ? "돌파" : "형성", shown)
+                    shortCount += 1
+                    shown += 1
+                    flagFound := true
+
+    // Triangle, wedge and rectangle structures from three confirmed swing highs/lows.
+    if atr > 0 and array.size(highPrices) >= 3 and array.size(lowPrices) >= 3
+        int hiN = array.size(highPrices)
+        int loN = array.size(lowPrices)
+        float topSlope = f_slope3(highPrices, highIndices)
+        float botSlope = f_slope3(lowPrices, lowIndices)
+        int startIndex = math.max(array.get(highIndices, hiN - 3), array.get(lowIndices, loN - 3))
+        int span = math.max(1, bar_index - startIndex)
+        float topNow = array.get(highPrices, hiN - 1) + topSlope * (bar_index - array.get(highIndices, hiN - 1))
+        float botNow = array.get(lowPrices, loN - 1) + botSlope * (bar_index - array.get(lowIndices, loN - 1))
+        float topStart = topNow - topSlope * span
+        float botStart = botNow - botSlope * span
+        float widthNow = topNow - botNow
+        float widthStart = topStart - botStart
+        float shrink = widthStart > 0 ? widthNow / widthStart : na
+        float topMove = topSlope * span / atr
+        float botMove = botSlope * span / atr
+        if widthNow > 0 and shrink >= 0.12 and shrink <= 0.82
+            bool asc = math.abs(topMove) < 0.7 and botMove > 0.65
+            bool desc = math.abs(botMove) < 0.7 and topMove < -0.65
+            bool sym = topMove < -0.55 and botMove > 0.55
+            bool brokeUp = close > topNow + atr * 0.12
+            bool brokeDown = close < botNow - atr * 0.12
+            if asc or desc or sym
+                int direction = brokeUp ? 1 : brokeDown ? -1 : asc ? 1 : desc ? -1 : 0
+                bool broke = brokeUp or brokeDown
+                string name = asc ? "상승 삼각형" : desc ? "하락 삼각형" : "대칭 삼각형"
+                float trigger = direction < 0 ? botNow : topNow
+                float invalidation = direction < 0 ? topNow : botNow
+                float score = 60 + math.min(20, (1 - shrink) * 24) + math.min(8, hiN + loN)
+                found := f_add(found, name, direction, score, f_complete(trigger, invalidation, close, broke), broke ? "돌파" : "형성", shown)
+                if direction > 0
+                    longCount += 1
+                else if direction < 0
+                    shortCount += 1
+                else
+                    neutralCount += 1
+                shown += 1
+            bool risingWedge = topMove > 0.45 and botMove > topMove + 0.3
+            bool fallingWedge = botMove < -0.45 and topMove > botMove + 0.3
+            if risingWedge or fallingWedge
+                int structuralDir = risingWedge ? -1 : 1
+                int direction = close > topNow + atr * 0.12 ? 1 : close < botNow - atr * 0.12 ? -1 : structuralDir
+                bool broke = close > topNow + atr * 0.12 or close < botNow - atr * 0.12
+                float trigger = direction < 0 ? botNow : topNow
+                float invalidation = direction < 0 ? topNow : botNow
+                found := f_add(found, risingWedge ? "상승 쐐기" : "하락 쐐기", direction, 60 + math.min(20, (1 - shrink) * 25) + math.min(8, hiN + loN), f_complete(trigger, invalidation, close, broke), broke ? "돌파" : "형성", shown)
+                if direction > 0
+                    longCount += 1
+                else
+                    shortCount += 1
+                shown += 1
+
+    if atr > 0 and bar_index >= 32
+        float boxHigh = ta.highest(high, 32)
+        float boxLow = ta.lowest(low, 32)
+        float boxWidth = boxHigh - boxLow
+        float mid = (boxHigh + boxLow) / 2.0
+        float tolerance = math.max(atr * 0.8, boxWidth * 0.1)
+        int topTouches = 0
+        int bottomTouches = 0
+        if array.size(highPrices) > 0
+            for i = 0 to array.size(highPrices) - 1
+                if array.get(highIndices, i) >= bar_index - 32 and math.abs(array.get(highPrices, i) - boxHigh) <= tolerance
+                    topTouches += 1
+        if array.size(lowPrices) > 0
+            for i = 0 to array.size(lowPrices) - 1
+                if array.get(lowIndices, i) >= bar_index - 32 and math.abs(array.get(lowPrices, i) - boxLow) <= tolerance
+                    bottomTouches += 1
+        if mid > 0 and boxWidth / mid <= 0.12 and boxWidth / atr >= 3.5 and boxWidth / atr <= 22 and topTouches >= 2 and bottomTouches >= 2
+            int direction = close > boxHigh + atr * 0.12 ? 1 : close < boxLow - atr * 0.12 ? -1 : 0
+            bool broke = direction != 0
+            float trigger = direction < 0 ? boxLow : boxHigh
+            float invalidation = direction < 0 ? boxHigh : boxLow
+            float score = 64 + math.min(20, topTouches * 3 + bottomTouches * 3)
+            found := f_add(found, "직사각형 박스", direction, score, f_complete(trigger, invalidation, close, broke), broke ? "돌파" : "형성", shown)
+            if direction > 0
+                longCount += 1
+            else if direction < 0
+                shortCount += 1
+            else
+                neutralCount += 1
+            shown += 1
+
+    // Double/triple tops and bottoms from confirmed same-side pivots.
+    if atr > 0
+        for pointCount = 3 to 2
+            if array.size(highPrices) >= pointCount
+                int lastPivot = array.size(highPrices) - 1
+                int first = lastPivot - pointCount + 1
+                float level = 0.0
+                int oldest = array.get(highIndices, first)
+                int newest = array.get(highIndices, lastPivot)
+                for i = first to end
+                    float value = array.get(highPrices, i)
+                    level += value
+                level /= pointCount
+                float highMin = 1e20
+                float highMax = 0.0
+                for i = first to end
+                    highMin := math.min(highMin, array.get(highPrices, i))
+                    highMax := math.max(highMax, array.get(highPrices, i))
+                float tol = math.max(atr * 1.35, level * 0.012)
+                float neck = 1e20
+                if array.size(lowPrices) > 0
+                    for i = 0 to array.size(lowPrices) - 1
+                        int ix = array.get(lowIndices, i)
+                        if ix > oldest and ix < newest
+                            neck := math.min(neck, array.get(lowPrices, i))
+                float depth = level - neck
+                bool recent = newest >= bar_index - 24 and newest <= bar_index - pivotDepth
+                bool broke = neck < 1e19 and f_recentBreak(neck, true)
+                bool near = neck < 1e19 and close >= neck - depth * 0.5
+                if recent and highMax - highMin <= tol and depth >= math.max(atr * 1.6, level * 0.012) and (near or broke)
+                    float score = 62 + math.max(0, 18 - (highMax - highMin) / tol * 18) + (pointCount == 3 ? 5 : 0)
+                    found := f_add(found, pointCount == 3 ? "삼중 천정" : "이중 천정", -1, score, f_complete(neck, highMax + atr * 0.25, close, broke), broke ? "돌파" : "형성", shown)
+                    shortCount += 1
+                    shown += 1
+                    break
+            if array.size(lowPrices) >= pointCount
+                int lastPivot = array.size(lowPrices) - 1
+                int first = lastPivot - pointCount + 1
+                float level = 0.0
+                float lowMin = 1e20
+                float lowMax = 0.0
+                int oldest = array.get(lowIndices, first)
+                int newest = array.get(lowIndices, lastPivot)
+                for i = first to end
+                    float value = array.get(lowPrices, i)
+                    level += value
+                    lowMin := math.min(lowMin, value)
+                    lowMax := math.max(lowMax, value)
+                level /= pointCount
+                float tol = math.max(atr * 1.35, level * 0.012)
+                float neck = 0.0
+                if array.size(highPrices) > 0
+                    for i = 0 to array.size(highPrices) - 1
+                        int ix = array.get(highIndices, i)
+                        if ix > oldest and ix < newest
+                            neck := math.max(neck, array.get(highPrices, i))
+                float depth = neck - level
+                bool recent = newest >= bar_index - 24 and newest <= bar_index - pivotDepth
+                bool broke = neck > 0 and f_recentBreak(neck, false)
+                bool near = neck > 0 and close <= neck + depth * 0.5
+                if recent and lowMax - lowMin <= tol and depth >= math.max(atr * 1.6, level * 0.012) and (near or broke)
+                    float score = 62 + math.max(0, 18 - (lowMax - lowMin) / tol * 18) + (pointCount == 3 ? 5 : 0)
+                    found := f_add(found, pointCount == 3 ? "삼중 바닥" : "이중 바닥", 1, score, f_complete(neck, lowMin - atr * 0.25, close, broke), broke ? "돌파" : "형성", shown)
+                    longCount += 1
+                    shown += 1
+                    break
+
+    // Head and shoulders and cup/handle shapes share the latest five alternating pivots.
+    if atr > 0 and n >= 5
+        int k0 = array.get(swingKinds, n - 5)
+        int k1 = array.get(swingKinds, n - 4)
+        int k2 = array.get(swingKinds, n - 3)
+        int k3 = array.get(swingKinds, n - 2)
+        int k4 = array.get(swingKinds, n - 1)
+        int i0 = array.get(swingIndices, n - 5)
+        int i4 = array.get(swingIndices, n - 1)
+        float v0 = array.get(swingPrices, n - 5)
+        float v1 = array.get(swingPrices, n - 4)
+        float v2 = array.get(swingPrices, n - 3)
+        float v3 = array.get(swingPrices, n - 2)
+        float v4 = array.get(swingPrices, n - 1)
+        bool bearHs = k0 == 1 and k1 == -1 and k2 == 1 and k3 == -1 and k4 == 1
+        bool bullHs = k0 == -1 and k1 == 1 and k2 == -1 and k3 == 1 and k4 == -1
+        if (bearHs or bullHs) and i4 >= bar_index - 30 and i0 >= bar_index - 85
+            float headSize = bearHs ? v2 - (v0 + v4) / 2.0 : (v0 + v4) / 2.0 - v2
+            float shoulderTol = math.max(atr * 1.6, v2 * 0.022)
+            float neckTol = math.max(atr * 2.0, ((v1 + v3) / 2.0) * 0.025)
+            float neck = (v1 + v3) / 2.0
+            bool shoulders = math.abs(v0 - v4) <= shoulderTol and math.abs(v1 - v3) <= neckTol and headSize >= atr * 1.25
+            bool broke = f_recentBreak(neck, bearHs)
+            bool near = bearHs ? close >= neck - headSize * 0.45 : close <= neck + headSize * 0.45
+            bool validClose = bearHs ? close <= v2 + atr * 0.25 : close >= v2 - atr * 0.25
+            if shoulders and (near or broke) and validClose
+                float score = 63 + math.max(0, 16 - math.abs(v0 - v4) / atr * 5) + math.max(0, 10 - math.abs(v1 - v3) / atr * 4)
+                found := f_add(found, bearHs ? "헤드앤숄더" : "역헤드앤숄더", bearHs ? -1 : 1, score, f_complete(neck, bearHs ? v2 + atr * 0.25 : v2 - atr * 0.25, close, broke), broke ? "돌파" : "형성", shown)
+                if bearHs
+                    shortCount += 1
+                else
+                    longCount += 1
+                shown += 1
+
+        bool cup = k0 == 1 and k1 == -1 and k2 == 1 and k3 == -1
+        bool inverseCup = k0 == -1 and k1 == 1 and k2 == -1 and k3 == 1
+        if cup and i4 >= bar_index - 12
+            float rim = (v0 + v2) / 2.0
+            float depth = rim - v1
+            float pullback = (v2 - v3) / math.max(depth, atr)
+            if math.abs(v0 - v2) <= math.max(atr * 1.5, rim * 0.015) and depth >= math.max(atr * 3, rim * 0.07) and depth <= rim * 0.42 and pullback >= 0.08 and pullback <= 0.58
+                bool broke = close > rim + atr * 0.12
+                found := f_add(found, "컵 앤 핸들", 1, 64 + math.max(0, 16 - math.abs(v0 - v2) / math.max(atr * 1.5, rim * 0.015) * 10) + math.max(0, 12 - pullback * 18), f_complete(rim, v3, close, broke), broke ? "돌파" : "형성", shown)
+                longCount += 1
+                shown += 1
+        if inverseCup and i4 >= bar_index - 12
+            float floor = (v0 + v2) / 2.0
+            float depth = v1 - floor
+            float pullback = (v3 - v2) / math.max(depth, atr)
+            if math.abs(v0 - v2) <= math.max(atr * 1.5, floor * 0.015) and depth >= math.max(atr * 3, floor * 0.07) and depth <= floor * 0.42 and pullback >= 0.08 and pullback <= 0.58
+                bool broke = close < floor - atr * 0.12
+                found := f_add(found, "역컵 앤 핸들", -1, 64 + math.max(0, 16 - math.abs(v0 - v2) / math.max(atr * 1.5, floor * 0.015) * 10) + math.max(0, 12 - pullback * 18), f_complete(floor, v3, close, broke), broke ? "돌파" : "형성", shown)
+                shortCount += 1
+                shown += 1
+
+    // Harmonic families: latest five alternating confirmed pivots.
+    if atr > 0 and n >= 5
+        int firstKind = array.get(swingKinds, n - 5)
+        int thirdKind = array.get(swingKinds, n - 3)
+        int fifthKind = array.get(swingKinds, n - 1)
+        bool harmonicSequence = firstKind == fifthKind and firstKind == thirdKind
+        if harmonicSequence
+            float x = array.get(swingPrices, n - 5)
+            float a = array.get(swingPrices, n - 4)
+            float b = array.get(swingPrices, n - 3)
+            float c = array.get(swingPrices, n - 2)
+            float d = array.get(swingPrices, n - 1)
+            int xIndex = array.get(swingIndices, n - 5)
+            int dIndex = array.get(swingIndices, n - 1)
+            bool bull = firstKind < 0
+            float xa = math.abs(a - x)
+            float ab = math.abs(b - a)
+            float bc = math.abs(c - b)
+            float cd = math.abs(d - c)
+            float ad = math.abs(d - a)
+            if dIndex >= bar_index - 12 and xIndex >= bar_index - 85 and math.min(math.min(xa, ab), math.min(bc, math.min(cd, ad))) >= atr * 0.8
+                float rb = ab / xa
+                float rc = bc / ab
+                float rcd = cd / bc
+                float rd = ad / xa
+                float invalidation = bull ? math.min(d, x) - atr * 0.25 : math.max(d, x) + atr * 0.25
+                bool validClose = bull ? close >= invalidation : close <= invalidation
+                bool reacted = bull ? close > d + atr * 0.45 : close < d - atr * 0.45
+                if validClose
+                    float score = na
+                    string harmonicName = ""
+                    float q1 = f_fit(rb, 0.618, 0.618, 0.055)
+                    float q2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float q3 = f_fit(rcd, 1.272, 1.618, 0.08)
+                    float q4 = f_fit(rd, 0.786, 0.786, 0.065)
+                    if not na(q1) and not na(q2) and not na(q3) and not na(q4)
+                        score := (q1 + q2 + q3 + q4) / 4.0
+                        harmonicName := "가틀리"
+                    float h1 = f_fit(rb, 0.382, 0.5, 0.055)
+                    float h2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float h3 = f_fit(rcd, 1.618, 2.618, 0.08)
+                    float h4 = f_fit(rd, 0.886, 0.886, 0.065)
+                    if na(score) and not na(h1) and not na(h2) and not na(h3) and not na(h4)
+                        score := (h1 + h2 + h3 + h4) / 4.0
+                        harmonicName := "배트"
+                    float a1 = f_fit(rb, 0.382, 0.382, 0.055)
+                    float a2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float a3 = f_fit(rcd, 2.0, 3.618, 0.08)
+                    float a4 = f_fit(rd, 1.13, 1.13, 0.065)
+                    if na(score) and not na(a1) and not na(a2) and not na(a3) and not na(a4)
+                        score := (a1 + a2 + a3 + a4) / 4.0
+                        harmonicName := "얼터네이트 배트"
+                    float b1 = f_fit(rb, 0.786, 0.786, 0.055)
+                    float b2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float b3 = f_fit(rcd, 1.618, 2.24, 0.08)
+                    float b4 = f_fit(rd, 1.272, 1.272, 0.065)
+                    if na(score) and not na(b1) and not na(b2) and not na(b3) and not na(b4)
+                        score := (b1 + b2 + b3 + b4) / 4.0
+                        harmonicName := "버터플라이"
+                    float c1 = f_fit(rb, 0.382, 0.618, 0.055)
+                    float c2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float c3 = f_fit(rcd, 2.24, 3.618, 0.08)
+                    float c4 = f_fit(rd, 1.618, 1.618, 0.065)
+                    if na(score) and not na(c1) and not na(c2) and not na(c3) and not na(c4)
+                        score := (c1 + c2 + c3 + c4) / 4.0
+                        harmonicName := "크랩"
+                    float d1 = f_fit(rb, 0.886, 0.886, 0.055)
+                    float d2 = f_fit(rc, 0.382, 0.886, 0.06)
+                    float d3 = f_fit(rcd, 2.0, 3.618, 0.08)
+                    float d4 = f_fit(rd, 1.618, 1.618, 0.065)
+                    if na(score) and not na(d1) and not na(d2) and not na(d3) and not na(d4)
+                        score := (d1 + d2 + d3 + d4) / 4.0
+                        harmonicName := "딥 크랩"
+                    float e1 = f_fit(rb, 0.382, 0.618, 0.055)
+                    float e2 = f_fit(rc, 1.13, 1.618, 0.06)
+                    float e3 = f_fit(rcd, 1.618, 2.24, 0.08)
+                    float e4 = f_fit(rd, 0.886, 1.13, 0.065)
+                    if na(score) and not na(e1) and not na(e2) and not na(e3) and not na(e4)
+                        score := (e1 + e2 + e3 + e4) / 4.0
+                        harmonicName := "샤크"
+                    if not na(score)
+                        found := f_add(found, harmonicName, bull ? 1 : -1, score, f_complete(d, invalidation, close, reacted), reacted ? "반응" : "형성", shown)
+                        if bull
+                            longCount += 1
+                        else
+                            shortCount += 1
+                        shown += 1
+    // ABCD extension.
+    if atr > 0 and n >= 4
+        int kA = array.get(swingKinds, n - 4)
+        int kC = array.get(swingKinds, n - 2)
+        if kA == kC
+            float a = array.get(swingPrices, n - 4)
+            float b = array.get(swingPrices, n - 3)
+            float c = array.get(swingPrices, n - 2)
+            float d = array.get(swingPrices, n - 1)
+            int aIndex = array.get(swingIndices, n - 4)
+            int dIndex = array.get(swingIndices, n - 1)
+            float ab = math.abs(b - a)
+            float bc = math.abs(c - b)
+            float cd = math.abs(d - c)
+            float q1 = f_fit(bc / ab, 0.382, 0.886, 0.06)
+            float q2 = f_fit(cd / bc, 0.9, 1.1, 0.08)
+            float q3 = f_fit(cd / ab, 1.0, 1.0, 0.12)
+            bool bull = kA < 0
+            float invalidation = bull ? d - atr * 0.5 : d + atr * 0.5
+            bool validClose = bull ? close >= invalidation : close <= invalidation
+            bool reacted = bull ? close > d + atr * 0.45 : close < d - atr * 0.45
+            if dIndex >= bar_index - 12 and aIndex >= bar_index - 85 and math.min(ab, math.min(bc, cd)) >= atr * 0.8 and not na(q1) and not na(q2) and not na(q3) and validClose
+                float score = (q1 + q2 + q3) / 3.0
+                found := f_add(found, "AB=CD", bull ? 1 : -1, score, f_complete(d, invalidation, close, reacted), reacted ? "반응" : "형성", shown)
+                if bull
+                    longCount += 1
+                else
+                    shortCount += 1
+                shown += 1
+
+    str.tostring(longCount) + "," + str.tostring(shortCount) + "," + str.tostring(neutralCount) + (found == "" ? "\n탐지 없음" : "\n" + found)
+
+f_counts(string payload) =>
+    int newline = str.pos(payload, "\n")
+    string header = newline >= 0 ? str.substring(payload, 0, newline) : payload
+    array<string> parts = str.split(header, ",")
+    int longs = array.size(parts) > 0 ? int(nz(str.tonumber(array.get(parts, 0)), 0)) : 0
+    int shorts = array.size(parts) > 1 ? int(nz(str.tonumber(array.get(parts, 1)), 0)) : 0
+    int neutral = array.size(parts) > 2 ? int(nz(str.tonumber(array.get(parts, 2)), 0)) : 0
+    [longs, shorts, neutral]
+
+f_body(string payload) =>
+    int newline = str.pos(payload, "\n")
+    newline >= 0 ? str.substring(payload, newline + 1) : "탐지 없음"
+
+f_panelPosition(string value) =>
+    value == "좌측 상단" ? position.top_left : value == "우측 하단" ? position.bottom_right : value == "좌측 하단" ? position.bottom_left : position.top_right
+
+f_last(array<string> values) =>
+    array.size(values) > 0 ? array.get(values, array.size(values) - 1) : "0,0,0\n데이터 대기"
+
+float chartSeconds = timeframe.in_seconds()
+string tf5 = "0,0,0\n비활성"
+string tf15 = "0,0,0\n비활성"
+string tf60 = "0,0,0\n비활성"
+string tf240 = "0,0,0\n비활성"
+
+if use5m
+    if chartSeconds <= 300
+        tf5 := request.security(syminfo.tickerid, "5", f_scan()[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    else
+        array<string> lower5 = request.security_lower_tf(syminfo.tickerid, "5", f_scan()[1])
+        tf5 := f_last(lower5)
+if use15m
+    if chartSeconds <= 900
+        tf15 := request.security(syminfo.tickerid, "15", f_scan()[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    else
+        array<string> lower15 = request.security_lower_tf(syminfo.tickerid, "15", f_scan()[1])
+        tf15 := f_last(lower15)
+if use1h
+    if chartSeconds <= 3600
+        tf60 := request.security(syminfo.tickerid, "60", f_scan()[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    else
+        array<string> lower60 = request.security_lower_tf(syminfo.tickerid, "60", f_scan()[1])
+        tf60 := f_last(lower60)
+if use4h
+    if chartSeconds <= 14400
+        tf240 := request.security(syminfo.tickerid, "240", f_scan()[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    else
+        array<string> lower240 = request.security_lower_tf(syminfo.tickerid, "240", f_scan()[1])
+        tf240 := f_last(lower240)
+
+[long5, short5, neutral5] = f_counts(tf5)
+[long15, short15, neutral15] = f_counts(tf15)
+[long60, short60, neutral60] = f_counts(tf60)
+[long240, short240, neutral240] = f_counts(tf240)
+bool anyLong = long5 + long15 + long60 + long240 > 0
+bool anyShort = short5 + short15 + short60 + short240 > 0
+bool newAny = (
+     (use5m and long5 + short5 + neutral5 > 0 and long5[1] + short5[1] + neutral5[1] == 0)
+  or (use15m and long15 + short15 + neutral15 > 0 and long15[1] + short15[1] + neutral15[1] == 0)
+  or (use1h and long60 + short60 + neutral60 > 0 and long60[1] + short60[1] + neutral60[1] == 0)
+  or (use4h and long240 + short240 + neutral240 > 0 and long240[1] + short240[1] + neutral240[1] == 0)
+)
+
+plotshape(showMarkers and use5m and long5 + short5 + neutral5 > 0 and long5[1] + short5[1] + neutral5[1] == 0, "새 5분 패턴", shape.labeldown, location.abovebar, color = color.new(color.aqua, 0), text = "5m", textcolor = color.black, size = size.tiny)
+plotshape(showMarkers and use15m and long15 + short15 + neutral15 > 0 and long15[1] + short15[1] + neutral15[1] == 0, "새 15분 패턴", shape.labeldown, location.abovebar, color = color.new(color.blue, 0), text = "15m", textcolor = color.white, size = size.tiny)
+plotshape(showMarkers and use1h and long60 + short60 + neutral60 > 0 and long60[1] + short60[1] + neutral60[1] == 0, "새 1시간 패턴", shape.labeldown, location.abovebar, color = color.new(color.orange, 0), text = "1h", textcolor = color.black, size = size.tiny)
+plotshape(showMarkers and use4h and long240 + short240 + neutral240 > 0 and long240[1] + short240[1] + neutral240[1] == 0, "새 4시간 패턴", shape.labeldown, location.abovebar, color = color.new(color.fuchsia, 0), text = "4h", textcolor = color.white, size = size.tiny)
+
+alertcondition(newAny, "새 패턴 탐지", "마켓 스캐너 지표가 선택한 시간봉에서 새로운 패턴을 찾았습니다. 결과 패널을 확인하세요.")
+alertcondition(anyLong and not anyLong[1], "새 상승 패턴 탐지", "마켓 스캐너 지표가 상승 방향 패턴을 찾았습니다. 결과 패널을 확인하세요.")
+alertcondition(anyShort and not anyShort[1], "새 하락 패턴 탐지", "마켓 스캐너 지표가 하락 방향 패턴을 찾았습니다. 결과 패널을 확인하세요.")
+
+var table panel = table.new(f_panelPosition(panelPosition), 3, 5, border_width = 1, frame_color = color.new(color.gray, 55))
+if barstate.islast
+    color head = color.rgb(19, 28, 40)
+    color cell = color.rgb(13, 19, 28)
+    table.cell(panel, 0, 0, "시간봉", bgcolor = head, text_color = color.white)
+    table.cell(panel, 1, 0, "롱 / 숏", bgcolor = head, text_color = color.white)
+    table.cell(panel, 2, 0, "탐지 패턴 · 적합도 · 완성률", bgcolor = head, text_color = color.white)
+    string p5 = f_body(tf5)
+    string p15 = f_body(tf15)
+    string p60 = f_body(tf60)
+    string p240 = f_body(tf240)
+    table.cell(panel, 0, 1, "5분", bgcolor = cell, text_color = color.aqua)
+    table.cell(panel, 1, 1, str.tostring(long5) + " / " + str.tostring(short5), bgcolor = cell, text_color = color.white)
+    table.cell(panel, 2, 1, use5m ? p5 : "비활성", bgcolor = cell, text_color = color.white, text_halign = text.align_left)
+    table.cell(panel, 0, 2, "15분", bgcolor = cell, text_color = color.aqua)
+    table.cell(panel, 1, 2, str.tostring(long15) + " / " + str.tostring(short15), bgcolor = cell, text_color = color.white)
+    table.cell(panel, 2, 2, use15m ? p15 : "비활성", bgcolor = cell, text_color = color.white, text_halign = text.align_left)
+    table.cell(panel, 0, 3, "1시간", bgcolor = cell, text_color = color.aqua)
+    table.cell(panel, 1, 3, str.tostring(long60) + " / " + str.tostring(short60), bgcolor = cell, text_color = color.white)
+    table.cell(panel, 2, 3, use1h ? p60 : "비활성", bgcolor = cell, text_color = color.white, text_halign = text.align_left)
+    table.cell(panel, 0, 4, "4시간", bgcolor = cell, text_color = color.aqua)
+    table.cell(panel, 1, 4, str.tostring(long240) + " / " + str.tostring(short240), bgcolor = cell, text_color = color.white)
+    table.cell(panel, 2, 4, use4h ? p240 : "비활성", bgcolor = cell, text_color = color.white, text_halign = text.align_left)

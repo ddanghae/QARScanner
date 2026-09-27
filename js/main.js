@@ -53,7 +53,7 @@ function boot() {
   window.addEventListener("online", () => toast("네트워크 재연결됨", "success"));
 
   registerServiceWorker();
-  console.log("QAR ICT Early Scanner 준비 완료");
+  console.log("마켓 스캐너 준비 완료");
 }
 
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신

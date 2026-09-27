@@ -1,4 +1,4 @@
-# QAR ICT Early Scanner
+# 마켓 스캐너
 
 Binance USDⓈ-M Futures 초기 구조전환 후보 스캐너.
 GitHub Pages에서 실행되는 **정적 웹앱**입니다. 빌드 과정·백엔드·개인 API 키가 필요 없습니다.

@@ -1,7 +1,7 @@
 // ui/pattern-results.js — 패턴 검색 결과의 필터링·정렬·카드 렌더링.
 
 import { state } from "../state.js";
-import { fmtPrice, fmtVolume, fmtTime, escapeHtml } from "./format.js";
+import { fmtPrice, fmtPriceRange, fmtVolume, fmtTime, escapeHtml } from "./format.js";
 import { openTradingView } from "./tradingview.js";
 import { patternFamilyLabel } from "../core/chart-patterns.js";
 import { assessSymbolDirection } from "../core/pattern-direction.js";
@@ -53,7 +53,7 @@ export function renderPatternResults(resultsEl) {
     </div>
     ${scanMetaText ? `<p class="pattern-scan-meta" role="status">${escapeHtml(scanMetaText)}</p>` : ""}
     <div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>
-    <details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.2 ATR이며 돌파나 되돌림 확인을 기다리는 값입니다. 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>
+    <details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.1 ATR이며 각 방향 최대 기준 가격의 0.15%로 제한합니다. 돌파나 되돌림 확인을 기다리는 값이며, 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>
   `;
   resultsEl.querySelectorAll("[data-pattern-scan-side]").forEach((button) => button.addEventListener("click", () => {
     patternScanSide = button.dataset.patternScanSide;
@@ -117,7 +117,7 @@ function patternEntryCandidateHtml(row) {
   return `<div class="pattern-entry-candidate ${directionClass}">
     <div class="pattern-entry-heading"><b>${escapeHtml(candidate.title)}</b><span>근거 ${escapeHtml(candidate.reason)}</span></div>
     <div class="pattern-entry-levels">
-      <span><small>진입 후보 구간</small><b>${fmtPrice(candidate.entryLow)} – ${fmtPrice(candidate.entryHigh)}</b></span>
+      <span><small>진입 후보 구간</small><b>${fmtPriceRange(candidate.entryLow, candidate.entryHigh)}</b></span>
       <span><small>구조 무효화 · 손절 폭</small><b>${stopText}</b></span>
       <span><small>패턴 투영 목표</small><b>${targetText}</b></span>
       <span><small>구간 끝 기준 손익비</small><b>1 : ${candidate.rr.toFixed(2)}</b></span>

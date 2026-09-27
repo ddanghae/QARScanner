@@ -12,6 +12,21 @@ export function fmtPrice(x) {
   return Number(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
+// Use one shared precision for both entry edges so a narrow range stays readable.
+export function fmtPriceRange(low, high) {
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return `${fmtPrice(low)} – ${fmtPrice(high)}`;
+  const magnitude = Math.max(Math.abs(low), Math.abs(high));
+  let digits = magnitude < 0.001 ? 8 : magnitude < 0.1 ? 6 : magnitude < 1 ? 5 : magnitude < 100 ? 3 : 2;
+  const format = (value) => value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  let from = format(low), to = format(high);
+  while (low !== high && from === to && digits < 12) {
+    digits++;
+    from = format(low);
+    to = format(high);
+  }
+  return `${from} – ${to}`;
+}
+
 export function fmtPct(x, digits = 2) {
   if (x == null || isNaN(x)) return "-";
   const sign = x > 0 ? "+" : "";
@@ -108,4 +123,4 @@ export function escapeHtml(s) {
   ));
 }
 
-export default { fmtPrice, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml };
+export default { fmtPrice, fmtPriceRange, fmtPct, fmtVolume, fmtTime, pctClass, escapeHtml };

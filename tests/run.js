@@ -14,6 +14,7 @@ import { run as paperCorr } from "./paper-corr.test.js";
 import { run as strategies } from "./strategies.test.js";
 import { run as chartPatterns } from "./chart-patterns.test.js";
 import { run as patternEntry } from "./pattern-entry.test.js";
+import { run as format } from "./format.test.js";
 import { run as scanner } from "./scanner.test.js";
 import { run as patternValidation } from "./pattern-validation.test.js";
 
@@ -32,6 +33,7 @@ export function runAll() {
   strategies();
   chartPatterns();
   patternEntry();
+  format();
   scanner();
   patternValidation();
   return report();

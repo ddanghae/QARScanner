@@ -1,5 +1,5 @@
 // Deterministic entry-candidate rules for chart-pattern mode.
-import { assert, eq, suite, test } from "./harness.js";
+import { approx, assert, eq, suite, test } from "./harness.js";
 import { derivePatternEntryCandidate } from "../js/core/pattern-entry.js";
 
 const frame = (bias, overrides = {}) => ({
@@ -21,8 +21,8 @@ export function run() {
     });
     eq(result.direction, "long");
     eq(result.state, "wait-retest");
-    eq(result.entryLow, 99.8);
-    eq(result.entryHigh, 100.2);
+    eq(result.entryLow, 99.9);
+    eq(result.entryHigh, 100.1);
     eq(result.stop, 98);
     eq(result.target, 106);
     assert(result.rr >= 1.5, "candidate must pass minimum R:R");
@@ -37,10 +37,22 @@ export function run() {
     });
     eq(result.direction, "short");
     eq(result.state, "wait-retest");
-    eq(result.entryLow, 99.8);
-    eq(result.entryHigh, 100.2);
+    eq(result.entryLow, 99.9);
+    eq(result.entryHigh, 100.1);
     eq(result.stop, 102);
     eq(result.target, 94);
+    eq(result.rr, 2.81);
+  });
+
+  test("caps the entry width at 0.3 percent of trigger in a volatile timeframe", () => {
+    const result = derivePatternEntryCandidate({
+      patterns: [pattern("bullish", { "4h": frame("bullish") })],
+      timeframes: ["4h"], atrByTimeframe: { "4h": 10 }, price: 101,
+    });
+    approx(result.entryLow, 99.85);
+    approx(result.entryHigh, 100.15);
+    approx(result.entryHigh - result.entryLow, 0.3);
+    eq(result.rr, 2.72);
   });
 
   test("forming structures wait for a close beyond the trigger", () => {
@@ -61,6 +73,28 @@ export function run() {
     eq(result.state, "wait-pullback");
     eq(result.entryLow, 99.95);
     eq(result.entryHigh, 100.05);
+  });
+
+  test("reaction PRZ uses only the overlap with the tighter entry area", () => {
+    const result = derivePatternEntryCandidate({
+      patterns: [pattern("bullish", { "4h": frame("bullish", {
+        status: "reaction", zone: { low: 100.05, high: 100.3 },
+      }) })],
+      timeframes: ["4h"], atrByTimeframe: { "4h": 1 }, price: 101,
+    });
+    eq(result.entryLow, 100.05);
+    eq(result.entryHigh, 100.1);
+  });
+
+  test("does not show a reaction entry when PRZ misses the tighter area", () => {
+    const result = derivePatternEntryCandidate({
+      patterns: [pattern("bullish", { "4h": frame("bullish", {
+        status: "reaction", zone: { low: 100.2, high: 100.3 },
+      }) })],
+      timeframes: ["4h"], atrByTimeframe: { "4h": 1 }, price: 101,
+    });
+    eq(result.state, "structure-needed");
+    eq(result.entryLow, undefined);
   });
 
   test("labels a confirmed setup in its candidate area as needing another check", () => {

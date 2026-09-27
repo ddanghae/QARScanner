@@ -6,7 +6,8 @@ const MIN_DIRECTION_PCT = 60;
 const MIN_PATTERN_DIRECTION_PCT = 55;
 const MIN_FIT_SCORE = 55;
 const MIN_RR = 1.5;
-const RETEST_ATR = 0.2;
+const RETEST_ATR = 0.1;
+const MAX_RETEST_PRICE_PCT = 0.0015;
 
 const finite = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 const validInterval = (low, high) => finite(low) && finite(high) && Number(low) > 0 && Number(high) >= Number(low);
@@ -27,7 +28,8 @@ function levelCandidate(pattern, timeframe, direction, atr14, price) {
 
   const trigger = Number(detail.trigger), invalidation = Number(detail.invalidation), projection = Number(detail.projection);
   const long = direction === "long";
-  const band = atr14 * RETEST_ATR;
+  // Keep the entry area close to the trigger even on volatile higher timeframes.
+  const band = Math.min(atr14 * RETEST_ATR, trigger * MAX_RETEST_PRICE_PCT);
   let entryLow = trigger - band, entryHigh = trigger + band;
   if (detail.status === "reaction" && validInterval(detail.zone?.low, detail.zone?.high)) {
     entryLow = Math.max(entryLow, Number(detail.zone.low));

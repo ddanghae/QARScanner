@@ -549,3 +549,17 @@ a { color:var(--accent); }
   .stat-label { line-height:1.25; }
 }
 /* The main workspace owns scan, favorites and refresh actions; keep navigation for destinations. */
+.pattern-scan-tabs, .pattern-scan-tabs.with-early { display:flex; flex-wrap:wrap; }
+.pattern-scan-tab { flex:1 1 120px; }
+.pattern-scan-tab.active.retest { background:var(--surface); color:var(--accent); }
+.retest-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:16px; }
+.retest-controls button { min-height:44px; }
+.retest-controls .selected { border-color:var(--accent); color:var(--accent); }
+.retest-controls label { display:flex; align-items:center; gap:7px; min-height:44px; font-size:12px; }
+.retest-warning { padding:12px; margin-bottom:14px; border:1px solid var(--border); color:var(--down); border-radius:8px; }
+.retest-card > p { font-size:12px; line-height:1.6; }
+.retest-supply { padding:13px; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; margin-top:14px; }
+.retest-supply > div { display:flex; flex-wrap:wrap; gap:5px 12px; justify-content:space-between; font-size:12px; }
+.retest-supply span,.retest-supply p,.retest-supply small { font-size:11px; color:var(--muted); line-height:1.6; }
+.retest-supply ul { font-size:12px; line-height:1.7; padding-left:17px; }
+.retest-plan { margin-top:14px; }

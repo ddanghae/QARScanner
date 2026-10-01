@@ -13,6 +13,7 @@ import { gradeFor, topSignals } from "../core/scoring.js";
 import { returnsFrom, correlationMap } from "../core/correlation.js";
 import { detectChartPatterns, groupPatternsByTimeframe, patternCompletionPct } from "../core/chart-patterns.js";
 import { assessFractalContinuation } from "../core/fractal-continuation.js";
+import { assessTrendRetest, observeSupply } from "../core/trend-retest.js";
 import { replayPatternHistory, signalFreshness } from "../core/pattern-validation.js";
 import { atr, ema } from "../core/indicators.js";
 import { scanProfile, selectPatternCandidates, earlyObservation, barActivity } from "../core/scan-profile.js";
@@ -238,6 +239,7 @@ async function runPatternPipeline(universe, now, token, focusSymbols = null) {
         return {
           timeframe,
           bars,
+          confirmedBars,
           atr14: Number.isFinite(atr14) ? atr14 : null,
           ema200: ema200Context,
           latestCandleTime,
@@ -266,6 +268,7 @@ async function runPatternPipeline(universe, now, token, focusSymbols = null) {
     const fractalContinuation = frameResults.find((frame) => frame.timeframe === "5m")?.fractalContinuation || null;
     const failedTimeframes = frameResults.filter((frame) => frame.error).map((frame) => frame.timeframe);
     const latestFrame = selectLatestFrame(frameResults);
+    const trendRetest = assessTrendRetest(Object.fromEntries(frameResults.map(frame => [frame.timeframe, frame.confirmedBars || []])), { asOf: Date.now() });
     const row = {
       scanProfile: token.settings.scanProfile || "standard",
       explorationReason: item.explorationReason,
@@ -283,15 +286,34 @@ async function runPatternPipeline(universe, now, token, focusSymbols = null) {
       atrByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.atr14 ?? null])),
       ema200ByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.ema200 || null])),
       fractalContinuation,
+      trendRetest,
       patterns,
       activityByTimeframe: Object.fromEntries(frameResults.map(frame => [frame.timeframe, frame.activity || null])),
     };
     row.earlyObservation = row.scanProfile === "aggressive" ? earlyObservation(row) : null;
-    return patterns.length || fractalContinuation?.matched || row.earlyObservation ? row : null;
+    // Keep closed bars only until candidate-limited supply enrichment completes.
+    row.supplyBars = frameResults.find(frame => frame.timeframe === "5m")?.confirmedBars || [];
+    return patterns.length || fractalContinuation?.matched || row.earlyObservation || trendRetest.pattern ? row : null;
   }, null, token);
   if (!canContinue(token)) return null;
   state.patternScanMeta = patternStats;
-  return analyzed.filter((r) => r && !r.skipped && !r.error);
+  const rows = analyzed.filter((r) => r && !r.skipped && !r.error);
+  const supplyCandidates = rows.filter(row => row.trendRetest?.pattern && ["ready", "retest", "breakout"].includes(row.trendRetest.status))
+    .sort((a,b) => Number(b.trendRetest.status === "ready") - Number(a.trendRetest.status === "ready") || b.quoteVolume-a.quoteVolume)
+    .slice(0, CONFIG.trendRetest.supplyMaxSymbols);
+  if (supplyCandidates.length && canContinue(token)) {
+    const funding = await getPremiumIndexAll({ signal: token.controller.signal });
+    if (!canContinue(token)) return null;
+    const fundingAt = Date.now();
+    await Promise.all(supplyCandidates.map(async row => {
+      const oi = await getOpenInterestHist(row.symbol, "5m", 6, { signal: token.controller.signal, ttl: 60000 });
+      if (!canContinue(token)) return;
+      row.trendRetest.supply = observeSupply(row.supplyBars, Date.now(), { oi, funding: funding.get(row.symbol), fundingAt });
+    }));
+    if (!canContinue(token)) return null;
+  }
+  for (const row of rows) delete row.supplyBars;
+  return rows;
 }
 
 async function runEarlyPipeline(universe, now, token) {

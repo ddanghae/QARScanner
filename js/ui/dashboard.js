@@ -9,6 +9,7 @@ import { showDetail } from "./detail-panel.js";
 import { openTradingView } from "./tradingview.js";
 import { recordTrade } from "./paper.js";
 import { renderPatternResults } from "./pattern-results.js";
+import { hasExpiredRetestCards } from "./trend-retest.js";
 
 let resultsEl, statusEl, progressEl;
 
@@ -33,6 +34,11 @@ export function initDashboard() {
 
   renderStatus();
   renderResults();
+  // Remove expired review prices even when automatic network refresh is off.
+  const expiryTimer = setInterval(() => {
+    if (resultsEl && hasExpiredRetestCards(resultsEl)) renderResults();
+  }, 5000);
+  expiryTimer.unref?.();
 }
 
 function renderCountdown(e) {

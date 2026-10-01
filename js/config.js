@@ -4,6 +4,14 @@
 export const CONFIG = {
   version: 1,
 
+  // QAR 추세·수급 리테스트: 고정 실험 규칙. 성과로 보정된 확률/임계값이 아니다.
+  trendRetest: {
+    minFit: 55, lookbackBars: 24, retestBars: 12, confirmBars: 6, freshBars: 3,
+    retestAtr: 0.25, stopAtrBuffer: 0.25,
+    minStopPct: 0.3, maxStopPct: 8, minNetRR: 1.5, roundTripCostPct: 0.2,
+    supplyMaxSymbols: 10,
+  },
+
   // ---- Binance 공개 REST API ----
   api: {
     fapiBase: "https://fapi.binance.com",

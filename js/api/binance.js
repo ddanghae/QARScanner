@@ -167,15 +167,16 @@ export async function getMarkPrice(symbol) {
 
 // 미결제약정 추이 (공개). period: 5m/15m/30m/1h/2h/4h/6h/12h/1d, 최근 30일치만 제공.
 // 반환: [{ time, oi }] 과거→현재. 데이터 없으면 빈 배열.
-export async function getOpenInterestHist(symbol, period, limit) {
+export async function getOpenInterestHist(symbol, period, limit, options = {}) {
   const p = period || CONFIG.earlyDetect.oiPeriod;
   const lim = limit || CONFIG.earlyDetect.oiLimit;
   const path = `/futures/data/openInterestHist?symbol=${symbol}&period=${p}&limit=${lim}`;
   try {
-    const raw = await request(path, { ttl: CONFIG.cacheTtlMs["1h"], cacheKey: `oi:${symbol}:${p}:${lim}` });
+    const raw = await request(path, { ttl: CONFIG.cacheTtlMs["1h"], cacheKey: `oi:${symbol}:${p}:${lim}`, ...options });
     if (!Array.isArray(raw)) return [];
     return raw.map((r) => ({ time: r.timestamp, oi: +r.sumOpenInterest }));
   } catch (e) {
+    if (options.signal?.aborted) throw e;
     // 신규 상장 등으로 데이터가 없으면 빈 배열 (후보를 죽이지 않는다)
     console.warn(`미결제약정 조회 실패 (${symbol})`, e);
     return [];
@@ -183,15 +184,17 @@ export async function getOpenInterestHist(symbol, period, limit) {
 }
 
 // 전 종목 펀딩비 1회 호출 (심볼 미지정 → 배열). 반환: Map<symbol, lastFundingRate>
-export async function getPremiumIndexAll() {
+export async function getPremiumIndexAll(options = {}) {
   try {
     const raw = await request("/fapi/v1/premiumIndex", {
       ttl: CONFIG.cacheTtlMs.ticker24h,
       cacheKey: "premiumIndexAll",
+      ...options,
     });
     const arr = Array.isArray(raw) ? raw : [raw];
     return new Map(arr.map((r) => [r.symbol, +r.lastFundingRate]));
-  } catch {
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
     return new Map();
   }
 }

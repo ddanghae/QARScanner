@@ -8,6 +8,7 @@ import { assessSymbolDirection } from "../core/pattern-direction.js";
 import { derivePatternEntryCandidate } from "../core/pattern-entry.js";
 import { recordPatternTrade } from "./paper.js";
 import { earlyObservation, scanProfile } from "../core/scan-profile.js";
+import { retestRows, retestTabHtml, bindRetestControls } from "./trend-retest.js";
 
 let patternScanSide = "long";
 
@@ -17,6 +18,7 @@ export function renderPatternResults(resultsEl) {
   if (state.settings.showFavoritesOnly) baseRows = baseRows.filter((row) => state.settings.favorites.includes(row.symbol));
   if (state.settings.excludeNewListing) baseRows = baseRows.filter((row) => !row.newListing);
   if (state.settings.excluded.length) baseRows = baseRows.filter((row) => !state.settings.excluded.includes(row.symbol));
+  const retestCount = retestRows(baseRows).length;
   const fractalRows = baseRows.filter((row) => row.fractalContinuation?.matched)
     .sort((a, b) => Number(b.fractalContinuation.freshness?.status === "fresh") - Number(a.fractalContinuation.freshness?.status === "fresh")
       || Number(b.fractalContinuation.pattern?.fitScore) - Number(a.fractalContinuation.pattern?.fitScore)
@@ -66,18 +68,20 @@ export function renderPatternResults(resultsEl) {
       <button type="button" class="pattern-scan-tab ${patternScanSide === "long" ? "active long" : ""}" data-pattern-scan-side="long" aria-pressed="${patternScanSide === "long"}">롱 스캔 <b>${longRows.length}</b></button>
       <button type="button" class="pattern-scan-tab ${patternScanSide === "short" ? "active short" : ""}" data-pattern-scan-side="short" aria-pressed="${patternScanSide === "short"}">숏 스캔 <b>${shortRows.length}</b></button>
       <button type="button" class="pattern-scan-tab ${patternScanSide === "fractal" ? "active fractal" : ""}" data-pattern-scan-side="fractal" aria-pressed="${patternScanSide === "fractal"}">프랙탈 후보 <b>${fractalRows.length}</b></button>
+      <button type="button" class="pattern-scan-tab ${patternScanSide === "retest" ? "active retest" : ""}" data-pattern-scan-side="retest" aria-pressed="${patternScanSide === "retest"}">추세·수급 <b>${retestCount}</b></button>
     </div>
     ${scanMetaText ? `<p class="pattern-scan-meta" role="status">${escapeHtml(scanProfile(meta.scanProfile).label)} 결과 · ${escapeHtml(scanMetaText)}${meta.focusUpdatedAt ? ` · 상위 후보 갱신 ${fmtTime(meta.focusUpdatedAt)}${meta.focusFailedRequests ? ` · 추가 요청 실패 ${meta.focusFailedRequests}건` : ""}` : ""}</p>` : ""}
     ${patternScanSide === "early" ? `<p class="fractal-scan-note">공격적 탐색 · 마감 봉 기준. 조기 관찰은 진입 신호가 아닙니다. 손절·목표·손익비 조건을 충족한 경우에만 진입 구간을 표시합니다.</p>` : ""}
     ${patternScanSide === "fractal" ? `<p class="fractal-scan-note">5분봉 마감 기준 · 지속형 패턴 · 좌우 3봉으로 확정된 프랙탈 방향 일치. 과거 검증 대상은 주요 10종목이므로 현재 종목의 승률로 읽지 마세요. 패턴 분류 선택과 별도로 표시합니다.</p>` : ""}
-    <div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternScanSide === "early" ? earlyCardHtml : patternScanSide === "fractal" ? fractalCardHtml : patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>
+    ${patternScanSide === "retest" ? retestTabHtml(baseRows, state.patternScanMeta.requestedTimeframes?.length ? state.patternScanMeta.requestedTimeframes : selectedPatternTimeframes()) : `<div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternScanSide === "early" ? earlyCardHtml : patternScanSide === "fractal" ? fractalCardHtml : patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>`}
     <details class="pattern-method"><summary>TradingView에서 패턴 직접 감지</summary><p><a href="https://raw.githubusercontent.com/ddanghae/QARScanner/main/pine/qar_pattern_detector.pine" target="_blank" rel="noopener">멀티 시간봉 패턴 탐지 지표 코드 보기</a>를 Pine Editor에 붙여넣으면 차트 종목의 5분·15분·1시간·4시간 패턴을 각각 계산합니다. 패널에서 롱·숏 방향, 적합도, 완성률을 확인하고 새 패턴 알림을 설정할 수 있습니다. <a href="./docs/TRADINGVIEW-PATTERNS.md" target="_blank" rel="noopener">사용 방법</a></p></details>
-    <details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.1 ATR이며 각 방향 최대 기준 가격의 0.15%로 제한합니다. 돌파나 되돌림 확인을 기다리는 값이며, 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>
+    ${patternScanSide === "retest" ? "" : `<details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.1 ATR이며 각 방향 최대 기준 가격의 0.15%로 제한합니다. 돌파나 되돌림 확인을 기다리는 값이며, 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>`}
   `;
   resultsEl.querySelectorAll("[data-pattern-scan-side]").forEach((button) => button.addEventListener("click", () => {
     patternScanSide = button.dataset.patternScanSide;
     renderPatternResults(resultsEl);
   }));
+  bindRetestControls(resultsEl, () => renderPatternResults(resultsEl));
   resultsEl.querySelectorAll("[data-pattern-tv]").forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
     openTradingView(button.dataset.patternTv);

@@ -13,13 +13,19 @@ import { toast } from "./notifications.js";
 
 const KEY = "qar-paper";
 let listEl = null;
+let renderSequence = 0;
 const finalTargetOf = (rec) => rec.tp3 ?? rec.tp2;
 
 function load() {
-  try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
+  try {
+    const records = JSON.parse(localStorage.getItem(KEY) || "[]");
+    if (!Array.isArray(records) || records.some(row => !row || typeof row !== "object")) throw new Error("일지 형식 오류");
+    return records;
+  } catch { toast("기존 기록을 읽지 못했습니다. 원본 저장 데이터를 보존합니다.", "error"); return null; }
 }
 function save(list) {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* 용량 초과 무시 */ }
+  try { localStorage.setItem(KEY, JSON.stringify(list)); return true; }
+  catch { toast("기록을 저장하지 못했습니다. 브라우저 저장 공간을 확인하세요.", "error"); return false; }
 }
 
 // 순수 함수 — 기록 + 진입 이후 캔들 → 결말. 테스트가 이걸 본다.
@@ -56,12 +62,13 @@ function moneyOf(rec, r) {
 
 function appendRecord(record) {
   const list = load();
+  if (!list) return;
   if (list.some((x) => x.symbol === record.symbol && x.status !== "closed")) {
     toast(`${record.symbol} 은 이미 열린 기록이 있습니다.`, "info");
     return;
   }
-  list.unshift({ ...record, id: `${record.symbol}-${Date.now()}`, at: Date.now(), seed: state.settings.seedMoney, leverage: state.settings.leverage });
-  save(list);
+  list.unshift({ ...record, status: "open", id: `${record.symbol}-${Date.now()}`, at: Date.now(), seed: state.settings.seedMoney, leverage: state.settings.leverage });
+  if (!save(list)) return;
   toast(`${record.symbol} 기록했습니다.`, "success");
   render();
 }
@@ -120,7 +127,8 @@ export function initPaper() {
   listEl.addEventListener("click", (e) => {
     const del = e.target.dataset?.paperDel;
     if (!del) return;
-    save(load().filter((x) => x.id !== del));
+    const list = load();
+    if (!list || !save(list.filter((x) => x.id !== del))) return;
     render();
   });
   render();
@@ -128,7 +136,9 @@ export function initPaper() {
 
 export async function render() {
   if (!listEl) return;
+  const sequence = ++renderSequence;
   const list = load();
+  if (!list) { listEl.innerHTML = `<p class="muted">기록을 읽지 못했습니다. 원본 저장 데이터는 유지됩니다.</p>`; return; }
   if (!list.length) {
     listEl.innerHTML = `<p class="muted">스캔 결과에서 <b>기록</b> 을 누르면 여기에 쌓입니다. 실제 주문은 없습니다.</p>`;
     return;
@@ -136,16 +146,23 @@ export async function render() {
   listEl.innerHTML = `<p class="muted">불러오는 중…</p>`;
 
   const rows = [];
+  let changed = false;
   for (const rec of list) {
     let res;
     try {
-      const candles = await getKlines(rec.symbol, "4h", 200);
-      res = resolveTrade(rec, candles);
+      if (rec.status === "closed" && rec.outcome) res = rec.outcome;
+      else {
+        const candles = await getKlines(rec.symbol, "4h", 200);
+        res = resolveTrade(rec, candles);
+        if (res.status !== "open") { rec.status = "closed"; rec.outcome = res; rec.closeTs = res.exitAt; changed = true; }
+      }
     } catch {
       res = { status: "open", exitPx: rec.entry, exitAt: null, r: 0 };
     }
     rows.push({ rec, res });
   }
+  if (sequence !== renderSequence) return;
+  if (changed) save(list);
 
   const closed = rows.filter((x) => x.res.status !== "open");
   const wins = closed.filter((x) => x.res.status === "win").length;

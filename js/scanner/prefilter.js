@@ -50,6 +50,8 @@ export function stage2Liquidity(universe, tickers, nowMs, pfOverride) {
     const count = +t.count;
     const lastPrice = +t.lastPrice;
     const change24h = +t.priceChangePercent;
+    if (![quoteVolume, count, lastPrice, change24h].every(Number.isFinite)
+      || quoteVolume < 0 || count < 0 || lastPrice <= 0) continue;
     const newListing = isNewListing(u.onboardDate, nowMs);
     if (newListing) newListings.push(u.symbol);
 

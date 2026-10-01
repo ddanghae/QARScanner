@@ -15,6 +15,7 @@ import { detectChartPatterns, groupPatternsByTimeframe, patternCompletionPct } f
 import { assessFractalContinuation } from "../core/fractal-continuation.js";
 import { replayPatternHistory, signalFreshness } from "../core/pattern-validation.js";
 import { atr, ema } from "../core/indicators.js";
+import { scanProfile, selectPatternCandidates, earlyObservation, barActivity } from "../core/scan-profile.js";
 
 let activeRun = null;
 let runSequence = 0;
@@ -49,6 +50,7 @@ export function selectLatestFrame(frames) {
 export function abortScan() {
   if (!activeRun || activeRun.aborted) return;
   activeRun.aborted = true;
+  activeRun.controller.abort();
   state.scan.running = false;
   state.scan.phase = "idle";
   emit("scan:phase", "idle");
@@ -155,19 +157,22 @@ async function runTrendPipeline(universe, now, token) {
 const PATTERN_TIMEFRAMES = ["5m", "15m", "1h", "4h"];
 
 // 거래대금 상위 심볼만 검사하고, 선택한 시간봉별 결과는 합치지 않고 나란히 보존한다.
-async function runPatternPipeline(universe, now, token) {
+async function runPatternPipeline(universe, now, token, focusSymbols = null) {
+  const profile = scanProfile(token.settings.scanProfile);
   const configured = Array.isArray(token.settings.patternTimeframes)
     ? token.settings.patternTimeframes : [];
   const timeframes = PATTERN_TIMEFRAMES.filter((tf) => configured.includes(tf));
   if (!timeframes.length) timeframes.push(...PATTERN_TIMEFRAMES);
   state.patternScanMeta = { requestedTimeframes: timeframes, candidateCount: 0, completedRequests: 0, failedRequests: 0 };
   setPhase("prefilter", token);
-  const tickers = await getTicker24h();
+  const tickers = await getTicker24h({ signal: token.controller.signal });
   if (!canContinue(token)) return null;
   state.tickers = tickers;
   const { prefiltered, newListings } = stage2Liquidity(universe, tickers, now, {
     ...CONFIG.prefilter,
     minQuoteVolume: token.settings.minQuoteVolume ?? CONFIG.prefilter.minQuoteVolume,
+    topByVolume: profile === scanProfile("aggressive") ? universe.length
+      : Math.max(CONFIG.prefilter.topByVolume, Number(token.settings.patternScanLimit) || profile.limit),
   });
   state.prefiltered = prefiltered;
   state.newListings = newListings;
@@ -178,9 +183,12 @@ async function runPatternPipeline(universe, now, token) {
   const requestedLimit = Number(token.settings.patternScanLimit) || CONFIG.patternScanner.maxSymbols;
   const scanLimit = CONFIG.patternScanner.scanLimits.includes(requestedLimit)
     ? requestedLimit : CONFIG.patternScanner.maxSymbols;
-  const candidates = prefiltered.slice(0, scanLimit);
+  const candidates = focusSymbols
+    ? prefiltered.filter(item => focusSymbols.includes(item.symbol))
+    : selectPatternCandidates(prefiltered, token.settings, scanLimit);
   state.candidates = candidates;
   const patternStats = {
+    scanProfile: token.settings.scanProfile || "standard",
     requestedTimeframes: timeframes,
     candidateCount: candidates.length,
     completedRequests: 0,
@@ -193,10 +201,13 @@ async function runPatternPipeline(universe, now, token) {
   const analyzed = await mapWithProgress(candidates, async (item) => {
     const frameResults = await Promise.all(timeframes.map(async (timeframe) => {
       try {
-        const raw = await getKlines(item.symbol, timeframe, CONFIG.klinesLimit[timeframe]);
+        const raw = await getKlines(item.symbol, timeframe, CONFIG.klinesLimit[timeframe], {
+          signal: token.controller.signal, force: !!focusSymbols && ["5m", "15m"].includes(timeframe),
+        });
         const confirmedAt = Date.now();
         const confirmedBars = raw.filter((bar) => Number.isFinite(Number(bar.closeTime)) && Number(bar.closeTime) < confirmedAt);
-        const bars = token.settings.includeRealtimeCandle ? raw : confirmedBars;
+        const realtime = token.settings.scanProfile !== "aggressive" && token.settings.includeRealtimeCandle;
+        const bars = realtime ? raw : confirmedBars;
         const closes = bars.map((bar) => bar.close);
         const ema200 = ema(closes, 200).at(-1);
         const atr14 = atr(bars, 14).at(-1);
@@ -208,7 +219,7 @@ async function runPatternPipeline(universe, now, token) {
             distancePct: (lastClose / ema200 - 1) * 100,
           }
           : null;
-        const patterns = detectChartPatterns(bars, { pivotDepth: CONFIG.patternScanner.pivotDepth })
+        const patterns = detectChartPatterns(bars, { pivotDepth: profile.pivotDepth })
           .map((pattern) => ({
             ...pattern,
             completionPct: patternCompletionPct(pattern, bars.at(-1)?.close),
@@ -230,8 +241,9 @@ async function runPatternPipeline(universe, now, token) {
           atr14: Number.isFinite(atr14) ? atr14 : null,
           ema200: ema200Context,
           latestCandleTime,
-          freshness: signalFreshness(latestCandleTime, timeframe, Date.now(), token.settings.includeRealtimeCandle),
-          validation: patterns.length ? replayPatternHistory(bars, {
+          freshness: signalFreshness(latestCandleTime, timeframe, Date.now(), realtime),
+          activity: barActivity(confirmedBars),
+          validation: token.settings.scanProfile !== "aggressive" && patterns.length ? replayPatternHistory(bars, {
             pivotDepth: CONFIG.patternScanner.pivotDepth,
             horizonBars: timeframe === "4h" ? 8 : 12,
             warmup: timeframe === "4h" ? 80 : 60,
@@ -247,14 +259,16 @@ async function runPatternPipeline(universe, now, token) {
     }));
     patternStats.completedRequests += frameResults.length;
     patternStats.failedRequests += frameResults.filter((frame) => frame.error).length;
+    if (frameResults.every(frame => frame.error)) token.failedSymbols.add(item.symbol);
     const patterns = groupPatternsByTimeframe(Object.fromEntries(
       frameResults.map(({ timeframe, patterns: found }) => [timeframe, found]),
     ));
     const fractalContinuation = frameResults.find((frame) => frame.timeframe === "5m")?.fractalContinuation || null;
-    if (!patterns.length && !fractalContinuation?.matched) return null;
     const failedTimeframes = frameResults.filter((frame) => frame.error).map((frame) => frame.timeframe);
     const latestFrame = selectLatestFrame(frameResults);
-    return {
+    const row = {
+      scanProfile: token.settings.scanProfile || "standard",
+      explorationReason: item.explorationReason,
       symbol: item.symbol,
       baseAsset: item.baseAsset,
       price: latestFrame?.bars.at(-1)?.close ?? item.lastPrice,
@@ -270,7 +284,10 @@ async function runPatternPipeline(universe, now, token) {
       ema200ByTimeframe: Object.fromEntries(frameResults.map((frame) => [frame.timeframe, frame.ema200 || null])),
       fractalContinuation,
       patterns,
+      activityByTimeframe: Object.fromEntries(frameResults.map(frame => [frame.timeframe, frame.activity || null])),
     };
+    row.earlyObservation = row.scanProfile === "aggressive" ? earlyObservation(row) : null;
+    return patterns.length || fractalContinuation?.matched || row.earlyObservation ? row : null;
   }, null, token);
   if (!canContinue(token)) return null;
   state.patternScanMeta = patternStats;
@@ -339,9 +356,15 @@ async function runEarlyPipeline(universe, now, token) {
   return results;
 }
 
-export async function runScan() {
+export async function runScan({ focus = false } = {}) {
   if (state.scan.running) return;
-  const token = { id: ++runSequence, aborted: false, settings: snapshotSettings() };
+  const token = { id: ++runSequence, aborted: false, settings: snapshotSettings(), controller: new AbortController(), failedSymbols: new Set() };
+  const focusSymbols = focus && token.settings.scanProfile === "aggressive"
+    && state.patternScanMeta.settingsKey === patternSettingsKey(token.settings)
+    ? state.patternResults.slice(0, 20).map(row => row.symbol) : null;
+  token.focusSymbols = focusSymbols?.length ? focusSymbols : null;
+  const previousRows = state.patternResults.slice();
+  const previousMeta = { ...state.patternScanMeta };
   activeRun = token;
   state.scan.running = true;
   state.scan.error = null;
@@ -353,7 +376,7 @@ export async function runScan() {
 
     // --- 1단계: 전체 종목 수집 ---
     setPhase("universe", token);
-    const symbols = await getExchangeInfo();
+    const symbols = await getExchangeInfo({ signal: token.controller.signal });
     if (!canContinue(token)) return finishAborted(token);
     const universe = stage1Universe(symbols);
     state.universe = universe;
@@ -367,8 +390,19 @@ export async function runScan() {
     }
 
     if (token.settings.scanMode === "patterns") {
-      const patternResults = await runPatternPipeline(universe, now, token);
+      const patternResults = await runPatternPipeline(universe, now, token, token.focusSymbols);
       if (patternResults === null) return finishAborted(token);
+      if (token.focusSymbols) {
+        const changed = new Map(patternResults.map(row => [row.symbol, row]));
+        const merged = previousRows.flatMap(row => !token.focusSymbols.includes(row.symbol) || token.failedSymbols.has(row.symbol)
+          ? [row] : changed.has(row.symbol) ? [changed.get(row.symbol)] : []);
+        const partialFailed = state.patternScanMeta.failedRequests;
+        state.patternScanMeta = { ...previousMeta, focusUpdatedAt: Date.now(), focusFailedRequests: partialFailed };
+        emit("scan:focus-done", { failedRequests: partialFailed });
+        return finishPatternScan(merged, token);
+      }
+      state.patternScanMeta.settingsKey = patternSettingsKey(token.settings);
+      state.patternScanMeta.fullUpdatedAt = Date.now();
       return finishPatternScan(patternResults, token);
     }
 
@@ -469,7 +503,7 @@ function finishPatternScan(analyzed, token) {
 }
 
 function maxPatternFit(row) {
-  return Math.max(0, ...row.patterns.flatMap((pattern) =>
+  return Math.max(row.earlyObservation?.fitScore || 0, ...row.patterns.flatMap((pattern) =>
     Object.values(pattern.timeframes || {}).map((frame) => Number(frame.fitScore) || 0)));
 }
 
@@ -487,6 +521,10 @@ function finishAborted(token) {
 let refreshTimer = null;
 let tickTimer = null;
 let nextRefreshAt = 0;
+function patternSettingsKey(settings) {
+  return JSON.stringify([settings.scanProfile, settings.patternScanLimit, settings.minQuoteVolume,
+    settings.patternTimeframes, settings.favorites, settings.excluded, settings.includeRealtimeCandle]);
+}
 
 // 순수 함수 — 다음 갱신까지 지연(ms). 백그라운드면 배수 적용. 테스트 대상.
 export function nextRefreshDelay(intervalMs, backgrounded) {
@@ -516,11 +554,15 @@ export function stopAutoRefresh() {
 export function isAutoRefreshOn() { return !!refreshTimer || !!tickTimer; }
 
 function scheduleNext() {
-  const delay = nextRefreshDelay(state.settings.refreshIntervalMs, !!state.backgrounded);
+  const aggressive = state.settings.scanProfile === "aggressive";
+  const delay = nextRefreshDelay(aggressive ? 30_000 : state.settings.refreshIntervalMs, !!state.backgrounded);
   nextRefreshAt = Date.now() + delay;
   refreshTimer = setTimeout(async () => {
     if (!state.scan.running) {
-      try { await runScan(); } catch (e) { console.warn("자동 갱신 실패", e); }
+      const fullInterval = Math.max(90_000, state.settings.refreshIntervalMs);
+      const focus = aggressive && !state.backgrounded
+        && Date.now() - (state.patternScanMeta.fullUpdatedAt || 0) < fullInterval;
+      try { await runScan({ focus }); } catch (e) { console.warn("자동 갱신 실패", e); }
     }
     if (tickTimer || refreshTimer) scheduleNext(); // 여전히 활성일 때만 재예약
   }, delay);

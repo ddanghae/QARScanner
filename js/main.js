@@ -10,6 +10,8 @@ import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
 
 function boot() {
+  let focusUpdate = null;
+  on("scan:focus-done", (meta) => { focusUpdate = meta; });
   initSettingsUI();
   initDetailPanel();
   initDashboard();
@@ -27,10 +29,16 @@ function boot() {
   on("scan:error", (msg) => notifyError(null, msg));
   // 목록과 같은 필터를 통과한 수. 스캔 단계 숫자를 쓰면 화면엔 5줄인데 12개라 뜬다.
   on("scan:done", () => {
+    if (focusUpdate) {
+      const failed = focusUpdate.failedRequests;
+      focusUpdate = null;
+      if (failed) toast(`상위 후보 갱신 · 요청 실패 ${failed}건`, "warn");
+      return;
+    }
     const count = state.settings.scanMode === "patterns" ? state.patternResults.length : applyFilters(state.results).length;
     const failed = state.patternScanMeta?.failedRequests || 0;
     const suffix = state.settings.scanMode === "patterns" && failed ? ` · 요청 실패 ${failed}건` : "";
-    toast(state.settings.scanMode === "patterns" ? `패턴 감지 완료 — ${count}종목${suffix}` : `스캔 완료 — 후보 ${count}개`, "success");
+    toast(state.settings.scanMode === "patterns" ? `패턴 감지 완료 — ${count}종목${suffix}` : `스캔 완료 — 후보 ${count}개`, failed ? "warn" : "success");
   });
   on("scan:aborted", () => toast("스캔을 중단했습니다.", "info"));
   document.addEventListener("tv:popup-blocked", () => notifyError("tvPopup"));

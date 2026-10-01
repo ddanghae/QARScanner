@@ -12,7 +12,8 @@
     "test:app": "node tests/run.js",
     "test:runner": "node research/run-tests.mjs",
     "test:preview": "node --test tests/preview-server.test.js",
-    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner",
+    "test:runtime": "node --test tests/scan-runtime.test.js",
+    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime",
     "harness": "npm test",
     "serve": "node scripts/serve.mjs"
   }

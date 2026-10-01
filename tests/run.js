@@ -1,43 +1,11 @@
 // tests/run.js — 모든 테스트 실행. Node: `node tests/run.js`. 브라우저: index.html.
 
 import { report, reset } from "./harness.js";
-import { run as indicators } from "./indicators.test.js";
-import { run as structure } from "./structure.test.js";
-import { run as liquidity } from "./liquidity.test.js";
-import { run as scoring } from "./scoring.test.js";
-import { run as goldenCross } from "./golden-cross.test.js";
-import { run as noise } from "./noise.test.js";
-import { run as earlyDetect } from "./early-detect.test.js";
-import { run as repaint } from "./repaint.test.js";
-import { run as refresh } from "./refresh.test.js";
-import { run as paperCorr } from "./paper-corr.test.js";
-import { run as strategies } from "./strategies.test.js";
-import { run as chartPatterns } from "./chart-patterns.test.js";
-import { run as patternEntry } from "./pattern-entry.test.js";
-import { run as format } from "./format.test.js";
-import { run as scanner } from "./scanner.test.js";
-import { run as patternValidation } from "./pattern-validation.test.js";
-import { run as fractalContinuation } from "./fractal-continuation.test.js";
+import { suites } from "./suites.js";
 
 export function runAll() {
   reset();
-  indicators();
-  structure();
-  liquidity();
-  scoring();
-  goldenCross();
-  noise();
-  earlyDetect();
-  repaint();
-  refresh();
-  paperCorr();
-  strategies();
-  chartPatterns();
-  patternEntry();
-  format();
-  scanner();
-  patternValidation();
-  fractalContinuation();
+  for (const suite of suites) suite.run();
   return report();
 }
 

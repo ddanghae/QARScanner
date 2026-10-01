@@ -93,6 +93,12 @@
                 <label><input type="checkbox" id="filter-pattern-tf-4h" value="4h" /> 4시간</label>
               </div>
             </div>
+            <label id="pattern-profile-control">탐색 성향
+              <select id="filter-scan-profile">
+                <option value="standard">기본</option>
+                <option value="aggressive">공격적 · 조기 후보 확대</option>
+              </select>
+            </label>
             <label id="pattern-scan-limit-control" hidden>검사 범위
               <select id="filter-pattern-limit">
                 <option value="50">상위 50</option>
@@ -128,6 +134,7 @@
             </label>
             <label>최소 거래대금 · 다음 스캔부터
               <select id="filter-minvolume">
+                <option value="5000000">5M</option>
                 <option value="10000000">10M</option>
                 <option value="20000000">20M</option>
                 <option value="50000000">50M</option>

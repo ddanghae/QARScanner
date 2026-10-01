@@ -7,6 +7,7 @@ import { patternCompletionPct, patternFamilyLabel } from "../core/chart-patterns
 import { assessSymbolDirection } from "../core/pattern-direction.js";
 import { derivePatternEntryCandidate } from "../core/pattern-entry.js";
 import { recordPatternTrade } from "./paper.js";
+import { earlyObservation, scanProfile } from "../core/scan-profile.js";
 
 let patternScanSide = "long";
 
@@ -20,10 +21,10 @@ export function renderPatternResults(resultsEl) {
     .sort((a, b) => Number(b.fractalContinuation.freshness?.status === "fresh") - Number(a.fractalContinuation.freshness?.status === "fresh")
       || Number(b.fractalContinuation.pattern?.fitScore) - Number(a.fractalContinuation.pattern?.fitScore)
       || b.quoteVolume - a.quoteVolume);
-  const rows = baseRows.map((row) => ({
+  const preparedRows = baseRows.map((row) => ({
     ...row,
     patterns: row.patterns.filter((p) => family === "all" || p.family === family),
-  })).filter((row) => row.patterns.length).map((row) => ({
+  })).map((row) => ({
     ...row,
     entryCandidate: derivePatternEntryCandidate({
       patterns: row.patterns,
@@ -33,13 +34,18 @@ export function renderPatternResults(resultsEl) {
       price: row.price,
     }),
   }));
+  const rows = preparedRows.filter(row => row.patterns.length);
+  const earlyRows = preparedRows.filter(row => row.scanProfile === "aggressive")
+    .map(row => ({ ...row, earlyObservation: earlyObservation(row) }))
+    .filter(row => row.earlyObservation)
+    .sort((a,b) => b.earlyObservation.fitScore-a.earlyObservation.fitScore || b.quoteVolume-a.quoteVolume);
   const longRows = rows.filter((row) => row.entryCandidate.direction === "long")
     .sort((a, b) => (b.entryCandidate.assessment.overall?.longPct || 0) - (a.entryCandidate.assessment.overall?.longPct || 0)
       || bestRowPatternFit(b) - bestRowPatternFit(a) || b.quoteVolume - a.quoteVolume);
   const shortRows = rows.filter((row) => row.entryCandidate.direction === "short")
     .sort((a, b) => (b.entryCandidate.assessment.overall?.shortPct || 0) - (a.entryCandidate.assessment.overall?.shortPct || 0)
       || bestRowPatternFit(b) - bestRowPatternFit(a) || b.quoteVolume - a.quoteVolume);
-  const visibleRows = patternScanSide === "fractal" ? fractalRows : patternScanSide === "short" ? shortRows : longRows;
+  const visibleRows = patternScanSide === "early" ? earlyRows : patternScanSide === "fractal" ? fractalRows : patternScanSide === "short" ? shortRows : longRows;
   const rankedRows = visibleRows.map((row, index) => ({ ...row, rank: index + 1, scanSide: patternScanSide }));
   const emptySideMessage = patternScanSide === "fractal" && !(state.patternScanMeta.requestedTimeframes || []).includes("5m") && state.scan.phase === "done"
     ? "5분봉을 선택한 뒤 다시 스캔하세요."
@@ -55,14 +61,16 @@ export function renderPatternResults(resultsEl) {
     ? `검사 범위 ${meta.candidateCount}종목 · 시간봉 요청 ${meta.completedRequests}/${meta.candidateCount * meta.requestedTimeframes.length}${meta.failedRequests ? ` · 요청 실패 ${meta.failedRequests}건` : ""}`
     : "";
   resultsEl.innerHTML = `
-    <div class="pattern-scan-tabs" role="group" aria-label="패턴 스캔 결과 보기">
+    <div class="pattern-scan-tabs ${state.settings.scanProfile === "aggressive" || earlyRows.length ? "with-early" : ""}" role="group" aria-label="패턴 스캔 결과 보기">
+      ${state.settings.scanProfile === "aggressive" || earlyRows.length ? `<button type="button" class="pattern-scan-tab ${patternScanSide === "early" ? "active" : ""}" data-pattern-scan-side="early" aria-pressed="${patternScanSide === "early"}">조기 관찰 <b>${earlyRows.length}</b></button>` : ""}
       <button type="button" class="pattern-scan-tab ${patternScanSide === "long" ? "active long" : ""}" data-pattern-scan-side="long" aria-pressed="${patternScanSide === "long"}">롱 스캔 <b>${longRows.length}</b></button>
       <button type="button" class="pattern-scan-tab ${patternScanSide === "short" ? "active short" : ""}" data-pattern-scan-side="short" aria-pressed="${patternScanSide === "short"}">숏 스캔 <b>${shortRows.length}</b></button>
       <button type="button" class="pattern-scan-tab ${patternScanSide === "fractal" ? "active fractal" : ""}" data-pattern-scan-side="fractal" aria-pressed="${patternScanSide === "fractal"}">프랙탈 후보 <b>${fractalRows.length}</b></button>
     </div>
-    ${scanMetaText ? `<p class="pattern-scan-meta" role="status">${escapeHtml(scanMetaText)}</p>` : ""}
+    ${scanMetaText ? `<p class="pattern-scan-meta" role="status">${escapeHtml(scanProfile(meta.scanProfile).label)} 결과 · ${escapeHtml(scanMetaText)}${meta.focusUpdatedAt ? ` · 상위 후보 갱신 ${fmtTime(meta.focusUpdatedAt)}${meta.focusFailedRequests ? ` · 추가 요청 실패 ${meta.focusFailedRequests}건` : ""}` : ""}</p>` : ""}
+    ${patternScanSide === "early" ? `<p class="fractal-scan-note">공격적 탐색 · 마감 봉 기준. 조기 관찰은 진입 신호가 아닙니다. 손절·목표·손익비 조건을 충족한 경우에만 진입 구간을 표시합니다.</p>` : ""}
     ${patternScanSide === "fractal" ? `<p class="fractal-scan-note">5분봉 마감 기준 · 지속형 패턴 · 좌우 3봉으로 확정된 프랙탈 방향 일치. 과거 검증 대상은 주요 10종목이므로 현재 종목의 승률로 읽지 마세요. 패턴 분류 선택과 별도로 표시합니다.</p>` : ""}
-    <div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternScanSide === "fractal" ? fractalCardHtml : patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>
+    <div class="pattern-cards">${rankedRows.length ? rankedRows.map(patternScanSide === "early" ? earlyCardHtml : patternScanSide === "fractal" ? fractalCardHtml : patternCardHtml).join("") : `<div class="empty pattern-side-empty"><div class="scan-empty-icon" aria-hidden="true">⌖</div><strong>다음 움직임을 탐색하세요</strong><p>${emptySideMessage}</p><span class="empty-timeframes">${escapeHtml(selectedPatternTimeframes().join(" · "))}</span></div>`}</div>
     <details class="pattern-method"><summary>TradingView에서 패턴 직접 감지</summary><p><a href="https://raw.githubusercontent.com/ddanghae/QARScanner/main/pine/qar_pattern_detector.pine" target="_blank" rel="noopener">멀티 시간봉 패턴 탐지 지표 코드 보기</a>를 Pine Editor에 붙여넣으면 차트 종목의 5분·15분·1시간·4시간 패턴을 각각 계산합니다. 패널에서 롱·숏 방향, 적합도, 완성률을 확인하고 새 패턴 알림을 설정할 수 있습니다. <a href="./docs/TRADINGVIEW-PATTERNS.md" target="_blank" rel="noopener">사용 방법</a></p></details>
     <details class="pattern-method"><summary>비율·타점 산정 방식</summary><p>종목별 롱/숏 비율은 패턴 근거 60%, EMA200 위치 40%를 반영하며 4시간봉에 더 큰 가중치를 둡니다. 타점 후보는 종합 방향 60%·패턴 방향 55% 이상, 구조선 완비, 손익비 1.5 이상일 때만 표시합니다. 진입 후보 구간은 기준선 ± 0.1 ATR이며 각 방향 최대 기준 가격의 0.15%로 제한합니다. 돌파나 되돌림 확인을 기다리는 값이며, 비율과 적합도는 승률이나 실제 확률이 아닙니다. 자세한 내용은 <a href="./docs/CHART-PATTERNS.md" target="_blank" rel="noopener">패턴 안내</a>를 확인하세요.</p></details>
   `;
@@ -79,6 +87,22 @@ export function renderPatternResults(resultsEl) {
     const row = rows.find((item) => item.symbol === button.dataset.patternRecord);
     if (row) recordPatternTrade(row);
   }));
+}
+
+function earlyCardHtml(row) {
+  const observation = row.earlyObservation;
+  const long = observation.direction === "long";
+  const candidate = row.entryCandidate.direction === observation.direction ? row.entryCandidate
+    : { direction: observation.direction, title: "조기 관찰 · 진입 조건 대기", reason: "상위 시간봉과 방향을 포함한 기존 진입 조건을 통과하지 않았습니다." };
+  return `<section class="pattern-card ${long ? "scan-long" : "scan-short"}">
+    <div class="pattern-card-top"><div class="pattern-card-symbol"><small>#${row.rank}</small><strong>${escapeHtml(row.symbol)}</strong></div><span class="pattern-card-price">${fmtPrice(row.price)}</span></div>
+    <div class="pattern-card-volume">${long ? "롱" : "숏"} · ${escapeHtml(observation.stage)} · 거래대금 ${fmtVolume(row.quoteVolume)} · ${escapeHtml(row.explorationReason || "탐색 후보")}</div>
+    <p>${escapeHtml(observation.reason)}</p>
+    ${freshnessHtml(row)}
+    <p class="fractal-card-caution">${observation.warnings.map(escapeHtml).join(" · ")}</p>
+    ${patternEntryCandidateHtml({ ...row, entryCandidate: candidate })}
+    <div class="pattern-card-actions"><button class="btn-mini tv" data-pattern-tv="${escapeHtml(row.symbol)}">TradingView 차트</button></div>
+  </section>`;
 }
 
 function patternSymbolJudgmentHtml(row) {

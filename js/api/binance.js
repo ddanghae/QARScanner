@@ -9,16 +9,25 @@ const BASE = CONFIG.api.fapiBase;
 // ---- 동시 요청 세마포어 ----
 let active = 0;
 const queue = [];
-function acquire() {
-  return new Promise((resolve) => {
+function acquire(signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException("스캔 중단", "AbortError")); return; }
+    const cancel = () => {
+      const index = queue.indexOf(tryRun);
+      if (index >= 0) queue.splice(index, 1);
+      signal?.removeEventListener("abort", cancel);
+      reject(new DOMException("스캔 중단", "AbortError"));
+    };
     const tryRun = () => {
       if (active < CONFIG.api.maxConcurrent) {
+        signal?.removeEventListener("abort", cancel);
         active++;
         resolve();
       } else {
         queue.push(tryRun);
       }
     };
+    signal?.addEventListener("abort", cancel, { once: true });
     tryRun();
   });
 }
@@ -42,9 +51,12 @@ function cacheSet(key, data, ttl) {
 export function clearCache() { cache.clear(); }
 
 // ---- 저수준 fetch: 타임아웃 + 재시도 + 백오프 ----
-async function rawFetch(path, { timeoutMs = CONFIG.api.requestTimeoutMs } = {}) {
+async function rawFetch(path, { timeoutMs = CONFIG.api.requestTimeoutMs, signal } = {}) {
   const url = BASE + path;
   const ctrl = new AbortController();
+  const cancel = () => ctrl.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) ctrl.abort();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: ctrl.signal, headers: { "Accept": "application/json" } });
@@ -54,6 +66,10 @@ async function rawFetch(path, { timeoutMs = CONFIG.api.requestTimeoutMs } = {}) 
     if (res.status === 429 || res.status === 418) {
       const err = new Error(`레이트리밋 (${res.status})`);
       err.rateLimited = true;
+      const value = res.headers.get("Retry-After");
+      const seconds = value == null ? NaN : Number(value);
+      const duration = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now();
+      err.retryAfterMs = Math.max(0, Number.isFinite(duration) ? duration : 30_000);
       throw err;
     }
     if (!res.ok) {
@@ -63,26 +79,31 @@ async function rawFetch(path, { timeoutMs = CONFIG.api.requestTimeoutMs } = {}) 
     return await res.json();
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
 }
 
-async function request(path, { ttl = 0, cacheKey } = {}) {
+async function request(path, { ttl = 0, cacheKey, signal, force = false } = {}) {
+  if (signal?.aborted) throw new DOMException("스캔 중단", "AbortError");
   const key = cacheKey || path;
-  if (ttl > 0) {
+  if (ttl > 0 && !force) {
     const cached = cacheGet(key);
     if (cached !== undefined) return cached;
   }
-  await acquire();
+  await acquire(signal);
   let attempt = 0;
   try {
     while (true) {
       try {
-        const data = await rawFetch(path);
+        if (signal?.aborted) throw new DOMException("스캔 중단", "AbortError");
+        const data = await rawFetch(path, { signal });
+        if (signal?.aborted) throw new DOMException("스캔 중단", "AbortError");
         state.apiHealth.connected = true;
         state.apiHealth.lastError = null;
         if (ttl > 0) cacheSet(key, data, ttl);
         return data;
       } catch (e) {
+        if (signal?.aborted) throw new DOMException("스캔 중단", "AbortError");
         attempt++;
         const canRetry = attempt <= CONFIG.api.maxRetries;
         if (!canRetry) {
@@ -91,8 +112,8 @@ async function request(path, { ttl = 0, cacheKey } = {}) {
           throw e;
         }
         // 레이트리밋이면 더 길게 대기
-        const backoff = CONFIG.api.retryBackoffMs * attempt * (e.rateLimited ? 3 : 1);
-        await sleep(backoff);
+        const backoff = Math.max(CONFIG.api.retryBackoffMs * attempt * (e.rateLimited ? 3 : 1), e.retryAfterMs || 0);
+        await sleep(backoff, signal);
       }
     }
   } finally {
@@ -100,33 +121,42 @@ async function request(path, { ttl = 0, cacheKey } = {}) {
   }
 }
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException("스캔 중단", "AbortError")); return; }
+    const cancel = () => { clearTimeout(timer); signal?.removeEventListener("abort", cancel); reject(new DOMException("스캔 중단", "AbortError")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, ms);
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
 
 // ---- 공개 엔드포인트 ----
 
 // 거래 가능한 USDT 무기한 선물 종목 메타
-export async function getExchangeInfo() {
+export async function getExchangeInfo(options = {}) {
   const data = await request("/fapi/v1/exchangeInfo", {
     ttl: CONFIG.cacheTtlMs.exchangeInfo,
     cacheKey: "exchangeInfo",
+    ...options,
   });
   return data.symbols || [];
 }
 
 // 24시간 티커 전체 (배열)
-export async function getTicker24h() {
+export async function getTicker24h(options = {}) {
   return request("/fapi/v1/ticker/24hr", {
     ttl: CONFIG.cacheTtlMs.ticker24h,
     cacheKey: "ticker24h",
+    ...options,
   });
 }
 
 // 단일 심볼 캔들. interval: 5m/15m/1h/4h ...
-export async function getKlines(symbol, interval, limit) {
+export async function getKlines(symbol, interval, limit, options = {}) {
   const lim = limit || CONFIG.klinesLimit[interval] || 200;
   const ttl = CONFIG.cacheTtlMs[interval] || 60000;
   const path = `/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${lim}`;
-  const raw = await request(path, { ttl, cacheKey: `k:${symbol}:${interval}:${lim}` });
+  const raw = await request(path, { ttl, cacheKey: `k:${symbol}:${interval}:${lim}`, ...options });
   return parseKlines(raw);
 }
 

@@ -4,6 +4,7 @@
 import { state, updateSettings, resetSettings, emit } from "../state.js";
 import { CONFIG, strictnessPreset } from "../config.js";
 import { toast } from "./notifications.js";
+import { scanProfile } from "../core/scan-profile.js";
 
 // 체크박스 설정 — 하나의 설정이 필터 바 + 설정 탭 양쪽에 있을 수 있어 id 를 배열로 둔다(twin).
 const CHECK_BINDINGS = [
@@ -69,6 +70,14 @@ export function applyFilters(results) {
 
 // 필터 바 + 설정 탭 초기화
 export function initSettingsUI() {
+  const profileSelect = document.getElementById("filter-scan-profile");
+  profileSelect?.addEventListener("change", () => {
+    const profile = scanProfile(profileSelect.value);
+    updateSettings({ scanProfile: profileSelect.value === "aggressive" ? "aggressive" : "standard",
+      minQuoteVolume: profile.minQuoteVolume, patternScanLimit: profile.limit });
+    syncControls();
+    toast(`${profile.label} 탐색을 선택했습니다. 거래대금·검사 범위가 바뀌며 다음 스캔부터 적용됩니다.`, "info");
+  });
   bindSelect("filter-scanmode", "scanMode");
   bindPatternTimeframes();
   const patternLimit = document.getElementById("filter-pattern-limit");
@@ -226,6 +235,7 @@ export function syncControls() {
     setChk(`filter-pattern-tf-${timeframe}`, selectedTimeframes.includes(timeframe));
   }
   setVal("filter-pattern-limit", s.patternScanLimit);
+  setVal("filter-scan-profile", s.scanProfile || "standard");
   setVal("filter-pattern-family", s.patternFamily);
   syncModeControls(s.scanMode);
   setVal("filter-direction", s.direction);
@@ -257,7 +267,7 @@ function syncModeControls(mode) {
   const early = mode === "early";
   const trend = mode === "trend";
   const patterns = mode === "patterns";
-  for (const id of ["pattern-timeframes-control", "pattern-scan-limit-control", "pattern-family-control", "pattern-scan-note"]) {
+  for (const id of ["pattern-profile-control", "pattern-timeframes-control", "pattern-scan-limit-control", "pattern-family-control", "pattern-scan-note"]) {
     const el = document.getElementById(id);
     if (el) el.hidden = !patterns;
   }

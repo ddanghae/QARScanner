@@ -563,3 +563,7 @@ a { color:var(--accent); }
 .retest-supply span,.retest-supply p,.retest-supply small { font-size:11px; color:var(--muted); line-height:1.6; }
 .retest-supply ul { font-size:12px; line-height:1.7; padding-left:17px; }
 .retest-plan { margin-top:14px; }
+.aggressive-filter { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+.aggressive-filter .btn-mini { min-height:44px; }
+.aggressive-filter .selected { border-color:var(--accent); color:var(--accent); background:var(--surface); }
+.aggressive-filter small { flex-basis:100%; color:var(--muted); line-height:1.6; }

@@ -83,10 +83,10 @@ function chart(r,p,large=false){
  c.forEach((b,k)=>{const xx=x(k+start),color=b.c>=b.o?'#609e8d':'#9a6973';s+=`<line x1="${xx}" x2="${xx}" y1="${y(b.h)}" y2="${y(b.l)}" stroke="${color}"/><rect x="${xx-bw/2}" y="${Math.min(y(b.o),y(b.c))}" width="${bw}" height="${Math.max(1,Math.abs(y(b.o)-y(b.c)))}" fill="${color}"/>`;});
  const neckY=y(p.neck);s+=`<line x1="${left}" x2="${W-right+3}" y1="${neckY}" y2="${neckY}" stroke="#718898" stroke-dasharray="5 5"/><text x="${W-right+7}" y="${neckY+3}" fill="#9aafb9" font-size="10">${plan?'':'넥라인'}</text>`;
  for(const level of levels){const yy=y(level.price);s+=`<g data-level="${level.label}"><line x1="${x(p.entryIndex)}" x2="${W-right+3}" y1="${yy}" y2="${yy}" stroke="${level.color}" stroke-dasharray="${level.label==='타점'?'2 4':'6 3'}"/><text x="${W-right+7}" y="${yy+3}" fill="${level.color}" font-size="11">${level.label} ${price(level.price)}</text></g>`;}
- const points=[[p.peakIndex,r.c[p.peakIndex].h],[p.l1Index,p.l1],[p.neckIndex,p.neck]];
- if(p.l2Index!==undefined)points.push([p.l2Index,p.l2]);if(p.entryIndex!==undefined)points.push([p.entryIndex,p.entry]);
+ const points=E.structurePoints(r.c,p);
  s+=`<polyline points="${points.map(([i,v])=>x(i)+','+y(v)).join(' ')}" fill="none" stroke="${p.stage==='ENTRY'?'#6ee7b7':'#a7c6d6'}" stroke-width="2.3" stroke-linejoin="round" opacity=".85"/>`;
  [[p.l1Index,p.l1,'L1'],[p.l2Index,p.l2,'L2']].filter(v=>v[0]!==undefined).forEach(([i,v,label])=>{s+=`<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="#d4e6e7"/><text x="${x(i)}" y="${y(v)+16}" fill="#b7ced5" text-anchor="middle" font-size="10">${label}</text>`;});
+ if(p.bounceIndex!==undefined&&p.bounce!==undefined)s+=`<circle cx="${x(p.bounceIndex)}" cy="${y(p.bounce)}" r="3" fill="#86b9ff"/><text x="${x(p.bounceIndex)}" y="${y(p.bounce)-9}" fill="#86b9ff" text-anchor="middle" font-size="9">반등</text>`;
  if(p.entryIndex!==undefined)s+=`<circle cx="${x(p.entryIndex)}" cy="${y(p.entry)}" r="4" fill="#6ee7b7"/><text x="${x(p.entryIndex)}" y="${y(p.entry)-10}" fill="#6ee7b7" text-anchor="middle" font-size="11">타점</text>`;
  s+=`<text x="${left}" y="${H-4}" fill="#708891" font-size="9">${time(c[0].t)}</text><text x="${W-right}" y="${H-4}" text-anchor="end" fill="#708891" font-size="9">${time(c.at(-1).t)}</text></svg>`;return s;
 }

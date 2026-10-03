@@ -1,5 +1,5 @@
 'use strict';
-const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.6,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15,maxCandidates:6,maxSeeds:12,retryBars:6,maxAttempts:3,maxResets:2,retestBars:6,retestATR:.15});
+const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.25,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15,maxCandidates:6,maxSeeds:12,retryBars:6,maxAttempts:3,maxResets:2,retestBars:6,retestATR:.15});
 const mean=a=>a.reduce((s,x)=>s+x,0)/(a.length||1);
 function atrAt(c,i){return mean(c.slice(Math.max(0,i-13),i+1).map((x,j)=>{const p=c[Math.max(0,i-13)+j-1];return p?Math.max(x.h-x.l,Math.abs(x.h-p.c),Math.abs(x.l-p.c)):x.h-x.l;}));}
 function lowPivot(c,i,p){if(i<p||i+p>=c.length)return false;for(let j=i-p;j<=i+p;j++){if(j!==i&&(c[j].l<c[i].l||(j<i&&c[j].l===c[i].l)))return false;}return true;}
@@ -73,6 +73,15 @@ function visibleCandidates(candidates){
   if(seen.has(key))return false;seen.add(key);return true;
  });
 }
+function structurePoints(c,p){
+ const points=[];
+ const add=(index,price)=>{if(Number.isInteger(index)&&index>=0&&index<c.length&&Number.isFinite(price))points.push([index,price]);};
+ add(p.peakIndex,c[p.peakIndex]?.h);add(p.l1Index,p.l1);add(p.neckIndex,p.neck);
+ if(p.l2Index!==undefined)add(p.l2Index,p.l2);
+ if(p.bounceIndex!==undefined)add(p.bounceIndex,p.bounce);
+ if(p.entryIndex!==undefined)add(p.entryIndex,p.entry);
+ return points;
+}
 // Advance every candidate with only the prefix through i. Never backdate confirmations.
 function detect(c,options={}){
  const o={...defaults,...options},history=[],seeds=[];let candidates=[];
@@ -128,7 +137,7 @@ function detect(c,options={}){
       p.neck=c[n].h;p.neckIndex=n;p.checks=shapeChecks(c,p,o);
       if(failed(p.checks).length)return reject(p,i);
      }
-     delete p.earlyBreakout;p.targetIndex=i;p.stage='TARGET';event(p,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');
+    delete p.earlyBreakout;p.targetIndex=i;p.bounceIndex=i;p.bounce=b.c;p.stage='TARGET';event(p,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');
     }else if(b.c>p.neck+o.breakoutATR*p.atr){
      // Allow the right-hand pivot bars to finish before declaring a premature breakout.
      p.earlyBreakout??=i;
@@ -137,6 +146,8 @@ function detect(c,options={}){
    }
   }
   if(p.stage!=='TARGET')return;
+  // Retain the right-hand recovery leg so the chart shows the complete W after L2.
+  if(p.bounce===undefined||b.h>p.bounce){p.bounce=b.h;p.bounceIndex=i;}
   if(o.filters&&!p.pending){
    const j=i-o.pivot;
    if(j>=p.l2Index+4&&lowPivot(c,j,o.pivot)&&c[j].l<=p.l1+(p.neck-p.l1)*.35&&Math.max(...c.slice(p.l2Index+1,j).map(x=>x.h))-c[j].l>=Math.max(p.atr,(p.neck-p.l1)*.5)&&b.c-c[j].l>=o.supportBounceATR*p.atr){p.checks.push(check('thirdLow','두 번째 지지 이후 추가 저점 없음',false,'세 번째 지지 저점 확인'));return reject(p,i);}
@@ -183,4 +194,4 @@ function detect(c,options={}){
 }
 function fromRaw(raw,now){return raw.filter(r=>Number(r[6])<now).map(r=>({t:+r[0],end:+r[6],o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]})).filter(x=>[x.t,x.end,x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.h>=Math.max(x.o,x.c,x.l)&&x.l<=Math.min(x.o,x.c)&&x.l>0&&x.v>=0);}
 function validate(c,interval){if(c.length<40)throw Error('완성 캔들 부족');for(let i=1;i<c.length;i++)if(c[i].t-c[i-1].t!==interval)throw Error('캔들 누락 또는 시간 중복');return c;}
-export { tradeLevels, profiles, optionsFor, visibleCandidates, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };
+export { tradeLevels, profiles, optionsFor, visibleCandidates, structurePoints, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };

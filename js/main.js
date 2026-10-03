@@ -8,6 +8,7 @@ import { initSettingsUI, applyFilters } from "./ui/settings.js";
 import { initDetailPanel } from "./ui/detail-panel.js";
 import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
+import { initWRadarTab } from "./ui/w-radar-tab.js";
 
 function boot() {
   let focusUpdate = null;
@@ -16,14 +17,22 @@ function boot() {
   initDetailPanel();
   initDashboard();
   initPaper();
+  const wRadar = initWRadarTab({
+    isMainBusy: () => state.scan.running,
+    pauseMain: stopAutoRefresh,
+    resumeMain: startAutoRefresh,
+    shouldResumeMain: () => state.settings.autoRefresh,
+  });
+  for (const event of ["scan:start", "scan:done", "scan:aborted", "scan:error"]) on(event, () => wRadar.sync());
 
   // 스캔 버튼
   document.getElementById("scan-btn")?.addEventListener("click", () => {
+    if (wRadar.isBusy()) { toast("W 패턴 스캔 완료 후 다시 시작하세요.", "info"); return; }
     runScan().catch((e) => notifyError(null, e.message));
   });
   document.getElementById("stop-btn")?.addEventListener("click", () => abortScan());
 
-  initTabs();
+  initTabs(wRadar);
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
@@ -46,7 +55,7 @@ function boot() {
   // 자동 갱신 토글 (§15)
   on("autorefresh:toggle", (payload) => {
     const onFlag = typeof payload === "object" ? payload.active : payload;
-    if (onFlag) { startAutoRefresh(); if (!payload?.silent) toast("자동 갱신 켜짐", "info"); }
+    if (onFlag) { if (!wRadar.isBlocking()) startAutoRefresh(); if (!payload?.silent) toast("자동 갱신 켜짐", "info"); }
     else { stopAutoRefresh(); if (!payload?.silent) toast("자동 갱신 꺼짐", "info"); }
   });
   if (state.settings.autoRefresh) startAutoRefresh();
@@ -65,14 +74,15 @@ function boot() {
 }
 
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
-function initTabs() {
-  const views = { overview: document.getElementById("view-overview"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "마켓 스캐너", settings: "설정" };
+function initTabs(wRadar) {
+  const views = { overview: document.getElementById("view-overview"), "w-pattern": document.getElementById("view-w-pattern"), settings: document.getElementById("view-settings") };
+  const titles = { overview: "마켓 스캐너", "w-pattern": "W 패턴 스캐너", settings: "설정" };
   const navBtns = document.querySelectorAll("[data-nav]");
   navBtns.forEach((btn) => btn.addEventListener("click", () => {
     const nav = btn.dataset.nav;
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
+    wRadar.select(nav === "w-pattern");
     navBtns.forEach((b) => {
       const active = b === btn;
       b.classList.toggle("active", active);

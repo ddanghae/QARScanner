@@ -405,7 +405,9 @@ svg[stroke] { fill:none; }
 .conn-pill { background:var(--surface); border:1px solid var(--border); font-size:11px; }
 .content { padding:0 36px 36px; }
 #view-overview { display:flex; flex-direction:column; gap:20px; }
-#view-overview[hidden] { display:none; }
+#view-overview[hidden], #view-w-pattern[hidden] { display:none; }
+.w-radar-frame { display:block; width:100%; height:calc(100dvh - 150px); min-height:640px; border:1px solid var(--border); border-radius:14px; background:#0b1014; }
+@media(max-width:620px) { .w-radar-frame { min-height:580px; height:calc(100dvh - 170px); } }
 .card { padding:22px; }
 .card-head { margin-bottom:20px; gap:12px; }
 .card-head h2 { font-size:15px; letter-spacing:-.035em; }

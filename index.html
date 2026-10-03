@@ -26,6 +26,10 @@
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
           <span>대시보드</span>
         </button>
+        <button class="side-link" data-nav="w-pattern" aria-label="W 패턴">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 5l5 14 5-9 5 9 5-14" fill="none" stroke-linejoin="round"/></svg>
+          <span>W 패턴</span>
+        </button>
         <button class="side-link" data-nav="settings" aria-label="설정">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>설정</span>
@@ -213,6 +217,10 @@
           <p>공개 REST API 기반 · 개인 API 키 없음 · 자동 주문 없음 · 기술적 참고용</p>
         </footer>
        </div>
+
+       <section id="view-w-pattern" hidden aria-label="W 패턴 스캐너">
+        <iframe id="w-radar-frame" title="W 패턴 · 15분봉과 1시간봉 스캐너" data-src="./w-radar.html" class="w-radar-frame"></iframe>
+       </section>
 
        <!-- ================= 설정 탭 ================= -->
        <div id="view-settings" hidden>

@@ -28,10 +28,10 @@ test('filtered W waits one more closed candle and uses actual confirmation price
  const c=fixture(),pending=Filtered.detect(c.slice(0,34)).active;assert.equal(pending.stage,'TARGET');assert.equal(pending.pending,true);assert.equal(pending.entry,undefined);
  const p=Filtered.detect(c).active;assert.equal(p.stage,'ENTRY');assert.equal(p.entry,112);assert.equal(p.entryTime,c[34].end);assert.equal(p.breakoutPrice,111);assert.ok(p.checks.every(x=>!x.required||x.pass));
 });
-test('weak-volume breakout is filtered, never gets an entry price',()=>{const c=fixture();c[33].v=900;const r=Filtered.detect(c),p=r.history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='volume'&&!x.pass));assert.equal(p.entry,undefined);});
-test('long upper-wick breakout is filtered',()=>{const c=fixture();c[33].h=125;const p=Filtered.detect(c).history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='close'&&!x.pass));});
-test('huge breakout is not labeled as a fresh entry',()=>{const c=fixture();c[33].c=120;c[33].h=121;const p=Filtered.detect(c).history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='extension'&&!x.pass));});
-test('next close below neckline filters a bull trap before entry',()=>{const c=fixture();c[34].c=109;const p=Filtered.detect(c).history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='hold'&&!x.pass));assert.equal(p.entry,undefined);});
+test('weak-volume breakout waits for another attempt without an entry',()=>{const c=fixture();c[33].v=900;const p=Filtered.detect(c).active;assert.equal(p.stage,'TARGET');assert.ok(p.attempts[0].checks.some(x=>x.id==='volume'&&!x.pass));assert.equal(p.entry,undefined);});
+test('long upper-wick breakout waits without manufacturing an entry',()=>{const c=fixture();c[33].h=125;const p=Filtered.detect(c).active;assert.ok(p.attempts[0].checks.some(x=>x.id==='close'&&!x.pass));assert.equal(p.entry,undefined);});
+test('huge breakout is not labeled as a fresh entry',()=>{const c=fixture();c[33].c=120;c[33].h=121;const p=Filtered.detect(c).history.find(p=>p.stage==='MISSED');assert.ok(p.checks.some(x=>x.id==='extension'&&!x.pass));});
+test('next close below neckline returns to bounded retry without entry',()=>{const c=fixture();c[34].c=109;const p=Filtered.detect(c).active;assert.equal(p.stage,'TARGET');assert.equal(p.pending,false);assert.ok(p.attempts[0].checks.some(x=>x.id==='hold'&&!x.pass));assert.equal(p.entry,undefined);});
 test('post-entry neckline failure preserves entry history and invalidates',()=>{const c=fixture();c.push({t:35*900000,end:36*900000-1,o:112,h:112.2,l:108.5,c:109,v:1000});const p=Filtered.detect(c).history.find(p=>p.entry);assert.equal(p.stage,'INVALID');assert.match(p.reason,/넥라인/);assert.equal(p.entry,112);assert.ok(p.events.some(e=>e.type==='ENTRY'));});
 test('too shallow second V cannot become TARGET',()=>{const c=fixture();for(let i=28;i<=32;i++){c[i].o=109;c[i].c=109.2;c[i].h=109.4;c[i].l=108.8;}c[30].l=108.7;c[32].c=109.8;c[32].h=110;const r=Filtered.detect(c);assert.ok(!r.active?.entry);assert.ok(r.history.some(p=>p.stage==='FILTERED'&&p.checks.some(x=>x.id==='bottoms'&&!x.pass)));});
 test('shape validation rejects lopsided timing and extra bottoms',()=>{const c=fixture(),p=E.detect(c.slice(0,33)).active;const unbalanced=Filtered.shapeChecks(c,{...p,neckIndex:p.l1Index+1});assert.ok(unbalanced.some(x=>x.id==='balance'&&!x.pass));const extra=fixture();extra[26].l=100.5;const checks=Filtered.shapeChecks(extra,{...p});assert.ok(checks.some(x=>x.id==='multiple'&&!x.pass));});
@@ -41,6 +41,88 @@ test('filtered events are causal across every prefix',()=>{const c=fixture(),p=F
 test('filtered decisions are unchanged by asset price scale',()=>{const c=fixture(),small=c.map(b=>({...b,o:b.o/1e5,h:b.h/1e5,l:b.l/1e5,c:b.c/1e5}));assert.equal(Filtered.detect(small).active.stage,'ENTRY');});
 test('filtered equal lows preserve the user support rule',()=>{const c=fixture().slice(0,33);c[30].l=c[22].l;assert.equal(Filtered.detect(c).active.stage,'TARGET');});
 test('third support test after TARGET is excluded before breakout',()=>{const c=fixture().slice(0,33);c[32].c=108;c[32].h=108.35;const tail=candles([108,104,102,104,106]).slice(1);tail.forEach((b,k)=>c.push({...b,t:(33+k)*900000,end:(34+k)*900000-1}));const r=Filtered.detect(c);assert.ok(r.history.some(p=>p.stage==='FILTERED'&&p.checks.some(x=>x.id==='thirdLow'&&!x.pass)));});
-test('zero historical volume cannot manufacture volume confirmation',()=>{const c=fixture().map(b=>({...b,v:0}));c[33].v=100;const p=Filtered.detect(c).history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='volume'&&!x.pass));});
-test('higher price on confirmation bar is also checked for chasing',()=>{const c=fixture();c[34].c=115;c[34].h=115.3;const p=Filtered.detect(c).history.find(p=>p.stage==='FILTERED');assert.ok(p.checks.some(x=>x.id==='confirmExtension'&&!x.pass));assert.equal(p.entry,undefined);});
+test('zero historical volume cannot manufacture volume confirmation',()=>{const c=fixture().map(b=>({...b,v:0}));c[33].v=100;const p=Filtered.detect(c).active;assert.ok(p.attempts[0].checks.some(x=>x.id==='volume'&&!x.pass));});
+test('higher price on confirmation bar is also checked for chasing',()=>{const c=fixture();c[34].c=115;c[34].h=115.3;const p=Filtered.detect(c).history.find(p=>p.stage==='MISSED');assert.ok(p.checks.some(x=>x.id==='confirmExtension'&&!x.pass));assert.equal(p.entry,undefined);});
 test('minor zigzags in a rising leg are not mistaken for an extra bottom',()=>{const c=candles([...Array(20).fill(110),107,103,100,101,102,103,104,101.5,103,106,110,108,105,103,102,104,106]);const p={l1Index:22,l1:99.65,l2Index:34,l2:101.65,neckIndex:30,neck:110.35,peakIndex:19,atr:1.5};const checks=Filtered.shapeChecks(c,p);assert.ok(checks.find(x=>x.id==='multiple').pass);});
+
+function append(c,o,h,l,close,v=1000){const i=c.length;c.push({t:i*900000,end:(i+1)*900000-1,o,h,l,c:close,v});return c;}
+function original(result){return [...result.candidates,...result.history].find(p=>p.l1Index===22);}
+
+test('slow second V recovery retains the already confirmed low',()=>{
+ const c=fixture().slice(0,31);
+ append(c,102,102.4,101.8,102.1);append(c,102.1,102.4,101.9,102.2);
+ assert.equal(original(Filtered.detect(c)).stage,'WATCH');
+ append(c,102.2,104.5,102,104);
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'TARGET');assert.equal(p.l2Index,30);assert.equal(p.targetIndex,33);
+});
+test('weak first breakout can become an entry on a later strong attempt',()=>{
+ const c=fixture().slice(0,34);c[33].v=700;
+ append(c,111,111.3,108.8,109);append(c,109,112.3,108.9,112,2400);append(c,112,112.5,111,112.2);
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'ENTRY');assert.equal(p.entryIndex,36);assert.equal(p.attempts.length,1);assert.ok(p.events.some(e=>e.type==='RETRY'));assert.ok(p.checks.every(x=>!x.required||x.pass));
+});
+test('retry has a deadline and L1 wick invalidation still takes precedence',()=>{
+ const c=fixture().slice(0,34);c[33].v=700;
+ for(let k=0;k<8;k++)append(c,109,109.5,108,109);
+ assert.equal(original(Filtered.detect(c)).stage,'EXPIRED');
+ const d=fixture().slice(0,34);d[33].v=700;append(d,111,112,99,111);
+ assert.equal(original(Filtered.detect(d)).stage,'INVALID');
+});
+test('at most three failed breakout attempts are accepted',()=>{
+ const c=fixture().slice(0,34);c[33].v=700;
+ for(let k=0;k<2;k++){append(c,111,111.2,108.8,109);append(c,109,111.3,108.9,111,100);}
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'EXPIRED');assert.equal(p.attempts.length,3);
+});
+test('L2 can reform above L1 before an entry but cannot confirm on the breach bar',()=>{
+ const c=fixture().slice(0,33);append(c,106,106.2,101,101.5);
+ let p=original(Filtered.detect(c));assert.equal(p.stage,'WATCH');assert.equal(p.entry,undefined);assert.equal(p.resets,1);
+ append(c,101.5,103.5,101.3,103);append(c,103,106,102,105);
+ p=original(Filtered.detect(c));assert.equal(p.stage,'TARGET');assert.equal(p.l2,101);assert.equal(p.l1,99.65);assert.equal(p.targetIndex,35);
+});
+test('post-entry L2 protection is never relaxed',()=>{
+ const c=fixture();append(c,112,112.2,101,111);
+ assert.equal(original(Filtered.detect(c)).stage,'INVALID');
+});
+test('close holding above neckline is not falsely called a retest',()=>{
+ const c=fixture();append(c,112,113,111.5,112.5);
+ let p=original(Filtered.detect(c));assert.equal(p.stage,'ENTRY');assert.equal(p.retestTime,undefined);
+ append(c,111,111.6,110.4,111.4);
+ p=original(Filtered.detect(c));assert.equal(p.retestTime,c.at(-1).end);assert.equal(p.retestPrice,111.4);assert.equal(p.entryTime,c[34].end);
+});
+test('a deep neckline breach is not a successful retest',()=>{
+ const c=fixture();append(c,111,111.5,108,111.2);assert.equal(original(Filtered.detect(c)).retestTime,undefined);
+});
+test('independent first V candidates can coexist with an existing pattern',()=>{
+ const c=fixture();const r=Filtered.detect(c);assert.ok(r.candidates.length>=2);assert.ok(r.candidates.some(p=>p.l1Index===22));assert.ok(r.candidates.some(p=>p.l1Index===30));assert.equal(r.active.stage,'ENTRY');
+});
+test('duplicate second troughs produce one representative and candidate count stays bounded',()=>{
+ const p={stage:'TARGET',l2Index:30,l1Index:20,events:[{time:50}]};
+ assert.equal(Filtered.visibleCandidates([p,{...p,l1Index:22}]).length,1);
+ assert.ok(Filtered.detect(fixture(),{maxCandidates:1}).candidates.length<=1);
+});
+test('retry, support reset and retest events remain prefix-causal across all candidates',()=>{
+ const c=fixture().slice(0,34);c[33].v=700;append(c,111,111.3,108.8,109);append(c,109,112.3,108.9,112,2400);append(c,112,112.5,111,112.2);append(c,111,111.6,110.4,111.4);
+ const full=Filtered.detect(c);
+ for(let n=24;n<=c.length;n++)for(const p of [...Filtered.detect(c.slice(0,n)).candidates,...Filtered.detect(c.slice(0,n)).history]){
+  const final=[...full.candidates,...full.history].find(x=>x.id===p.id);
+  if(final)assert.deepEqual(p.events,final.events.filter(e=>e.time<=c[n-1].end));
+ }
+});
+test('timeframe profiles are separate and overrides do not mutate defaults',()=>{
+ const m=Filtered.optionsFor('15m',{retryBars:4}),h=Filtered.optionsFor('1h');assert.equal(m.retryBars,4);assert.equal(h.retryBars,6);assert.notEqual(Filtered.profiles['15m'],Filtered.profiles['1h']);
+});
+test('negative volume rows are rejected as invalid data',()=>{
+ assert.equal(Filtered.fromRaw([[0,'1','2','.5','1.5','-1',899999]],1000000).length,0);
+});
+
+test('a pending breakout cannot become an entry after L2 has been broken',()=>{
+ const c=fixture().slice(0,34);append(c,111,112,101,111.5);
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'WATCH');assert.equal(p.pending,false);assert.equal(p.entry,undefined);
+});
+test('the second-bottom reformation budget expires instead of lowering L1 indefinitely',()=>{
+ const c=fixture().slice(0,33);append(c,106,106.2,101,101.5);append(c,101.5,103.5,101.3,103);append(c,103,106,102,105);append(c,105,105.2,100.5,101);
+ const p=original(Filtered.detect(c,{maxResets:1}));assert.equal(p.stage,'EXPIRED');assert.equal(p.l1,99.65);assert.equal(p.entry,undefined);
+});
+test('a saved slow second low is invalidated before recovery if L1 breaks',()=>{
+ const c=fixture().slice(0,31);append(c,102,102.4,101.8,102.1);append(c,102.1,102.4,101.9,102.2);append(c,102.2,104.5,99,104);
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'INVALID');assert.equal(p.entry,undefined);
+});

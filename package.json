@@ -13,7 +13,7 @@
     "test:runner": "node research/run-tests.mjs",
     "test:preview": "node --test tests/preview-server.test.js",
     "test:runtime": "node --test tests/scan-runtime.test.js",
-    "test:w-pattern": "node --test tests/w-pattern.test.js tests/w-radar-tab.test.js",
+    "test:w-pattern": "node --test tests/w-pattern.test.js tests/w-scan-state.test.js tests/w-radar-tab.test.js",
     "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime && npm run test:w-pattern",
     "harness": "npm test",
     "serve": "node scripts/serve.mjs"

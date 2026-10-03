@@ -1,5 +1,5 @@
 'use strict';
-const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.6,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15});
+const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.6,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15,maxCandidates:6,maxSeeds:12,retryBars:6,maxAttempts:3,maxResets:2,retestBars:6,retestATR:.15});
 const mean=a=>a.reduce((s,x)=>s+x,0)/(a.length||1);
 function atrAt(c,i){return mean(c.slice(Math.max(0,i-13),i+1).map((x,j)=>{const p=c[Math.max(0,i-13)+j-1];return p?Math.max(x.h-x.l,Math.abs(x.h-p.c),Math.abs(x.l-p.c)):x.h-x.l;}));}
 function lowPivot(c,i,p){if(i<p||i+p>=c.length)return false;for(let j=i-p;j<=i+p;j++){if(j!==i&&(c[j].l<c[i].l||(j<i&&c[j].l===c[i].l)))return false;}return true;}
@@ -46,80 +46,133 @@ function breakoutChecks(c,p,i,options={}){
   check('extension','돌파 직후 과도한 상승 없음',extension<=o.maxExtensionATR,`${extension.toFixed(2)} ATR / 최대 ${o.maxExtensionATR}`)];
 }
 const failed=checks=>checks.filter(x=>x.required&&!x.pass);
-// Each iteration knows only candles through i. Events keep their actual confirmation time.
+// Profiles are deliberately separate, but not optimized against an evaluation period.
+const profiles=Object.freeze({'15m':Object.freeze({...defaults}),'1h':Object.freeze({...defaults})});
+function optionsFor(tf,overrides={}){return {...(profiles[tf]||defaults),...overrides};}
+function peakBefore(c,j,o){
+ // Use a confirmed swing high belonging to the first decline, not an arbitrary range maximum.
+ for(let k=j-o.pivot;k>=Math.max(o.pivot,j-20);k--){
+  const high=c[k].h;
+  if(j-k<2||high-c[j].l<o.minDropATR*atrAt(c,j))continue;
+  if(c.slice(k-o.pivot,k+o.pivot+1).every((b,n)=>n===o.pivot||b.h<=high))return k;
+ }
+ return -1;
+}
+function visibleCandidates(candidates){
+ const rank={ENTRY:0,TARGET:1,WATCH:2},seen=new Set();
+ return candidates.slice().sort((a,b)=>rank[a.stage]-rank[b.stage]||b.events.at(-1).time-a.events.at(-1).time||a.l1Index-b.l1Index).filter(p=>{
+  const key=p.l2Index===undefined?'first:'+p.l1Index:'second:'+p.l2Index;
+  if(seen.has(key))return false;seen.add(key);return true;
+ });
+}
+// Advance every candidate with only the prefix through i. Never backdate confirmations.
 function detect(c,options={}){
- const o={...defaults,...options};let a=null,seed=null;const history=[];
+ const o={...defaults,...options},history=[],seeds=[];let candidates=[];
  const event=(p,type,i,reason)=>p.events.push({type,time:c[i].end,price:c[i].c,reason});
- const retire=(type,i,reason)=>{a.stage=type;a.reason=reason;event(a,type,i,reason);history.push(a);a=null;};
- const reject=(i)=>retire('FILTERED',i,failed(a.checks).map(x=>x.label+' 미충족').join(' · '));
- const enter=(i)=>{a.stage='ENTRY';a.entry=c[i].c;a.entryIndex=i;a.entryTime=c[i].end;event(a,'ENTRY',i,o.filters?'돌파 다음 봉의 넥라인 지지 확인':'넥라인 종가 돌파 · W 완성');};
- for(let i=14+o.pivot;i<c.length;i++){
+ const retire=(p,type,i,reason)=>{p.stage=type;p.reason=reason;event(p,type,i,reason);history.push(p);};
+ const reject=(p,i)=>retire(p,'FILTERED',i,failed(p.checks).map(x=>x.label+' 미충족').join(' · '));
+ const enter=(p,i)=>{p.stage='ENTRY';p.entry=c[i].c;p.entryIndex=i;p.entryTime=c[i].end;event(p,'ENTRY',i,o.filters?'돌파 후 넥라인 위 종가 유지 확인':'넥라인 종가 돌파 · W 완성');};
+ const retry=(p,i,checks)=>{
+  p.attempts??=[];p.attempts.push({time:c[i].end,checks:checks.map(x=>({...x}))});
+  p.pending=false;p.retryStart??=i;p.lastAttemptIndex=i;
+  p.waitReason=failed(checks).map(x=>x.label+' 미충족').join(' · ');
+  event(p,'RETRY',i,p.waitReason+' · 구조 유지 시 재돌파 대기');
+  if(p.attempts.length>=o.maxAttempts)retire(p,'EXPIRED',i,'돌파 확인 재시도 횟수 종료');
+ };
+ function advance(p,i){
   const b=c[i];
-  if(a){
-   // A wick below L1 disqualifies this exact pattern, regardless of a subsequent recovery.
-   if(b.l<a.l1){retire('INVALID',i,'첫 저점 이탈');}
-   else if(a.stage==='ENTRY'){
-    if(b.l<a.l2)retire('INVALID',i,'타점 이후 두 번째 지지 저점 이탈');
-    else if(o.filters&&b.c<a.neck-o.failureATR*a.atr)retire('INVALID',i,'돌파 실패 · 넥라인 아래 종가 복귀');
-    else if(i-a.entryIndex>o.maxSignalAge)retire('EXPIRED',i,'타점 표시 기간 종료');
-   }else if(i-a.l1Index>o.maxFormation){retire('EXPIRED',i,'W 형성 대기 기간 종료');}
-   else if(a.stage==='WATCH'){
-    if(!a.pullback){
-     if(b.h>a.neck){a.neck=b.h;a.neckIndex=i;}
-     if(i>a.neckIndex&&a.neck-b.l>=o.minPullbackATR*a.atr)a.pullback=true;
-    }
-    if(a.pullback){
-     const j=i-o.pivot;
-     if(j>=a.neckIndex+2&&j-a.l1Index>=o.minSeparation&&lowPivot(c,j,o.pivot)&&c[j].l>=a.l1&&a.neck-c[j].l>=o.minPullbackATR*a.atr&&b.c-c[j].l>=o.supportBounceATR*a.atr){
-      a.l2=c[j].l;a.l2Index=j;
-      if(o.filters){
-       // The neckline must be the actual maximum between the two confirmed troughs.
-       let n=a.l1Index+1;for(let k=n;k<j;k++)if(c[k].h>c[n].h)n=k;
-       a.neck=c[n].h;a.neckIndex=n;a.checks=shapeChecks(c,a,o);
-       if(failed(a.checks).length)reject(i);
-      }
-      if(a){a.targetIndex=i;a.stage='TARGET';event(a,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');}
-     }else if(b.c>a.neck+o.breakoutATR*a.atr){retire('EXPIRED',i,'두 번째 지지 확인 없이 상승');}
-    }
-   }else if(a.stage==='TARGET'&&b.l<a.l2){retire('INVALID',i,'두 번째 지지 저점 이탈');}
-   if(a&&o.filters&&a.stage==='TARGET'&&!a.pending){
-    const j=i-o.pivot;
-    if(j>=a.l2Index+4&&lowPivot(c,j,o.pivot)&&c[j].l<=a.l1+(a.neck-a.l1)*.35&&Math.max(...c.slice(a.l2Index+1,j).map(x=>x.h))-c[j].l>=Math.max(a.atr,(a.neck-a.l1)*.5)&&b.c-c[j].l>=o.supportBounceATR*a.atr){a.checks.push(check('thirdLow','두 번째 지지 이후 추가 저점 없음',false,'세 번째 지지 저점 확인'));reject(i);}
+  if(b.l<p.l1)return retire(p,'INVALID',i,'첫 저점 이탈');
+  if(p.stage==='ENTRY'){
+   if(b.l<p.l2)return retire(p,'INVALID',i,'타점 이후 두 번째 지지 저점 이탈');
+   if(o.filters&&b.c<p.neck-o.failureATR*p.atr)return retire(p,'INVALID',i,'돌파 실패 · 넥라인 아래 종가 복귀');
+   if(i-p.entryIndex>o.maxSignalAge)return retire(p,'EXPIRED',i,'타점 표시 기간 종료');
+   if(!p.retestTime&&i>p.entryIndex&&i-p.entryIndex<=o.retestBars&&b.l<=p.neck+o.retestATR*p.atr&&b.l>=p.neck-o.retestATR*p.atr&&b.c>p.neck&&b.c>b.o&&(b.c-p.neck)/p.atr<=o.maxExtensionATR){
+    p.retestTime=b.end;p.retestPrice=b.c;event(p,'RETEST',i,'넥라인 구역 재접촉 후 양봉 종가 회복');
    }
-   if(a&&a.stage==='TARGET'){
-    if(o.filters&&a.pending&&i>a.breakoutIndex){
-     a.checks.push(check('hold','돌파 다음 봉 지지',b.c>a.neck,`다음 봉 종가 ${b.c} / 넥라인 ${a.neck}`),check('confirmExtension','확인 시점 과도한 상승 없음',(b.c-a.neck)/a.atr<=o.maxExtensionATR,`${((b.c-a.neck)/a.atr).toFixed(2)} ATR / 최대 ${o.maxExtensionATR}`));
-     if(failed(a.checks).length)reject(i);else enter(i);
-    }else if(!a.pending&&b.c>a.neck+o.breakoutATR*a.atr){
-     a.volumeRatio=b.v/(mean(c.slice(Math.max(0,i-20),i).map(x=>x.v))||1);
-     if(o.filters){
-      a.checks.push(...breakoutChecks(c,a,i,o));
-      if(failed(a.checks).length)reject(i);
-      else{a.pending=true;a.breakoutIndex=i;a.breakoutTime=b.end;a.breakoutPrice=b.c;event(a,'BREAKOUT',i,'돌파 검증 통과 · 다음 봉 지지 대기');}
-     }else enter(i);
+   return;
+  }
+  if(i-p.l1Index>o.maxFormation)return retire(p,'EXPIRED',i,'W 형성 대기 기간 종료');
+  if(p.retryStart!==undefined&&i-p.retryStart>o.retryBars)return retire(p,'EXPIRED',i,'돌파 재확인 대기 기간 종료');
+  if(p.stage==='TARGET'&&b.l<p.l2){
+   if(!o.filters)return retire(p,'INVALID',i,'두 번째 지지 저점 이탈');
+   if((p.resets||0)>=o.maxResets)return retire(p,'EXPIRED',i,'두 번째 바닥 재확인 횟수 종료');
+   p.resets=(p.resets||0)+1;p.resetAfter=i;p.pending=false;p.stage='WATCH';p.pullback=true;p.support=null;p.checks=[];
+   delete p.l2;delete p.l2Index;delete p.waitReason;delete p.earlyBreakout;
+   event(p,'SUPPORT',i,'첫 저점 유지 · 두 번째 바닥 재확인');
+   return;
+  }
+  if(p.stage==='WATCH'){
+   if(!p.pullback){
+    if(b.h>p.neck){p.neck=b.h;p.neckIndex=i;}
+    if(i>p.neckIndex&&p.neck-b.l>=o.minPullbackATR*p.atr)p.pullback=true;
+   }
+   if(p.pullback){
+    const j=i-o.pivot;
+    if(p.support&&b.l<c[p.support].l)p.support=null;
+    if(j>=p.neckIndex+2&&j-p.l1Index>=o.minSeparation&&j>=(p.resetAfter??0)&&lowPivot(c,j,o.pivot)&&c[j].l>=p.l1&&p.neck-c[j].l>=o.minPullbackATR*p.atr){
+     if(p.support==null||c[j].l<c[p.support].l)p.support=j;
     }
+    // A confirmed trough remains eligible when its recovery takes longer than two bars.
+    if(p.support!=null&&b.c-c[p.support].l>=o.supportBounceATR*p.atr){
+     p.l2Index=p.support;p.l2=c[p.support].l;
+     if(o.filters){
+      let n=p.l1Index+1;for(let k=n;k<p.l2Index;k++)if(c[k].h>c[n].h)n=k;
+      p.neck=c[n].h;p.neckIndex=n;p.checks=shapeChecks(c,p,o);
+      if(failed(p.checks).length)return reject(p,i);
+     }
+     delete p.earlyBreakout;p.targetIndex=i;p.stage='TARGET';event(p,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');
+    }else if(b.c>p.neck+o.breakoutATR*p.atr){
+     // Allow the right-hand pivot bars to finish before declaring a premature breakout.
+     p.earlyBreakout??=i;
+     if(i-p.earlyBreakout>=o.pivot)return retire(p,'EXPIRED',i,'두 번째 지지 확인 없이 상승');
+    }else delete p.earlyBreakout;
    }
   }
-  if(!a){
+  if(p.stage!=='TARGET')return;
+  if(o.filters&&!p.pending){
    const j=i-o.pivot;
-   if(seed&&(b.l<c[seed.j].l||i-seed.j>o.maxFormation))seed=null;
-   if(lowPivot(c,j,o.pivot)&&(!seed||c[j].l<c[seed.j].l)){
-    const atr=atrAt(c,j);let peak=j-1;for(let k=Math.max(0,j-20);k<j;k++)if(c[k].h>c[peak].h)peak=k;
-    const drop=c[peak].h-c[j].l;
-    if(atr>0&&drop>=o.minDropATR*atr)seed={j,atr,peak,drop};
-   }
-   if(!seed)continue;
-   const {j:bottom,atr,peak,drop}=seed;
-   // Recovered first V, measured from the preceding local range high.
-   if(b.c-c[bottom].l<Math.max(o.minBounceATR*atr,drop*o.recovery))continue;
-   if(c.slice(bottom+1,i+1).some(x=>x.l<c[bottom].l))continue;
-   let n=bottom+1;for(let k=bottom+1;k<=i;k++)if(c[k].h>c[n].h)n=k;
-   a={id:String(c[bottom].t),stage:'WATCH',atr,l1:c[bottom].l,l1Index:bottom,peakIndex:peak,neck:c[n].h,neckIndex:n,watchIndex:i,pullback:false,events:[],checks:[],filtered:o.filters};seed=null;
-   event(a,'WATCH',i,'첫 번째 V 회복 확인');
+   if(j>=p.l2Index+4&&lowPivot(c,j,o.pivot)&&c[j].l<=p.l1+(p.neck-p.l1)*.35&&Math.max(...c.slice(p.l2Index+1,j).map(x=>x.h))-c[j].l>=Math.max(p.atr,(p.neck-p.l1)*.5)&&b.c-c[j].l>=o.supportBounceATR*p.atr){p.checks.push(check('thirdLow','두 번째 지지 이후 추가 저점 없음',false,'세 번째 지지 저점 확인'));return reject(p,i);}
+  }
+  if(o.filters&&p.pending&&i>p.breakoutIndex){
+   const checks=[check('hold','돌파 다음 봉 종가 유지',b.c>p.neck,`다음 봉 종가 ${b.c} / 넥라인 ${p.neck}`),check('confirmExtension','확인 시점 과도한 상승 없음',(b.c-p.neck)/p.atr<=o.maxExtensionATR,`${((b.c-p.neck)/p.atr).toFixed(2)} ATR / 최대 ${o.maxExtensionATR}`)];
+   if(!checks[1].pass){p.checks.push(...checks);return retire(p,'MISSED',i,'확인 시점 상승 과다 · 타점 제외');}
+   if(failed(checks).length)return retry(p,i,checks);
+   p.checks.push(...checks);enter(p,i);return;
+  }
+  if(!p.pending&&b.c>p.neck+o.breakoutATR*p.atr){
+   // A retry needs a fresh crossing or a later strong bullish expansion, not a stale close.
+   if(p.lastAttemptIndex!==undefined&&!(c[i-1].c<=p.neck+o.breakoutATR*p.atr||b.c>c[i-1].h))return;
+   p.volumeRatio=b.v/(mean(c.slice(Math.max(0,i-20),i).map(x=>x.v))||1);
+   if(!o.filters){enter(p,i);return;}
+   const checks=breakoutChecks(c,p,i,o);
+   if(!checks.find(x=>x.id==='extension').pass){p.checks.push(...checks);return retire(p,'MISSED',i,'돌파 시점 상승 과다 · 타점 제외');}
+   if(failed(checks).length)return retry(p,i,checks);
+   p.checks=p.checks.filter(x=>!['volume','body','close','extension','hold','confirmExtension'].includes(x.id));
+   p.checks.push(...checks);p.pending=true;delete p.waitReason;
+   p.breakoutIndex=i;p.breakoutTime=b.end;p.breakoutPrice=b.c;
+   event(p,'BREAKOUT',i,'돌파 검증 통과 · 다음 봉 종가 유지 대기');
   }
  }
- return {active:a,history};
+ for(let i=14+o.pivot;i<c.length;i++){
+  for(const p of candidates)advance(p,i);
+  candidates=candidates.filter(p=>['WATCH','TARGET','ENTRY'].includes(p.stage));
+  for(let k=seeds.length-1;k>=0;k--)if(c[i].l<c[seeds[k].j].l||i-seeds[k].j>o.maxFormation)seeds.splice(k,1);
+  const j=i-o.pivot;
+  if(lowPivot(c,j,o.pivot)){
+   const atr=atrAt(c,j),peak=peakBefore(c,j,o);
+   if(atr>0&&peak>=0){seeds.push({j,atr,peak,drop:c[peak].h-c[j].l});if(seeds.length>o.maxSeeds)seeds.shift();}
+  }
+  for(let k=seeds.length-1;k>=0;k--){
+   const {j:bottom,atr,peak,drop}=seeds[k];
+   if(c[i].c-c[bottom].l<Math.max(o.minBounceATR*atr,drop*o.recovery)||candidates.length>=o.maxCandidates)continue;
+   let n=bottom+1;for(let t=bottom+1;t<=i;t++)if(c[t].h>c[n].h)n=t;
+   const p={id:String(c[bottom].t),stage:'WATCH',atr,l1:c[bottom].l,l1Index:bottom,peakIndex:peak,neck:c[n].h,neckIndex:n,watchIndex:i,pullback:false,events:[],checks:[],filtered:o.filters};
+   event(p,'WATCH',i,'첫 번째 V 회복 확인');candidates.push(p);seeds.splice(k,1);
+  }
+ }
+ const visible=visibleCandidates(candidates);
+ return {active:visible[0]||null,candidates:visible,history};
 }
-function fromRaw(raw,now){return raw.filter(r=>Number(r[6])<now).map(r=>({t:+r[0],end:+r[6],o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]})).filter(x=>[x.t,x.end,x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.h>=Math.max(x.o,x.c,x.l)&&x.l<=Math.min(x.o,x.c)&&x.l>0);}
+function fromRaw(raw,now){return raw.filter(r=>Number(r[6])<now).map(r=>({t:+r[0],end:+r[6],o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]})).filter(x=>[x.t,x.end,x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.h>=Math.max(x.o,x.c,x.l)&&x.l<=Math.min(x.o,x.c)&&x.l>0&&x.v>=0);}
 function validate(c,interval){if(c.length<40)throw Error('완성 캔들 부족');for(let i=1;i<c.length;i++)if(c[i].t-c[i-1].t!==interval)throw Error('캔들 누락 또는 시간 중복');return c;}
-export { detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };
+export { profiles, optionsFor, visibleCandidates, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };

@@ -44,7 +44,7 @@ test('preview does not expose research runs or project files', async () => {
 });
 
 test('preview serves the W view and ES modules without exposing research notes', async () => {
-  for (const path of ['/w-radar.html', '/css/w-radar.css', '/js/ui/w-radar.js', '/js/core/w-pattern.js', '/js/ui/w-radar-tab.js']) {
+  for (const path of ['/w-radar.html', '/css/w-radar.css', '/js/ui/w-radar.js', '/js/core/w-pattern.js', '/js/core/w-scan-state.js', '/js/ui/w-radar-tab.js']) {
     const response = await fetch(baseUrl + path);
     assert.equal(response.status, 200, path);
     assert.ok((await response.text()).length > 100);

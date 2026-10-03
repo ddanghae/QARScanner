@@ -52,3 +52,11 @@ test('preview serves the W view and ES modules without exposing research notes',
   assert.equal((await fetch(baseUrl + '/docs/W-PATTERN.md')).status, 404);
   assert.equal((await fetch(baseUrl + '/.git/config')).status, 404);
 });
+
+test('preview serves the independent Cup & Handle scanner and detector', async () => {
+  for (const path of ['/cup-radar.html', '/css/cup-radar.css', '/js/ui/cup-radar.js', '/js/core/cup-handle.js', '/js/ui/cup-radar-tab.js']) {
+    const response = await fetch(baseUrl + path);
+    assert.equal(response.status, 200, path);
+    assert.ok((await response.text()).length > 100);
+  }
+});

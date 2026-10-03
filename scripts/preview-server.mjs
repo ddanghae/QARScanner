@@ -14,7 +14,7 @@ const types = new Map([
 ]);
 
 function isPublic(relativePath) {
-  return relativePath === 'index.html' || relativePath === 'w-radar.html' || relativePath === 'sw.js'
+  return relativePath === 'index.html' || relativePath === 'w-radar.html' || relativePath === 'cup-radar.html' || relativePath === 'sw.js'
     || relativePath === 'manifest.webmanifest'
     || relativePath === `docs${sep}CHART-PATTERNS.md`
     || relativePath === `docs${sep}TRADINGVIEW-PATTERNS.md`

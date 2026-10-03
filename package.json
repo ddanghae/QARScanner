@@ -14,7 +14,8 @@
     "test:preview": "node --test tests/preview-server.test.js",
     "test:runtime": "node --test tests/scan-runtime.test.js",
     "test:w-pattern": "node --test tests/w-pattern.test.js tests/w-scan-state.test.js tests/w-radar-tab.test.js",
-    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime && npm run test:w-pattern",
+    "test:cup-pattern": "node scripts/test-cup-pattern.mjs",
+    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime && npm run test:w-pattern && npm run test:cup-pattern",
     "harness": "npm test",
     "serve": "node scripts/serve.mjs"
   }

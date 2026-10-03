@@ -9,7 +9,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const price=n=>Number.isFinite(n)?n.toLocaleString('en-US',{maximumSignificantDigits:7}):'—';
 const time=t=>new Date(t).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-const host={embedded:window.parent!==window,active:window.parent===window,mainBusy:false};
+const host={embedded:window.parent!==window,active:window.parent===window,mainBusy:false,otherBusy:false};
 function hostBusy(busy){if(host.embedded)window.parent.postMessage({type:'qar:w-busy',busy},location.origin);}
 const detectionOptions=()=>({filters:$('#quality').checked,allowContinuation:$('#continuation').checked});
 function recheck(){
@@ -41,7 +41,7 @@ async function loadCandles(sym,tf,now){
  state.cache.set(key,c);return c;
 }
 async function scan(){
- if(!host.active||host.mainBusy){status('대시보드 스캔 완료 후 W 패턴 탭에서 시작하세요.');return;}
+ if(!host.active||host.mainBusy||host.otherBusy){status('다른 스캐너 작업 완료 후 시작하세요.');return;}
  if(state.loading)return;if(Date.now()<state.cooldown){status('요청 제한 대기 중 · 잠시 후 재시도',true);return;}
  state.loading=true;$('#scan').disabled=true;$('#demo').disabled=true;$('#scope').disabled=true;$('#progress').style.display='block';$('#progress').value=0;
  $('#quality').disabled=$('#continuation').disabled=true;const detection=detectionOptions();
@@ -69,7 +69,7 @@ async function scan(){
   status(`완료 · 신규 탐색 ${symbols.length}종목 / 추적 포함 ${total-failed}개 시간봉 확인${failed?' / '+failed+'개 실패':''}`,failed>0);
   if(failed)banner(`시세 수신 실패 ${failed}개. 이전 결과는 ‘갱신 실패’로 표시되며, 새 타점으로 취급하지 않습니다.${state.cooldown>Date.now()?' 요청 제한이 풀린 뒤 다시 확인합니다.':''}`);
  }catch(e){for(const r of state.records.values())r.error=e.message;status(e.name==='AbortError'?'시세 서버 응답 시간 초과':e.message,true);banner('실시간 데이터를 확인하지 못했습니다. 네트워크 또는 거래소 접근 상태를 확인하고 다시 스캔하세요. 예시 데이터로 자동 전환하지 않습니다.');}
- finally{state.nextAutoAt=Date.now()+60000;state.loading=false;$('#scan').disabled=!host.active||host.mainBusy;$('#demo').disabled=false;$('#scope').disabled=false;$('#quality').disabled=false;$('#continuation').disabled=!$('#quality').checked;$('#progress').style.display='none';render();hostBusy(false);}
+ finally{state.nextAutoAt=Date.now()+60000;state.loading=false;$('#scan').disabled=!host.active||host.mainBusy||host.otherBusy;$('#demo').disabled=false;$('#scope').disabled=false;$('#quality').disabled=false;$('#continuation').disabled=!$('#quality').checked;$('#progress').style.display='none';render();hostBusy(false);}
 }
 function chart(r,p,large=false){
  const ended=['INVALID','EXPIRED','FILTERED','MISSED'].includes(p.stage),lastEventIndex=ended?r.c.findIndex(b=>b.end===p.events.at(-1).time):r.c.length-1;
@@ -153,11 +153,11 @@ $('#tf').onchange=$('#query').oninput=()=>{state.visible=24;render();};
 $('#results').onclick=e=>{if(e.target.closest('[data-more]')){state.visible+=24;render();return;}const b=e.target.closest('[data-detail]');if(b)showDetail(b.dataset.detail);};
 $('#auto').onchange=()=>{if($('#auto').checked&&!state.loading)scan();};
 $('#detail').addEventListener('click',e=>{if(e.target===$('#detail')){const r=$('#detail').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('#detail').close();}});
-setInterval(()=>{if(state.mode==='live'&&!state.loading&&host.active&&!document.hidden)render();const now=Date.now()+state.offset,bucket=Math.floor(now/TF['15m']);if(host.active&&!host.mainBusy&&!document.hidden&&$('#auto').checked&&!state.loading&&state.mode!=='demo'&&bucket>state.lastAuto&&now%TF['15m']>7000&&Date.now()>=Math.max(state.cooldown,state.nextAutoAt))scan();},15000);
+setInterval(()=>{if(state.mode==='live'&&!state.loading&&host.active&&!document.hidden)render();const now=Date.now()+state.offset,bucket=Math.floor(now/TF['15m']);if(host.active&&!host.mainBusy&&!host.otherBusy&&!document.hidden&&$('#auto').checked&&!state.loading&&state.mode!=='demo'&&bucket>state.lastAuto&&now%TF['15m']>7000&&Date.now()>=Math.max(state.cooldown,state.nextAutoAt))scan();},15000);
 window.addEventListener('message',event=>{
  if(!host.embedded||event.source!==window.parent||event.origin!==location.origin||event.data?.type!=='qar:w-context')return;
- const wasBusy=host.mainBusy;host.active=event.data.active===true;host.mainBusy=event.data.mainBusy===true;
- if(!state.loading){$('#scan').disabled=!host.active||host.mainBusy;if(host.mainBusy)status('대시보드 스캔 중 · 완료 후 W 스캔 가능');else if(wasBusy)status('대시보드 스캔 완료 · W 스캔을 시작할 수 있습니다.');}
+ const wasBusy=host.mainBusy;host.active=event.data.active===true;host.mainBusy=event.data.mainBusy===true;if(typeof event.data.otherBusy==='boolean')host.otherBusy=event.data.otherBusy;
+ if(!state.loading){$('#scan').disabled=!host.active||host.mainBusy||host.otherBusy;if(host.mainBusy||host.otherBusy)status('다른 스캐너 작업 중 · 완료 후 W 스캔 가능');else if(wasBusy)status('대시보드 스캔 완료 · W 스캔을 시작할 수 있습니다.');}
 });
 if(host.embedded){$('#scan').disabled=true;window.parent.postMessage({type:'qar:w-ready'},location.origin);}
 render();

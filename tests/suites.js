@@ -6,5 +6,6 @@ export const suiteFiles = [
   "pattern-entry.test.js", "format.test.js", "scanner.test.js", "pattern-validation.test.js",
   "fractal-continuation.test.js", "aggressive.test.js",
   "trend-retest.test.js",
+  "cup-handle.test.js",
 ];
 export const suites = await Promise.all(suiteFiles.map(file => import(`./${file}`)));

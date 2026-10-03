@@ -9,6 +9,7 @@ import { initDetailPanel } from "./ui/detail-panel.js";
 import { initPaper } from "./ui/paper.js";
 import { toast, notifyError } from "./ui/notifications.js";
 import { initWRadarTab } from "./ui/w-radar-tab.js";
+import { initCupRadarTab } from "./ui/cup-radar-tab.js";
 
 function boot() {
   let focusUpdate = null;
@@ -17,22 +18,43 @@ function boot() {
   initDetailPanel();
   initDashboard();
   initPaper();
-  const wRadar = initWRadarTab({
+  let wRadar, cupRadar;
+  wRadar = initWRadarTab({
     isMainBusy: () => state.scan.running,
     pauseMain: stopAutoRefresh,
     resumeMain: startAutoRefresh,
-    shouldResumeMain: () => state.settings.autoRefresh,
+    shouldResumeMain: () => state.settings.autoRefresh && !cupRadar?.isBlocking(),
   });
-  for (const event of ["scan:start", "scan:done", "scan:aborted", "scan:error"]) on(event, () => wRadar.sync());
+  cupRadar = initCupRadarTab({
+    isMainBusy: () => state.scan.running,
+    pauseMain: stopAutoRefresh,
+    resumeMain: startAutoRefresh,
+    shouldResumeMain: () => state.settings.autoRefresh && !wRadar?.isBlocking(),
+  });
+  const wFrame = document.getElementById("w-radar-frame"), cupFrame = document.getElementById("cup-radar-frame");
+  let wBusy = false, cupBusy = false;
+  function syncOtherScanner(event) {
+    if (event.origin !== location.origin) return;
+    if (event.source === wFrame?.contentWindow && (event.data?.type === "qar:w-busy" || event.data?.type === "qar:w-ready")) {
+      if (typeof event.data.busy === "boolean") wBusy = event.data.busy;
+      cupFrame?.contentWindow?.postMessage({ type: "qar:cup-context", active: !document.getElementById("view-cup-pattern").hidden, mainBusy: state.scan.running, otherBusy: wBusy }, location.origin);
+    }
+    if (event.source === cupFrame?.contentWindow && (event.data?.type === "qar:cup-busy" || event.data?.type === "qar:cup-ready")) {
+      if (typeof event.data.busy === "boolean") cupBusy = event.data.busy;
+      wFrame?.contentWindow?.postMessage({ type: "qar:w-context", active: !document.getElementById("view-w-pattern").hidden, mainBusy: state.scan.running, otherBusy: cupBusy }, location.origin);
+    }
+  }
+  window.addEventListener("message", syncOtherScanner);
+  for (const event of ["scan:start", "scan:done", "scan:aborted", "scan:error"]) on(event, () => { wRadar.sync(); cupRadar.sync(); });
 
   // 스캔 버튼
   document.getElementById("scan-btn")?.addEventListener("click", () => {
-    if (wRadar.isBusy()) { toast("W 패턴 스캔 완료 후 다시 시작하세요.", "info"); return; }
+    if (wRadar.isBusy() || cupRadar.isBusy() || wBusy || cupBusy) { toast("독립 패턴 스캔 완료 후 다시 시작하세요.", "info"); return; }
     runScan().catch((e) => notifyError(null, e.message));
   });
   document.getElementById("stop-btn")?.addEventListener("click", () => abortScan());
 
-  initTabs(wRadar);
+  initTabs(wRadar, cupRadar);
 
   // 오류 이벤트 → 토스트
   on("scan:error", (msg) => notifyError(null, msg));
@@ -74,15 +96,16 @@ function boot() {
 }
 
 // 개요 / 설정 탭 전환 — 두 뷰를 show/hide 하고 사이드바 active + 톱바 제목 갱신
-function initTabs(wRadar) {
-  const views = { overview: document.getElementById("view-overview"), "w-pattern": document.getElementById("view-w-pattern"), settings: document.getElementById("view-settings") };
-  const titles = { overview: "마켓 스캐너", "w-pattern": "W 패턴 스캐너", settings: "설정" };
+function initTabs(wRadar, cupRadar) {
+  const views = { overview: document.getElementById("view-overview"), "w-pattern": document.getElementById("view-w-pattern"), "cup-pattern": document.getElementById("view-cup-pattern"), settings: document.getElementById("view-settings") };
+  const titles = { overview: "마켓 스캐너", "w-pattern": "W 패턴 스캐너", "cup-pattern": "컵앤핸들 스캐너", settings: "설정" };
   const navBtns = document.querySelectorAll("[data-nav]");
   navBtns.forEach((btn) => btn.addEventListener("click", () => {
     const nav = btn.dataset.nav;
     if (!views[nav]) return;
     for (const [k, el] of Object.entries(views)) if (el) el.hidden = k !== nav;
     wRadar.select(nav === "w-pattern");
+    cupRadar.select(nav === "cup-pattern");
     navBtns.forEach((b) => {
       const active = b === btn;
       b.classList.toggle("active", active);

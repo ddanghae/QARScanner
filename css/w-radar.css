@@ -5,3 +5,14 @@
 
 .badge.missed{color:#e8c184;background:rgba(232,193,132,.1)}
 .card.missed{border-color:rgba(232,193,132,.25)}
+
+.trade-levels{padding:14px 18px;border-top:1px solid var(--line);background:rgba(110,231,183,.025)}
+.level-title{font-size:11px;color:var(--muted);margin-bottom:10px}
+.level-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.level-grid div{min-width:0;display:flex;flex-direction:column;gap:4px}
+.level-grid span,.level-grid small{font-size:10px;color:#6ee7b7}
+.level-grid b{font-size:13px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.level-grid .stop-level span,.level-grid .stop-level small{color:#f28b95}
+.trade-levels p{font-size:10px;line-height:1.6;color:var(--muted);margin:12px 0 0}
+#detailContent .trade-levels{margin:12px 0;border:1px solid var(--line);border-radius:10px}
+@media(min-width:600px){#detailContent .level-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}

@@ -126,3 +126,35 @@ test('a saved slow second low is invalidated before recovery if L1 breaks',()=>{
  const c=fixture().slice(0,31);append(c,102,102.4,101.8,102.1);append(c,102.1,102.4,101.9,102.2);append(c,102.2,104.5,99,104);
  const p=original(Filtered.detect(c));assert.equal(p.stage,'INVALID');assert.equal(p.entry,undefined);
 });
+
+test('entry freezes L2 stop and three distinct 1R/2R/3R targets',()=>{
+ const p=original(Filtered.detect(fixture())),l=p.levels;
+ assert.equal(l.entry,112);assert.equal(l.stop,101.65);assert.equal(l.risk,112-101.65);
+ assert.deepEqual(l.targets.map(t=>t.label),['TP1','TP2','TP3']);
+ for(let i=0;i<3;i++){assert.equal(l.targets[i].price,l.entry+(i+1)*l.risk);assert.equal(l.targets[i].r,i+1);assert.equal(l.targets[i].percent,100*(i+1)*l.risk/l.entry);}
+ assert.equal(l.riskPercent,100*l.risk/l.entry);
+});
+test('watch and target never expose unconfirmed trade levels',()=>{
+ for(const n of [27,33,34]){const p=original(Filtered.detect(fixture().slice(0,n)));assert.equal(p.levels,undefined);}
+});
+test('levels remain unchanged after future candles and pattern invalidation',()=>{
+ const c=fixture(),before=structuredClone(original(Filtered.detect(c)).levels);
+ append(c,112,113,111,112.5);assert.deepEqual(original(Filtered.detect(c)).levels,before);
+ append(c,112,113,99,100);const p=original(Filtered.detect(c));assert.equal(p.stage,'INVALID');assert.deepEqual(p.levels,before);
+});
+test('retest gets its own entry based levels without moving the original plan',()=>{
+ const c=fixture(),before=structuredClone(original(Filtered.detect(c)).levels);
+ append(c,111,111.6,110.4,111.4);const p=original(Filtered.detect(c));assert.deepEqual(p.levels,before);
+ assert.equal(p.retestLevels.entry,111.4);assert.equal(p.retestLevels.stop,p.l2);assert.equal(p.retestLevels.targets[2].price,111.4+3*(111.4-p.l2));
+});
+test('invalid or zero risk cannot manufacture target levels',()=>{
+ for(const [entry,l2] of [[100,100],[99,100],[100,0],[100,-1],[NaN,90],[100,Infinity],[Infinity,100],[Number.MAX_VALUE,1]])assert.equal(Filtered.tradeLevels({entry,l2}),null);
+});
+test('low-priced assets preserve percentage risk and target ordering',()=>{
+ const small=Filtered.tradeLevels({entry:.000012,l2:.00001}),big=Filtered.tradeLevels({entry:12,l2:10});
+ assert.ok(Math.abs(small.riskPercent-big.riskPercent)<1e-10);
+ const prices=[small.stop,small.entry,...small.targets.map(t=>t.price)];for(let i=1;i<prices.length;i++)assert.ok(prices[i]>prices[i-1]);
+});
+test('unfiltered entries also carry the same structural risk plan',()=>{
+ const p=original(E.detect(fixture().slice(0,34)));assert.equal(p.levels.entry,111);assert.equal(p.levels.stop,p.l2);assert.equal(p.levels.targets.length,3);
+});

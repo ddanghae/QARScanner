@@ -46,6 +46,14 @@ function breakoutChecks(c,p,i,options={}){
   check('extension','돌파 직후 과도한 상승 없음',extension<=o.maxExtensionATR,`${extension.toFixed(2)} ATR / 최대 ${o.maxExtensionATR}`)];
 }
 const failed=checks=>checks.filter(x=>x.required&&!x.pass);
+// Reference levels only. Freeze at each confirmed entry; never use later prices.
+function tradeLevels(p,entry=p.entry){
+ const stop=p.l2,risk=entry-stop;
+ if(![entry,stop,risk].every(Number.isFinite)||stop<=0||risk<=0)return null;
+ const targets=[1,2,3].map(r=>({label:'TP'+r,r,price:entry+r*risk,percent:100*r*risk/entry}));
+ if(targets.some(t=>!Number.isFinite(t.price)||t.price<=entry))return null;
+ return {entry,stop,risk,riskPercent:100*risk/entry,targets};
+}
 // Profiles are deliberately separate, but not optimized against an evaluation period.
 const profiles=Object.freeze({'15m':Object.freeze({...defaults}),'1h':Object.freeze({...defaults})});
 function optionsFor(tf,overrides={}){return {...(profiles[tf]||defaults),...overrides};}
@@ -71,7 +79,7 @@ function detect(c,options={}){
  const event=(p,type,i,reason)=>p.events.push({type,time:c[i].end,price:c[i].c,reason});
  const retire=(p,type,i,reason)=>{p.stage=type;p.reason=reason;event(p,type,i,reason);history.push(p);};
  const reject=(p,i)=>retire(p,'FILTERED',i,failed(p.checks).map(x=>x.label+' 미충족').join(' · '));
- const enter=(p,i)=>{p.stage='ENTRY';p.entry=c[i].c;p.entryIndex=i;p.entryTime=c[i].end;event(p,'ENTRY',i,o.filters?'돌파 후 넥라인 위 종가 유지 확인':'넥라인 종가 돌파 · W 완성');};
+ const enter=(p,i)=>{p.stage='ENTRY';p.entry=c[i].c;p.entryIndex=i;p.entryTime=c[i].end;p.levels=tradeLevels(p);event(p,'ENTRY',i,o.filters?'돌파 후 넥라인 위 종가 유지 확인':'넥라인 종가 돌파 · W 완성');};
  const retry=(p,i,checks)=>{
   p.attempts??=[];p.attempts.push({time:c[i].end,checks:checks.map(x=>({...x}))});
   p.pending=false;p.retryStart??=i;p.lastAttemptIndex=i;
@@ -87,7 +95,7 @@ function detect(c,options={}){
    if(o.filters&&b.c<p.neck-o.failureATR*p.atr)return retire(p,'INVALID',i,'돌파 실패 · 넥라인 아래 종가 복귀');
    if(i-p.entryIndex>o.maxSignalAge)return retire(p,'EXPIRED',i,'타점 표시 기간 종료');
    if(!p.retestTime&&i>p.entryIndex&&i-p.entryIndex<=o.retestBars&&b.l<=p.neck+o.retestATR*p.atr&&b.l>=p.neck-o.retestATR*p.atr&&b.c>p.neck&&b.c>b.o&&(b.c-p.neck)/p.atr<=o.maxExtensionATR){
-    p.retestTime=b.end;p.retestPrice=b.c;event(p,'RETEST',i,'넥라인 구역 재접촉 후 양봉 종가 회복');
+    p.retestTime=b.end;p.retestPrice=b.c;p.retestLevels=tradeLevels(p,b.c);event(p,'RETEST',i,'넥라인 구역 재접촉 후 양봉 종가 회복');
    }
    return;
   }
@@ -175,4 +183,4 @@ function detect(c,options={}){
 }
 function fromRaw(raw,now){return raw.filter(r=>Number(r[6])<now).map(r=>({t:+r[0],end:+r[6],o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]})).filter(x=>[x.t,x.end,x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.h>=Math.max(x.o,x.c,x.l)&&x.l<=Math.min(x.o,x.c)&&x.l>0&&x.v>=0);}
 function validate(c,interval){if(c.length<40)throw Error('완성 캔들 부족');for(let i=1;i<c.length;i++)if(c[i].t-c[i-1].t!==interval)throw Error('캔들 누락 또는 시간 중복');return c;}
-export { profiles, optionsFor, visibleCandidates, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };
+export { tradeLevels, profiles, optionsFor, visibleCandidates, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };

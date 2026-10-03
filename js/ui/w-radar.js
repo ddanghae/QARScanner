@@ -74,13 +74,15 @@ async function scan(){
 function chart(r,p,large=false){
  const ended=['INVALID','EXPIRED','FILTERED','MISSED'].includes(p.stage),lastEventIndex=ended?r.c.findIndex(b=>b.end===p.events.at(-1).time):r.c.length-1;
  const start=Math.max(0,p.peakIndex-5),end=ended?Math.min(r.c.length,lastEventIndex+4):r.c.length,c=r.c.slice(start,end);
- const W=620,H=large?275:205,left=14,right=74,top=24,bottom=25;
- const lo=Math.min(...c.map(x=>x.l)),hi=Math.max(...c.map(x=>x.h)),pad=(hi-lo)*.12||1,min=lo-pad,max=hi+pad;
- const x=i=>left+(i-start+.5)*(W-left-right)/c.length,y=v=>top+(max-v)/(max-min)*(H-top-bottom),bw=Math.max(1,Math.min(7,(W-left-right)/c.length*.56));
+ const plan=p.levels,levels=plan?[{label:'손절',price:plan.stop,color:'#f28b95'},{label:'타점',price:plan.entry,color:'#e2e8f0'},...plan.targets.map(t=>({...t,color:'#6ee7b7'}))]:[];
+ const W=620,H=plan?(large?380:300):(large?275:205),left=14,right=plan?138:74,top=24,bottom=25;
+ const lo=Math.min(...c.map(x=>x.l),...levels.map(x=>x.price)),hi=Math.max(...c.map(x=>x.h),...levels.map(x=>x.price)),pad=(hi-lo)*.12||1,min=lo-pad,max=hi+pad;
+ const x=i=>left+(i-start+.5)*(W-left-right)/(c.length+(plan?6:0)),y=v=>top+(max-v)/(max-min)*(H-top-bottom),bw=Math.max(1,Math.min(7,(W-left-right)/c.length*.56));
  let s=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(r.sym)} ${esc(r.tf)} 캔들 차트와 W 패턴">`;
  for(let j=0;j<3;j++){const yy=top+j*(H-top-bottom)/2;s+=`<line x1="${left}" x2="${W-right}" y1="${yy}" y2="${yy}" stroke="#243138" stroke-width=".7"/>`;}
  c.forEach((b,k)=>{const xx=x(k+start),color=b.c>=b.o?'#609e8d':'#9a6973';s+=`<line x1="${xx}" x2="${xx}" y1="${y(b.h)}" y2="${y(b.l)}" stroke="${color}"/><rect x="${xx-bw/2}" y="${Math.min(y(b.o),y(b.c))}" width="${bw}" height="${Math.max(1,Math.abs(y(b.o)-y(b.c)))}" fill="${color}"/>`;});
- const neckY=y(p.neck);s+=`<line x1="${left}" x2="${W-right+3}" y1="${neckY}" y2="${neckY}" stroke="#718898" stroke-dasharray="5 5"/><text x="${W-right+7}" y="${neckY+3}" fill="#9aafb9" font-size="10">넥라인</text>`;
+ const neckY=y(p.neck);s+=`<line x1="${left}" x2="${W-right+3}" y1="${neckY}" y2="${neckY}" stroke="#718898" stroke-dasharray="5 5"/><text x="${W-right+7}" y="${neckY+3}" fill="#9aafb9" font-size="10">${plan?'':'넥라인'}</text>`;
+ for(const level of levels){const yy=y(level.price);s+=`<g data-level="${level.label}"><line x1="${x(p.entryIndex)}" x2="${W-right+3}" y1="${yy}" y2="${yy}" stroke="${level.color}" stroke-dasharray="${level.label==='타점'?'2 4':'6 3'}"/><text x="${W-right+7}" y="${yy+3}" fill="${level.color}" font-size="11">${level.label} ${price(level.price)}</text></g>`;}
  const points=[[p.peakIndex,r.c[p.peakIndex].h],[p.l1Index,p.l1],[p.neckIndex,p.neck]];
  if(p.l2Index!==undefined)points.push([p.l2Index,p.l2]);if(p.entryIndex!==undefined)points.push([p.entryIndex,p.entry]);
  s+=`<polyline points="${points.map(([i,v])=>x(i)+','+y(v)).join(' ')}" fill="none" stroke="${p.stage==='ENTRY'?'#6ee7b7':'#a7c6d6'}" stroke-width="2.3" stroke-linejoin="round" opacity=".85"/>`;
@@ -101,6 +103,10 @@ function checkDetails(p){
  if(!p.checks?.length)return '<p class="filter-note">아직 첫 V 관심 단계입니다. 두 번째 저점이 확인되면 구조 검증을 시작합니다.</p>';
  return `<h3 style="font-size:14px;margin-top:20px">필터 검사 내역</h3><ul class="checks">${p.checks.map(x=>`<li><b class="${x.pass?'checkpass':x.required?'checkfail':'checkinfo'}">${x.pass?'✓':x.required?'✕':'△'} ${esc(x.label)}${x.required?'':' · 참고'}</b><small>${esc(x.value)}</small></li>`).join('')}</ul>${p.stage==='TARGET'&&p.pending?'<p class="amber">다음 봉이 넥라인 위에서 마감하는지 기다리고 있습니다. 아직 타점이 아닙니다.</p>':''}<p class="filter-note">통과는 현재 규칙을 만족한다는 뜻이며, 성공 확률이나 수익률을 뜻하지 않습니다.</p>`;
 }
+function levelPanel(plan,title='손절 · 익절 기준',historical=false){
+ if(!plan)return '';
+ return `<section class="trade-levels" aria-label="${title}"><div class="level-title">${title}${historical?' · 당시 계획':''}</div><div class="level-grid"><div class="stop-level"><span>손절 · L2</span><b>${price(plan.stop)}</b><small>−${plan.riskPercent.toFixed(2)}%</small></div>${plan.targets.map(t=>`<div><span>${t.label} · ${t.r}R</span><b>${price(t.price)}</b><small>+${t.percent.toFixed(2)}%</small></div>`).join('')}</div><p>기준 타점 ${price(plan.entry)} · 1R = 타점 − 손절<br>가격 변동률 · 수수료·슬리피지·레버리지 미반영</p></section>`;
+}
 function card(r,p,dual){
  const ended=['INVALID','EXPIRED','FILTERED','MISSED'].includes(p.stage),stale=state.mode!=='demo'&&isStale(r,Date.now()+state.offset),fresh=!stale&&p.stage==='ENTRY',last=r.c.at(-1),chase=p.entry&&last.c>p.neck+2*p.atr;
  const cls=p.stage.toLowerCase();const key=r.key+'|'+p.id;
@@ -109,6 +115,7 @@ function card(r,p,dual){
  <div class="values"><div><span>첫 저점 L1</span><b>${price(p.l1)}</b></div><div><span>두 번째 저점 L2</span><b>${price(p.l2)}</b></div><div><span>넥라인</span><b>${price(p.neck)}</b></div></div>
  <div class="checkline ${p.stage==='FILTERED'?'stale':''}">${esc(checkSummary(p))}</div>
  <div class="entrybox ${fresh?'':'waiting'}"><div><div class="label">${p.entry?(p.filtered?'검증 완료 봉 종가':'W 완성 봉 종가'):'타점 표시'}</div><strong>${p.entry?price(p.entry):p.stage==='WATCH'?'두 번째 지지 확인 후 대기':ended?'표시하지 않음':p.pending?'다음 봉 종가 확인 대기':'넥라인 종가 돌파 대기'}</strong></div><div class="time">${p.entry?time(p.entryTime)+'<br>': ''}${stale?'재확인 필요':ended?LABEL[p.stage]:chase?'넥라인에서 2 ATR 이상 상승':p.entry?'돌파 거래량 '+p.volumeRatio.toFixed(2)+'배':p.l2?'첫 저점 이탈 시 무효':'첫 저점 이탈 시 취소'}</div></div>
+ ${levelPanel(p.levels,'손절 · 익절 기준',ended)}
  ${p.retestTime?`<div class="checkline">재지지 타점 ${price(p.retestPrice)} · ${time(p.retestTime)}</div>`:''}
  <div class="foot"><span>마지막 봉 ${time(last.end)}${state.mode==='demo'?' · 예시':''}</span><button data-detail="${esc(key)}">상세 보기 ↗</button></div></article>`;
 }
@@ -125,9 +132,9 @@ function render(){
  if($('#detail').open&&state.selected)showDetail(state.selected,false);
 }
 function showDetail(key,open=true){const at=key.indexOf('|'),r=state.records.get(key.slice(0,at)),id=key.slice(at+1);if(!r)return;const p=[...activePatterns(r),...r.history].find(p=>p?.id===id);if(!p)return;state.selected=key;
- $('#detailContent').innerHTML=`<div class="dialoghead"><h2>${esc(r.sym)} · ${r.tf==='15m'?'15분봉':'1시간봉'} <span class="badge ${p.stage.toLowerCase()}">${LABEL[p.stage]}</span></h2><button id="closeDetail" aria-label="상세 닫기">✕</button></div>${state.mode!=='demo'&&isStale(r,Date.now()+state.offset)?'<p class="stale">갱신 필요 · 이전 데이터입니다.</p>':''}${state.mode==='demo'?'<p class="amber">구조를 설명하기 위한 가상 데이터입니다.</p>':''}${chart(r,p,true)}
+ $('#detailContent').innerHTML=`<div class="dialoghead"><h2>${esc(r.sym)} · ${r.tf==='15m'?'15분봉':'1시간봉'} <span class="badge ${p.stage.toLowerCase()}">${LABEL[p.stage]}</span></h2><button id="closeDetail" aria-label="상세 닫기">✕</button></div>${state.mode!=='demo'&&isStale(r,Date.now()+state.offset)?'<p class="stale">갱신 필요 · 이전 데이터입니다.</p>':''}${state.mode==='demo'?'<p class="amber">구조를 설명하기 위한 가상 데이터입니다.</p>':''}${chart(r,p,true)}${levelPanel(p.levels,'돌파 타점 손절 · TP1~TP3',p.stage!=='ENTRY')}${levelPanel(p.retestLevels,'재지지 타점 손절 · TP1~TP3',p.stage!=='ENTRY')}
  <p class="filter-note">${esc(checkSummary(p))}</p><div class="detailrow"><span>패턴 분류</span><b>${esc(p.kind||'두 번째 저점 대기')}</b></div>
- <div class="detailrow"><span>돌파 확인 기준</span><b>종가 &gt; ${price(p.neck+E.defaults.breakoutATR*p.atr)}</b></div><div class="detailrow"><span>${p.stage==='WATCH'?'패턴 무효 기준':'지지 무효 기준'}</span><b>저가 &lt; ${price(p.stage==='ENTRY'?p.l2:p.l1)}</b></div>
+ <div class="detailrow"><span>돌파 확인 기준</span><b>종가 &gt; ${price(p.neck+E.defaults.breakoutATR*p.atr)}</b></div><div class="detailrow"><span>${p.stage==='WATCH'?'패턴 무효 기준':'지지 무효 기준'}</span><b>저가 &lt; ${price(p.entryTime!==undefined?p.l2:p.l1)}</b></div>
  ${p.filtered?`<div class="detailrow"><span>타점 이후 돌파 실패 기준</span><b>종가 &lt; ${price(p.neck-E.defaults.failureATR*p.atr)}</b></div><div class="detailrow"><span>최근 검증 돌파 시각 / 종가</span><b>${p.breakoutTime?time(p.breakoutTime)+' / '+price(p.breakoutPrice):'검증된 돌파 없음'}</b></div>`:''}
  <div class="detailrow"><span>${p.filtered?'검증 타점 시각 / 종가':'W 완성 시각 / 종가'}</span><b>${p.entry?time(p.entryTime)+' / '+price(p.entry):'미확정'}</b></div><div class="detailrow"><span>최신 완성 봉 종가</span><b>${price(r.c.at(-1).c)}</b></div>${p.retestTime?`<div class="detailrow"><span>재지지 타점 시각 / 종가</span><b>${time(p.retestTime)} / ${price(p.retestPrice)}</b></div>`:''}${checkDetails(p)}${p.attempts?.length?`<h3>이전 돌파 확인 실패</h3>${p.attempts.map(a=>`<p class="filter-note">${time(a.time)} · ${esc(a.checks.filter(x=>!x.pass).map(x=>x.label).join(' · '))}</p>`).join('')}`:''}
  <ol class="timeline">${p.events.map(e=>`<li><b>${LABEL[e.type]}</b> · ${time(e.time)}<br>${esc(e.reason)}</li>`).join('')}</ol><p style="color:var(--muted);font-size:11px">저점은 이후 2개 봉으로 확인합니다. 검증 필터 적용 시 타점은 돌파 다음 봉의 종가입니다. 이는 재지지 확인과 다르며, 재지지는 별도 시각·가격으로 표시합니다. 실제 주문 체결가를 뜻하지 않습니다.</p><a href="https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(r.sym)}.P&interval=${r.tf==='15m'?'15':'60'}" target="_blank" rel="noopener noreferrer">TradingView에서 종목 보기 ↗</a>`;

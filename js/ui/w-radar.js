@@ -2,7 +2,7 @@
 import * as E from '../core/w-pattern.js';
 import {activePatterns,scanJobs,isStale,trendLabel} from '../core/w-scan-state.js';
 const $=s=>document.querySelector(s);
-const LABEL={WATCH:'관심',TARGET:'타겟',ENTRY:'타점',INVALID:'무효',EXPIRED:'만료',FILTERED:'필터 제외',BREAKOUT:'돌파 확인 중',RETRY:'재돌파 대기',SUPPORT:'바닥 재확인',RETEST:'재지지 타점',MISSED:'상승 과다'};
+const LABEL={WATCH:'관심',RECOVERY:'회복 대기',TARGET:'타겟',ENTRY:'타점',INVALID:'무효',EXPIRED:'만료',FILTERED:'필터 제외',BREAKOUT:'돌파 확인 중',RETRY:'재돌파 대기',SUPPORT:'바닥 재확인',RETEST:'재지지 타점',MISSED:'상승 과다'};
 const TF={'15m':900000,'1h':3600000};
 const state={records:new Map(),cache:new Map(),loading:false,mode:'empty',stage:'ALL',lastAuto:0,nextAutoAt:0,cooldown:0,offset:0,scanned:false,selected:null,visible:24};
 const esc=s=>String(s).replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
@@ -93,6 +93,7 @@ function chart(r,p,large=false){
 function rows(){return [...state.records.values()].flatMap(r=>state.stage==='HISTORY'?r.history.slice(-12).map(p=>({r,p})):state.stage==='FILTERED'?r.history.filter(p=>['FILTERED','MISSED'].includes(p.stage)).map(p=>({r,p})):activePatterns(r).map(p=>({r,p})));}
 function checkSummary(p){
  if(!p.filtered)return '검증 필터 꺼짐 · 기본 탐지만 적용';
+ if(p.stage==='RECOVERY')return '두 번째 지지 확인 · 오른쪽 고점이 넥라인 구역까지 회복하기 전';
  if(p.stage==='WATCH')return '첫 V 관심 후보 · 두 번째 지지부터 구조 검증';
  if(p.stage==='FILTERED')return '제외 사유 · '+p.reason;
  if(['INVALID','EXPIRED','MISSED'].includes(p.stage))return p.reason;
@@ -114,7 +115,7 @@ function card(r,p,dual){
  <div class="cardmeta"><span class="${stale?'stale':dual?'dual':''}">${stale?'갱신 필요 · 이전 결과':state.mode==='demo'?'구조 설명용 가상 데이터':dual?'두 시간봉에서 패턴 추적 중':'완성 봉 기준'}</span><span>${esc(p.kind||'두 번째 눌림 대기')}${r.tf==='15m'?' · '+esc(hourContext(r.sym)):''}</span></div>${chart(r,p)}
  <div class="values"><div><span>첫 저점 L1</span><b>${price(p.l1)}</b></div><div><span>두 번째 저점 L2</span><b>${price(p.l2)}</b></div><div><span>넥라인</span><b>${price(p.neck)}</b></div></div>
  <div class="checkline ${p.stage==='FILTERED'?'stale':''}">${esc(checkSummary(p))}</div>
- <div class="entrybox ${fresh?'':'waiting'}"><div><div class="label">${p.entry?(p.filtered?'검증 완료 봉 종가':'W 완성 봉 종가'):'타점 표시'}</div><strong>${p.entry?price(p.entry):p.stage==='WATCH'?'두 번째 지지 확인 후 대기':ended?'표시하지 않음':p.pending?'다음 봉 종가 확인 대기':'넥라인 종가 돌파 대기'}</strong></div><div class="time">${p.entry?time(p.entryTime)+'<br>': ''}${stale?'재확인 필요':ended?LABEL[p.stage]:chase?'넥라인에서 2 ATR 이상 상승':p.entry?'돌파 거래량 '+p.volumeRatio.toFixed(2)+'배':p.l2?'첫 저점 이탈 시 무효':'첫 저점 이탈 시 취소'}</div></div>
+ <div class="entrybox ${fresh?'':'waiting'}"><div><div class="label">${p.entry?(p.filtered?'검증 완료 봉 종가':'W 완성 봉 종가'):'타점 표시'}</div><strong>${p.entry?price(p.entry):p.stage==='WATCH'?'두 번째 지지 확인 후 대기':p.stage==='RECOVERY'?'오른쪽 고점 넥라인 회복 대기':ended?'표시하지 않음':p.pending?'다음 봉 종가 확인 대기':'넥라인 종가 돌파 대기'}</strong></div><div class="time">${p.entry?time(p.entryTime)+'<br>': ''}${stale?'재확인 필요':ended?LABEL[p.stage]:chase?'넥라인에서 2 ATR 이상 상승':p.entry?'돌파 거래량 '+p.volumeRatio.toFixed(2)+'배':p.l2?'첫 저점 이탈 시 무효':'첫 저점 이탈 시 취소'}</div></div>
  ${levelPanel(p.levels,'손절 · 익절 기준',ended)}
  ${p.retestTime?`<div class="checkline">재지지 타점 ${price(p.retestPrice)} · ${time(p.retestTime)}</div>`:''}
  <div class="foot"><span>마지막 봉 ${time(last.end)}${state.mode==='demo'?' · 예시':''}</span><button data-detail="${esc(key)}">상세 보기 ↗</button></div></article>`;
@@ -123,10 +124,10 @@ function hourContext(sym){const r=state.records.get(sym+':1h');return r&&!isStal
 function render(){
  const excluded=[...state.records.values()].filter(r=>!r.error).reduce((n,r)=>n+r.history.filter(p=>['FILTERED','MISSED'].includes(p.stage)).length,0);
  $('#filterSummary').textContent=$('#quality').checked?`검증 필터 켜짐 · 조회 데이터 내 제외 ${excluded}건`:'검증 필터 꺼짐 · 기존 단일 돌파 방식';
- for(const stage of ['WATCH','TARGET','ENTRY'])$('#count'+stage).textContent=[...state.records.values()].filter(r=>state.mode==='demo'||!isStale(r,Date.now()+state.offset)).reduce((n,r)=>n+activePatterns(r).filter(p=>p.stage===stage).length,0);
+ for(const stage of ['WATCH','RECOVERY','TARGET','ENTRY'])$('#count'+stage).textContent=[...state.records.values()].filter(r=>state.mode==='demo'||!isStale(r,Date.now()+state.offset)).reduce((n,r)=>n+activePatterns(r).filter(p=>p.stage===stage).length,0);
  const query=$('#query').value.trim().toUpperCase(),tf=$('#tf').value;
  const all=rows().filter(({r,p})=>(tf==='ALL'||r.tf===tf)&&r.sym.includes(query)&&(state.stage==='ALL'||state.stage==='HISTORY'||p.stage===state.stage||(state.stage==='BREAKOUT'&&p.stage==='TARGET'&&p.pending)||(state.stage==='FILTERED'&&p.stage==='MISSED')));
- const order={ENTRY:0,TARGET:1,WATCH:2,INVALID:3,EXPIRED:4,FILTERED:5,MISSED:6};all.sort((a,b)=>(!!a.r.error-!!b.r.error)||(['HISTORY','FILTERED'].includes(state.stage)?0:order[a.p.stage]-order[b.p.stage])||b.p.events.at(-1).time-a.p.events.at(-1).time);
+ const order={ENTRY:0,TARGET:1,RECOVERY:2,WATCH:3,INVALID:4,EXPIRED:5,FILTERED:6,MISSED:7};all.sort((a,b)=>(!!a.r.error-!!b.r.error)||(['HISTORY','FILTERED'].includes(state.stage)?0:order[a.p.stage]-order[b.p.stage])||b.p.events.at(-1).time-a.p.events.at(-1).time);
  const counts=new Map();for(const r of state.records.values())if(activePatterns(r).length&&!r.error)counts.set(r.sym,(counts.get(r.sym)||0)+1);
  $('#results').innerHTML=all.length?all.slice(0,state.visible).map(({r,p})=>card(r,p,counts.get(r.sym)>1)).join('')+(all.length>state.visible?`<button data-more style="grid-column:1/-1">더 보기 · ${state.visible} / ${all.length}개 표시</button>`:''):`<div class="empty"><svg viewBox="0 0 120 60" aria-hidden="true"><path d="M5 8L30 47L57 15L83 39L114 4" fill="none" stroke="#486f66" stroke-width="2"/><circle cx="83" cy="39" r="4" fill="#6ee7b7"/></svg><strong>${state.mode==='empty'?'W가 만들어지는 순서대로 추적합니다.':state.stage==='HISTORY'?'종료된 패턴이 없습니다.':'조건에 맞는 패턴이 없습니다.'}</strong>${state.mode==='empty'?'시장 스캔으로 현재 후보를 찾거나, 예시에서 관심 → 타겟 → 타점을 확인하세요.':'검색어와 필터를 확인하거나 다음 완성 봉을 기다려 주세요.'}</div>`;
  if($('#detail').open&&state.selected)showDetail(state.selected,false);
@@ -144,7 +145,7 @@ function demoCandles(tf,length,scale=1){const interval=TF[tf],anchor=Math.floor(
 function demo(){if(state.loading)return;$('#auto').checked=false;state.records.clear();state.mode='demo';state.scanned=false;state.stage='ALL';document.querySelectorAll('[data-stage]').forEach(b=>{b.classList.toggle('active',b.dataset.stage==='ALL');b.setAttribute('aria-pressed',String(b.dataset.stage==='ALL'));});$('#tf').value='ALL';$('#query').value='';
  const definitions=[['DEMO-AUSDT','15m',27,1],['DEMO-BUSDT','15m',33,.1],['DEMO-CUSDT','1h',35,.01],['DEMO-DUSDT','15m',35,.01]];
  for(const [sym,tf,n,m]of definitions){const c=demoCandles(tf,n,m),key=sym+':'+tf;if(sym==='DEMO-DUSDT')c[33].v=700;state.records.set(key,{sym,tf,key,c,...E.detect(c,E.optionsFor(tf,detectionOptions())),checked:Date.now(),error:null});}
- banner('예시 모드 · 세 단계의 구조를 보여 주는 가상 종목입니다. 실시간 결과는 시장 스캔을 눌러 확인하세요.');status('예시 · 관심 / 타겟 / 타점');$('#updated').textContent='가상 데이터';render();
+ banner('예시 모드 · 세 단계의 구조를 보여 주는 가상 종목입니다. 실시간 결과는 시장 스캔을 눌러 확인하세요.');status('예시 · 관심 / 회복 대기 / 타점');$('#updated').textContent='가상 데이터';render();
 }
 $('#scan').onclick=scan;$('#demo').onclick=demo;
 $('#quality').onchange=$('#continuation').onchange=recheck;

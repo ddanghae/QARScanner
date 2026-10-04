@@ -1,5 +1,5 @@
 'use strict';
-const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.25,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15,maxCandidates:6,maxSeeds:12,retryBars:6,maxAttempts:3,maxResets:2,retestBars:6,retestATR:.15});
+const defaults=Object.freeze({pivot:2,minDropATR:1.5,recovery:.65,minBounceATR:1,minPullbackATR:.6,supportBounceATR:.5,minSeparation:6,maxFormation:60,maxSignalAge:12,breakoutATR:.15,filters:true,allowContinuation:true,minHeightATR:1.5,necklineATR:.75,necklineHeightRatio:.2,minSecondDepthATR:1,maxClassicGapRatio:.25,maxRisingGapRatio:.25,maxLegRatio:3,minBreakoutVolume:1.3,minBodyRatio:.5,minClosePosition:.7,maxExtensionATR:1.5,failureATR:.15,maxCandidates:6,maxSeeds:12,retryBars:6,maxAttempts:3,maxResets:2,retestBars:6,retestATR:.15});
 const mean=a=>a.reduce((s,x)=>s+x,0)/(a.length||1);
 function atrAt(c,i){return mean(c.slice(Math.max(0,i-13),i+1).map((x,j)=>{const p=c[Math.max(0,i-13)+j-1];return p?Math.max(x.h-x.l,Math.abs(x.h-p.c),Math.abs(x.l-p.c)):x.h-x.l;}));}
 function lowPivot(c,i,p){if(i<p||i+p>=c.length)return false;for(let j=i-p;j<=i+p;j++){if(j!==i&&(c[j].l<c[i].l||(j<i&&c[j].l===c[i].l)))return false;}return true;}
@@ -12,6 +12,9 @@ function contextAt(c,p){
  return early-late>.5*p.atr?'REVERSAL':'BASE';
 }
 const check=(id,label,pass,value,required=true)=>({id,label,pass,value,required});
+// User-defined W: the first and middle peaks share a resistance zone;
+// the right leg must recover to that zone before the formation becomes TARGET.
+function necklineBand(p,options={}){const o={...defaults,...options};return Math.min(p.atr*o.necklineATR,(p.neck-p.l1)*o.necklineHeightRatio);}
 function shapeChecks(c,p,options={}){
  const o={...defaults,...options},height=p.neck-p.l1,depth=p.neck-p.l2;
  const gap=(p.l2-p.l1)/height,left=p.neckIndex-p.l1Index,right=p.l2Index-p.neckIndex;
@@ -25,7 +28,11 @@ function shapeChecks(c,p,options={}){
   if(before>=prominence&&after>=prominence)extra++;
  }
  const v1=mean(c.slice(p.peakIndex+1,p.l1Index+1).map(x=>x.v)),v2=mean(c.slice(p.neckIndex+1,p.l2Index+1).map(x=>x.v));
+ const band=necklineBand(p,o),peak=c[p.peakIndex];
+ const middleClose=Math.max(...c.slice(p.l1Index+1,p.l2Index).map(x=>x.c));
  return [
+  check('necklineAlignment','시작·중간 고점의 넥라인 정렬',!!peak&&band>0&&Math.abs(peak.h-p.neck)<=band,`고점 차이 ${peak?Math.abs(peak.h-p.neck).toPrecision(4):'없음'} / 허용 ${band.toPrecision(4)}`),
+  check('necklineBody','중간 반등의 종가 회복',middleClose>=p.neck-band,`중간 최고 종가 ${middleClose} / 넥라인 구역 ${p.neck-band} 이상`),
   check('context','상승 중 W 포함 설정',context!=='CONTINUATION'||o.allowContinuation,p.kind),
   check('height','충분한 중간 반등',height>=o.minHeightATR*p.atr,`${(height/p.atr).toFixed(2)} ATR / 최소 ${o.minHeightATR}`),
   check('depth','두 번째 눌림 깊이',depth>=o.minSecondDepthATR*p.atr,`${(depth/p.atr).toFixed(2)} ATR / 최소 ${o.minSecondDepthATR}`),
@@ -67,7 +74,7 @@ function peakBefore(c,j,o){
  return -1;
 }
 function visibleCandidates(candidates){
- const rank={ENTRY:0,TARGET:1,WATCH:2},seen=new Set();
+ const rank={ENTRY:0,TARGET:1,RECOVERY:2,WATCH:3},seen=new Set();
  return candidates.slice().sort((a,b)=>rank[a.stage]-rank[b.stage]||b.events.at(-1).time-a.events.at(-1).time||a.l1Index-b.l1Index).filter(p=>{
   const key=p.l2Index===undefined?'first:'+p.l1Index:'second:'+p.l2Index;
   if(seen.has(key))return false;seen.add(key);return true;
@@ -110,11 +117,11 @@ function detect(c,options={}){
   }
   if(i-p.l1Index>o.maxFormation)return retire(p,'EXPIRED',i,'W 형성 대기 기간 종료');
   if(p.retryStart!==undefined&&i-p.retryStart>o.retryBars)return retire(p,'EXPIRED',i,'돌파 재확인 대기 기간 종료');
-  if(p.stage==='TARGET'&&b.l<p.l2){
+  if(['TARGET','RECOVERY'].includes(p.stage)&&b.l<p.l2){
    if(!o.filters)return retire(p,'INVALID',i,'두 번째 지지 저점 이탈');
    if((p.resets||0)>=o.maxResets)return retire(p,'EXPIRED',i,'두 번째 바닥 재확인 횟수 종료');
    p.resets=(p.resets||0)+1;p.resetAfter=i;p.pending=false;p.stage='WATCH';p.pullback=true;p.support=null;p.checks=[];
-   delete p.l2;delete p.l2Index;delete p.waitReason;delete p.earlyBreakout;
+   delete p.l2;delete p.l2Index;delete p.waitReason;delete p.earlyBreakout;delete p.rightPeak;delete p.rightPeakIndex;delete p.targetIndex;delete p.recoveryIndex;
    event(p,'SUPPORT',i,'첫 저점 유지 · 두 번째 바닥 재확인');
    return;
   }
@@ -137,7 +144,9 @@ function detect(c,options={}){
       p.neck=c[n].h;p.neckIndex=n;p.checks=shapeChecks(c,p,o);
       if(failed(p.checks).length)return reject(p,i);
      }
-    delete p.earlyBreakout;p.targetIndex=i;p.bounceIndex=i;p.bounce=b.c;p.stage='TARGET';event(p,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');
+    delete p.earlyBreakout;p.recoveryIndex=i;p.bounceIndex=i;p.bounce=b.c;p.stage=o.filters?'RECOVERY':'TARGET';
+    if(o.filters)event(p,'RECOVERY',i,'두 번째 지지 확인 · 오른쪽 고점 넥라인 회복 대기');
+    else{p.targetIndex=i;event(p,'TARGET',i,'첫 저점 위에서 두 번째 지지 확인');}
     }else if(b.c>p.neck+o.breakoutATR*p.atr){
      // Allow the right-hand pivot bars to finish before declaring a premature breakout.
      p.earlyBreakout??=i;
@@ -145,12 +154,23 @@ function detect(c,options={}){
     }else delete p.earlyBreakout;
    }
   }
-  if(p.stage!=='TARGET')return;
+  if(!['TARGET','RECOVERY'].includes(p.stage))return;
   // Retain the right-hand recovery leg so the chart shows the complete W after L2.
   if(p.bounce===undefined||b.h>p.bounce){p.bounce=b.h;p.bounceIndex=i;}
   if(o.filters&&!p.pending){
    const j=i-o.pivot;
    if(j>=p.l2Index+4&&lowPivot(c,j,o.pivot)&&c[j].l<=p.l1+(p.neck-p.l1)*.35&&Math.max(...c.slice(p.l2Index+1,j).map(x=>x.h))-c[j].l>=Math.max(p.atr,(p.neck-p.l1)*.5)&&b.c-c[j].l>=o.supportBounceATR*p.atr){p.checks.push(check('thirdLow','두 번째 지지 이후 추가 저점 없음',false,'세 번째 지지 저점 확인'));return reject(p,i);}
+  }
+  if(p.stage==='RECOVERY'){
+   const band=necklineBand(p,o);
+   const breakChecks=breakoutChecks(c,p,i,o),breaking=b.c>p.neck+o.breakoutATR*p.atr;
+   if(breaking&&!breakChecks.find(x=>x.id==='extension').pass){p.checks.push(...breakChecks);return retire(p,'MISSED',i,'넥라인 회복 시점 상승 과다 · 타점 제외');}
+   const near=b.h>=p.neck-band&&b.h<=p.neck+band&&b.c>=p.neck-band;
+   p.checks=p.checks.filter(x=>x.id!=='rightNeckline');
+   p.checks.push(check('rightNeckline','오른쪽 고점의 넥라인 회복',near||(breaking&&!failed(breakChecks).length),`고가 ${b.h} · 종가 ${b.c} / 구역 ${p.neck-band} ~ ${p.neck+band}`));
+   if(!p.checks.at(-1).pass)return;
+   p.rightPeakIndex=i;p.rightPeak=b.h;p.targetIndex=i;p.stage='TARGET';
+   event(p,'TARGET',i,'세 고점 넥라인 정렬 · 오른쪽 종가 회복 확인');
   }
   if(o.filters&&p.pending&&i>p.breakoutIndex){
    const checks=[check('hold','돌파 다음 봉 종가 유지',b.c>p.neck,`다음 봉 종가 ${b.c} / 넥라인 ${p.neck}`),check('confirmExtension','확인 시점 과도한 상승 없음',(b.c-p.neck)/p.atr<=o.maxExtensionATR,`${((b.c-p.neck)/p.atr).toFixed(2)} ATR / 최대 ${o.maxExtensionATR}`)];
@@ -174,7 +194,7 @@ function detect(c,options={}){
  }
  for(let i=14+o.pivot;i<c.length;i++){
   for(const p of candidates)advance(p,i);
-  candidates=candidates.filter(p=>['WATCH','TARGET','ENTRY'].includes(p.stage));
+  candidates=candidates.filter(p=>['WATCH','RECOVERY','TARGET','ENTRY'].includes(p.stage));
   for(let k=seeds.length-1;k>=0;k--)if(c[i].l<c[seeds[k].j].l||i-seeds[k].j>o.maxFormation)seeds.splice(k,1);
   const j=i-o.pivot;
   if(lowPivot(c,j,o.pivot)){
@@ -194,4 +214,4 @@ function detect(c,options={}){
 }
 function fromRaw(raw,now){return raw.filter(r=>Number(r[6])<now).map(r=>({t:+r[0],end:+r[6],o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]})).filter(x=>[x.t,x.end,x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.h>=Math.max(x.o,x.c,x.l)&&x.l<=Math.min(x.o,x.c)&&x.l>0&&x.v>=0);}
 function validate(c,interval){if(c.length<40)throw Error('완성 캔들 부족');for(let i=1;i<c.length;i++)if(c[i].t-c[i-1].t!==interval)throw Error('캔들 누락 또는 시간 중복');return c;}
-export { tradeLevels, profiles, optionsFor, visibleCandidates, structurePoints, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt };
+export { tradeLevels, profiles, optionsFor, visibleCandidates, structurePoints, detect, fromRaw, validate, defaults, atrAt, shapeChecks, breakoutChecks, contextAt, necklineBand };

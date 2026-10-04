@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import * as Lifecycle from '../js/core/w-scan-state.js';
 import * as Filtered from '../js/core/w-pattern.js';
 // Preserve regression coverage for the explicitly available unfiltered mode.
 const E={...Filtered,detect:(c,o={})=>Filtered.detect(c,{filters:false,...o})};
@@ -29,7 +32,7 @@ test('filtered W waits one more closed candle and uses actual confirmation price
  const p=Filtered.detect(c).active;assert.equal(p.stage,'ENTRY');assert.equal(p.entry,112);assert.equal(p.entryTime,c[34].end);assert.equal(p.breakoutPrice,111);assert.ok(p.checks.every(x=>!x.required||x.pass));
 });
 test('weak-volume breakout waits for another attempt without an entry',()=>{const c=fixture();c[33].v=900;const p=Filtered.detect(c).active;assert.equal(p.stage,'TARGET');assert.ok(p.attempts[0].checks.some(x=>x.id==='volume'&&!x.pass));assert.equal(p.entry,undefined);});
-test('long upper-wick breakout waits without manufacturing an entry',()=>{const c=fixture();c[33].h=125;const p=Filtered.detect(c).active;assert.ok(p.attempts[0].checks.some(x=>x.id==='close'&&!x.pass));assert.equal(p.entry,undefined);});
+test('long upper-wick breakout waits without manufacturing an entry',()=>{const c=fixture().slice(0,34);c[33].h=125;const p=Filtered.detect(c).active;assert.equal(p.stage,'RECOVERY');assert.ok(p.checks.some(x=>x.id==='rightNeckline'&&!x.pass));assert.equal(p.entry,undefined);});
 test('huge breakout is not labeled as a fresh entry',()=>{const c=fixture();c[33].c=120;c[33].h=121;const p=Filtered.detect(c).history.find(p=>p.stage==='MISSED');assert.ok(p.checks.some(x=>x.id==='extension'&&!x.pass));});
 test('next close below neckline returns to bounded retry without entry',()=>{const c=fixture();c[34].c=109;const p=Filtered.detect(c).active;assert.equal(p.stage,'TARGET');assert.equal(p.pending,false);assert.ok(p.attempts[0].checks.some(x=>x.id==='hold'&&!x.pass));assert.equal(p.entry,undefined);});
 test('post-entry neckline failure preserves entry history and invalidates',()=>{const c=fixture();c.push({t:35*900000,end:36*900000-1,o:112,h:112.2,l:108.5,c:109,v:1000});const p=Filtered.detect(c).history.find(p=>p.entry);assert.equal(p.stage,'INVALID');assert.match(p.reason,/넥라인/);assert.equal(p.entry,112);assert.ok(p.events.some(e=>e.type==='ENTRY'));});
@@ -38,10 +41,10 @@ test('shape validation rejects lopsided timing and extra bottoms',()=>{const c=f
 test('height filter rejects volatility-sized noise',()=>{const c=fixture(),p=E.detect(c.slice(0,33)).active;const checks=Filtered.shapeChecks(c,{...p,atr:20});assert.ok(checks.some(x=>x.id==='height'&&!x.pass));assert.ok(checks.some(x=>x.id==='depth'&&!x.pass));});
 test('continuation W is explicitly classified and can be disabled',()=>{const c=fixture();for(let i=0;i<20;i++){c[i].c=100+i*.5;c[i].o=c[i].c-.4;c[i].h=c[i].c+.3;c[i].l=c[i].o-.3;}const p=E.detect(c.slice(0,33)).active;assert.ok(p);const clone={...p};const checks=Filtered.shapeChecks(c,clone,{allowContinuation:false});assert.equal(clone.context,'CONTINUATION');assert.ok(checks.some(x=>x.id==='context'&&!x.pass));});
 test('continuation W cannot use a much higher second bottom to pass as a W',()=>{const c=fixture();for(let i=0;i<20;i++){c[i].c=100+i*.5;c[i].o=c[i].c-.4;c[i].h=c[i].c+.3;c[i].l=c[i].o-.3;}const p=E.detect(c.slice(0,33)).active;const height=p.neck-p.l1,checks=Filtered.shapeChecks(c,{...p,l2:p.l1+height*.49});assert.ok(checks.some(x=>x.id==='bottoms'&&!x.pass));assert.match(checks.find(x=>x.id==='bottoms').value,/최대 25%/);});
-test('target structure draws both valleys, the intervening neckline and right-side rebound in order',()=>{const c=fixture().slice(0,33),p=Filtered.detect(c).active;assert.equal(p.stage,'TARGET');assert.ok(p.bounceIndex>=p.l2Index);assert.deepEqual(Filtered.structurePoints(c,p).map(x=>x[0]),[p.peakIndex,p.l1Index,p.neckIndex,p.l2Index,p.bounceIndex]);});
+test('target structure draws both valleys, the intervening neckline and right-side rebound in order',()=>{const c=fixture().slice(0,33),p=Filtered.detect(c).active;assert.equal(p.stage,'RECOVERY');assert.ok(p.bounceIndex>=p.l2Index);assert.deepEqual(Filtered.structurePoints(c,p).map(x=>x[0]),[p.peakIndex,p.l1Index,p.neckIndex,p.l2Index,p.bounceIndex]);});
 test('filtered events are causal across every prefix',()=>{const c=fixture(),p=Filtered.detect(c).active;for(let n=24;n<=c.length;n++){const r=Filtered.detect(c.slice(0,n));if(r.active?.id===p.id)assert.deepEqual(r.active.events,p.events.filter(e=>e.time<=c[n-1].end));}});
 test('filtered decisions are unchanged by asset price scale',()=>{const c=fixture(),small=c.map(b=>({...b,o:b.o/1e5,h:b.h/1e5,l:b.l/1e5,c:b.c/1e5}));assert.equal(Filtered.detect(small).active.stage,'ENTRY');});
-test('filtered equal lows preserve the user support rule',()=>{const c=fixture().slice(0,33);c[30].l=c[22].l;assert.equal(Filtered.detect(c).active.stage,'TARGET');});
+test('filtered equal lows preserve the user support rule',()=>{const c=fixture().slice(0,33);c[30].l=c[22].l;assert.equal(Filtered.detect(c).active.stage,'RECOVERY');});
 test('third support test after TARGET is excluded before breakout',()=>{const c=fixture().slice(0,33);c[32].c=108;c[32].h=108.35;const tail=candles([108,104,102,104,106]).slice(1);tail.forEach((b,k)=>c.push({...b,t:(33+k)*900000,end:(34+k)*900000-1}));const r=Filtered.detect(c);assert.ok(r.history.some(p=>p.stage==='FILTERED'&&p.checks.some(x=>x.id==='thirdLow'&&!x.pass)));});
 test('zero historical volume cannot manufacture volume confirmation',()=>{const c=fixture().map(b=>({...b,v:0}));c[33].v=100;const p=Filtered.detect(c).active;assert.ok(p.attempts[0].checks.some(x=>x.id==='volume'&&!x.pass));});
 test('higher price on confirmation bar is also checked for chasing',()=>{const c=fixture();c[34].c=115;c[34].h=115.3;const p=Filtered.detect(c).history.find(p=>p.stage==='MISSED');assert.ok(p.checks.some(x=>x.id==='confirmExtension'&&!x.pass));assert.equal(p.entry,undefined);});
@@ -50,12 +53,49 @@ test('minor zigzags in a rising leg are not mistaken for an extra bottom',()=>{c
 function append(c,o,h,l,close,v=1000){const i=c.length;c.push({t:i*900000,end:(i+1)*900000-1,o,h,l,c:close,v});return c;}
 function original(result){return [...result.candidates,...result.history].find(p=>p.l1Index===22);}
 
+test('a first peak outside the middle neckline zone is not a valid W',()=>{
+ const c=fixture();c[19].h=115;
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'FILTERED');
+ assert.ok(p.checks.some(x=>x.id==='necklineAlignment'&&!x.pass));assert.equal(p.entry,undefined);
+});
+test('matching wick peaks cannot replace a middle close near the neckline',()=>{
+ const c=fixture();c[19].h=115;c[26].h=115;
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'FILTERED');
+ assert.ok(p.checks.some(x=>x.id==='necklineAlignment'&&x.pass));
+ assert.ok(p.checks.some(x=>x.id==='necklineBody'&&!x.pass));
+});
+test('the third peak needs a real neckline recovery before TARGET',()=>{
+ const c=fixture().slice(0,33);let p=original(Filtered.detect(c));assert.equal(p.stage,'RECOVERY');assert.equal(p.targetIndex,undefined);
+ append(c,106,110.8,105,107);p=original(Filtered.detect(c));assert.equal(p.stage,'RECOVERY');assert.equal(p.entry,undefined);
+ append(c,107,110.4,106,109.8);p=original(Filtered.detect(c));assert.equal(p.stage,'TARGET');assert.equal(p.targetIndex,34);
+ assert.ok(p.checks.find(x=>x.id==='rightNeckline').pass);assert.equal(p.entry,undefined);
+});
+test('neckline geometry is scale invariant and does not use future recovery bars',()=>{
+ const c=fixture();const small=c.map(b=>({...b,o:b.o/1e5,h:b.h/1e5,l:b.l/1e5,c:b.c/1e5}));
+ assert.equal(original(Filtered.detect(small.slice(0,33))).stage,'RECOVERY');
+ assert.equal(original(Filtered.detect(small)).stage,'ENTRY');
+ const p=original(Filtered.detect(c));
+ assert.deepEqual(original(Filtered.detect(c.slice(0,33))).events,p.events.filter(e=>e.time<=c[32].end));
+});
+test('W screen counts and filters recovery separately from qualified targets',()=>{
+ const els=new Map(),el=s=>{if(!els.has(s))els.set(s,{value:s==='#tf'?'ALL':'',checked:true,open:false,style:{},classList:{toggle(){},add(){},remove(){}},addEventListener(){},textContent:'',innerHTML:''});return els.get(s);};
+ const window={addEventListener(){}};window.parent=window;
+ const context=vm.createContext({E:Filtered,...Lifecycle,console,Date,Map,Set,AbortController,location:{origin:'http://test'},window,document:{querySelector:el,querySelectorAll:()=>[],hidden:false},setInterval(){},setTimeout(){},clearTimeout(){}});
+ const source=fs.readFileSync(new URL('../js/ui/w-radar.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+ vm.runInContext(source+'\nglobalThis.review={state,render};',context);
+ const {state,render}=context.review,c=fixture().slice(0,33);state.mode='demo';
+ state.records.set('TEST:15m',{sym:'TEST',tf:'15m',key:'TEST:15m',c,...Filtered.detect(c)});
+ render();assert.equal(el('#countRECOVERY').textContent,1);assert.equal(el('#countTARGET').textContent,0);
+ assert.match(el('#results').innerHTML,/오른쪽 고점 넥라인 회복 대기/);assert(!el('#results').innerHTML.includes('구조 검증 통과'));
+ state.stage='TARGET';render();assert.match(el('#results').innerHTML,/조건에 맞는 패턴이 없습니다/);
+});
+
 test('slow second V recovery retains the already confirmed low',()=>{
  const c=fixture().slice(0,31);
  append(c,102,102.4,101.8,102.1);append(c,102.1,102.4,101.9,102.2);
  assert.equal(original(Filtered.detect(c)).stage,'WATCH');
  append(c,102.2,104.5,102,104);
- const p=original(Filtered.detect(c));assert.equal(p.stage,'TARGET');assert.equal(p.l2Index,30);assert.equal(p.targetIndex,33);
+ const p=original(Filtered.detect(c));assert.equal(p.stage,'RECOVERY');assert.equal(p.l2Index,30);assert.equal(p.recoveryIndex,33);
 });
 test('weak first breakout can become an entry on a later strong attempt',()=>{
  const c=fixture().slice(0,34);c[33].v=700;
@@ -78,7 +118,7 @@ test('L2 can reform above L1 before an entry but cannot confirm on the breach ba
  const c=fixture().slice(0,33);append(c,106,106.2,101,101.5);
  let p=original(Filtered.detect(c));assert.equal(p.stage,'WATCH');assert.equal(p.entry,undefined);assert.equal(p.resets,1);
  append(c,101.5,103.5,101.3,103);append(c,103,106,102,105);
- p=original(Filtered.detect(c));assert.equal(p.stage,'TARGET');assert.equal(p.l2,101);assert.equal(p.l1,99.65);assert.equal(p.targetIndex,35);
+ p=original(Filtered.detect(c));assert.equal(p.stage,'RECOVERY');assert.equal(p.l2,101);assert.equal(p.l1,99.65);assert.equal(p.recoveryIndex,35);
 });
 test('post-entry L2 protection is never relaxed',()=>{
  const c=fixture();append(c,112,112.2,101,111);

@@ -15,7 +15,8 @@
     "test:runtime": "node --test tests/scan-runtime.test.js",
     "test:w-pattern": "node --test tests/w-pattern.test.js tests/w-scan-state.test.js tests/w-radar-tab.test.js",
     "test:cup-pattern": "node scripts/test-cup-pattern.mjs",
-    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime && npm run test:w-pattern && npm run test:cup-pattern",
+    "test:pattern-regressions": "node --test tests/pattern-regressions.test.js",
+    "test": "npm run check && npm run test:preview && npm run test:app && npm run test:runner && npm run test:runtime && npm run test:w-pattern && npm run test:cup-pattern && npm run test:pattern-regressions",
     "harness": "npm test",
     "serve": "node scripts/serve.mjs"
   }

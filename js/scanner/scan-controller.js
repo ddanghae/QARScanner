@@ -223,7 +223,8 @@ async function runPatternPipeline(universe, now, token, focusSymbols = null) {
         const patterns = detectChartPatterns(bars, { pivotDepth: profile.pivotDepth })
           .map((pattern) => ({
             ...pattern,
-            completionPct: patternCompletionPct(pattern, bars.at(-1)?.close),
+            provisional: realtime && bars.at(-1)?.closeTime >= confirmedAt,
+            completionPct: realtime && bars.at(-1)?.closeTime >= confirmedAt ? null : patternCompletionPct(pattern, bars.at(-1)?.close),
           }));
         // The backtested 5m rule always reads closed candles, even when the
         // general pattern view is configured to show a provisional candle.
@@ -245,7 +246,7 @@ async function runPatternPipeline(universe, now, token, focusSymbols = null) {
           latestCandleTime,
           freshness: signalFreshness(latestCandleTime, timeframe, Date.now(), realtime),
           activity: barActivity(confirmedBars),
-          validation: token.settings.scanProfile !== "aggressive" && patterns.length ? replayPatternHistory(bars, {
+          validation: token.settings.scanProfile !== "aggressive" && patterns.length ? replayPatternHistory(confirmedBars, {
             pivotDepth: CONFIG.patternScanner.pivotDepth,
             horizonBars: timeframe === "4h" ? 8 : 12,
             warmup: timeframe === "4h" ? 80 : 60,

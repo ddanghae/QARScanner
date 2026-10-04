@@ -56,7 +56,7 @@ export function renderPatternResults(resultsEl) {
   const shortRows = narrow(rows.filter((row) => row.entryCandidate.direction === "short"), "short")
     .sort((a, b) => (b.entryCandidate.assessment.overall?.shortPct || 0) - (a.entryCandidate.assessment.overall?.shortPct || 0)
       || bestRowPatternFit(b) - bestRowPatternFit(a) || b.quoteVolume - a.quoteVolume);
-  const visibleRows = patternScanSide === "early" ? earlyRows : patternScanSide === "fractal" ? fractalRows : patternScanSide === "short" ? shortRows : longRows;
+  const visibleRows = patternScanSide === "all" ? rows : patternScanSide === "early" ? earlyRows : patternScanSide === "fractal" ? fractalRows : patternScanSide === "short" ? shortRows : longRows;
   const rankedRows = visibleRows.map((row, index) => ({ ...row, rank: index + 1, scanSide: patternScanSide }));
   const emptySideMessage = patternScanSide === "fractal" && !(state.patternScanMeta.requestedTimeframes || []).includes("5m") && state.scan.phase === "done"
     ? "5분봉을 선택한 뒤 다시 스캔하세요."
@@ -74,6 +74,7 @@ export function renderPatternResults(resultsEl) {
   resultsEl.innerHTML = `
     ${aggressive ? aggressiveFilterHtml(aggressiveFilter) : ""}
     <div class="pattern-scan-tabs ${state.settings.scanProfile === "aggressive" || earlyRows.length ? "with-early" : ""}" role="group" aria-label="패턴 스캔 결과 보기">
+      <button type="button" class="pattern-scan-tab ${patternScanSide === "all" ? "active" : ""}" data-pattern-scan-side="all" aria-pressed="${patternScanSide === "all"}">전체 패턴 <b>${rows.length}</b></button>
       ${state.settings.scanProfile === "aggressive" || earlyRows.length ? `<button type="button" class="pattern-scan-tab ${patternScanSide === "early" ? "active" : ""}" data-pattern-scan-side="early" aria-pressed="${patternScanSide === "early"}">조기 관찰 <b>${earlyRows.length}</b></button>` : ""}
       <button type="button" class="pattern-scan-tab ${patternScanSide === "long" ? "active long" : ""}" data-pattern-scan-side="long" aria-pressed="${patternScanSide === "long"}">롱 스캔 <b>${longRows.length}</b></button>
       <button type="button" class="pattern-scan-tab ${patternScanSide === "short" ? "active short" : ""}" data-pattern-scan-side="short" aria-pressed="${patternScanSide === "short"}">숏 스캔 <b>${shortRows.length}</b></button>
@@ -132,7 +133,8 @@ function patternSymbolJudgmentHtml(row) {
   const overallText = overall ? `롱 ${overall.longPct}% · 숏 ${overall.shortPct}%` : "롱/숏 근거 부족";
   const overallClass = !overall ? "pattern-neutral" : overall.longPct > overall.shortPct ? "pattern-bullish"
     : overall.shortPct > overall.longPct ? "pattern-bearish" : "pattern-neutral";
-  const side = row.scanSide || row.entryCandidate?.direction || "long";
+  const side = row.scanSide === "all" ? row.entryCandidate?.direction || "neutral" : row.scanSide || row.entryCandidate?.direction || "long";
+  const directional = side === "long" || side === "short";
   const sidePct = overall ? (side === "short" ? overall.shortPct : overall.longPct) : null;
   const sideLabel = side === "short" ? "숏 근거 비중" : "롱 근거 비중";
   const patternText = judgment.pattern
@@ -151,8 +153,8 @@ function patternSymbolJudgmentHtml(row) {
     return `<span class="pattern-ema-chip ${cls}">${frame.timeframe} EMA200 ${label}</span>`;
   }).join("");
   return `<div class="pattern-symbol-judgment">
-    <div class="pattern-symbol-overall"><strong class="${side === "short" ? "pattern-bearish" : overallClass}">${overall ? `${sideLabel} ${sidePct}%` : "방향 근거 부족"}</strong><span>${side === "short" ? "숏 스캔" : "롱 스캔"}</span></div>
-    ${overall ? `<div class="pattern-ratio-track ${side}" role="img" aria-label="${escapeHtml(sideLabel)} ${sidePct}% · ${escapeHtml(overallText)}"><span style="width:${sidePct}%"></span></div>` : ""}
+    <div class="pattern-symbol-overall"><strong class="${side === "short" ? "pattern-bearish" : overallClass}">${overall ? directional ? `${sideLabel} ${sidePct}%` : overallText : "방향 근거 부족"}</strong><span>${row.scanSide === "all" ? "전체 패턴" : side === "short" ? "숏 스캔" : "롱 스캔"}</span></div>
+    ${overall && directional ? `<div class="pattern-ratio-track ${side}" role="img" aria-label="${escapeHtml(sideLabel)} ${sidePct}% · ${escapeHtml(overallText)}"><span style="width:${sidePct}%"></span></div>` : ""}
     <details class="pattern-evidence"><summary>판단 근거</summary><div class="pattern-symbol-sources"><span>${patternText}</span><span>${emaText}</span></div><div class="pattern-ema-frames">${emaFrames}</div></details>
   </div>`;
 }
@@ -212,7 +214,7 @@ function patternTimeframeCell(row, pattern, timeframe) {
     return `<div class="pattern-fit-cell pattern-${escapeHtml(found.bias)}" title="${escapeHtml(patternStatusLabel(found.status))}">
       <span>${timeframe}</span><b>적합 ${found.fitScore}점</b>
       <small>완성 ${found.completionPct == null ? "—" : `${found.completionPct}%`}</small>
-      <small>${patternStatusLabel(found.status)}</small>
+      <small>${found.provisional ? "미확정 봉 · 잠정 " : ""}${patternStatusLabel(found.status)}</small>
     </div>`;
   }
   const failed = (row.failedTimeframes || []).includes(timeframe);
@@ -300,7 +302,7 @@ function validationHtml(row) {
   if (!items.length) return `<div class="pattern-validation muted">시간순 검증 표본 부족</div>`;
   const text = items.map(([timeframe, value]) => {
     const v = value.validation || {};
-    return `${timeframe} 학습 ${value.train?.n || 0} · 검증 ${v.n || 0}건${v.winRate == null ? "" : ` · 검증 승률 ${v.winRate}%`}`;
+    return `${timeframe} 앞 구간 ${value.train?.n || 0} · 뒤 구간 ${v.n || 0}건 · 미진입 ${v.untriggered || 0}건${v.winRate == null ? "" : ` · 종료 표본 승률 ${v.winRate}%`}`;
   }).join(" · ");
-  return `<div class="pattern-validation">시간순 검증 · ${escapeHtml(text)} <small>${escapeHtml(items[0][1].label || "표본 부족")}</small></div>`;
+  return `<div class="pattern-validation">조건부 구조 재시험 · ${escapeHtml(text)} <small>${escapeHtml(items[0][1].label || "표본 부족")} · 기준선 재접촉 가정, 같은 봉 손절 우선, 비용 미반영 · 현재 타점 전략의 승률 아님</small></div>`;
 }

@@ -20,6 +20,7 @@ export function dedupePatternsForDirection(patterns = [], timeframe, maxPerFamil
   for (const pattern of patterns) {
     const found = pattern?.timeframes?.[timeframe];
     if (!found) continue;
+    if (found.provisional) continue;
     const bias = found.bias || "neutral";
     const family = pattern.family || "unknown";
     const key = `${family}:${bias}`;

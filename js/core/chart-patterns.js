@@ -206,7 +206,8 @@ function wedges(bars, atr, swings) {
     })];
 }
 function rectangle(bars, atr, swings) {
-  const win = bars.slice(-32), hi = Math.max(...win.map((c) => c.high)), lo = Math.min(...win.map((c) => c.low)), mid = (hi + lo) / 2, w = hi - lo;
+  // Freeze the box before the candle being tested for a breakout.
+  const win = bars.slice(-33, -1), hi = Math.max(...win.map((c) => c.high)), lo = Math.min(...win.map((c) => c.low)), mid = (hi + lo) / 2, w = hi - lo;
   if (!(mid > 0) || w / mid > 0.12 || w / atr < 3.5 || w / atr > 22) return [];
   const nearby = swings.filter((p) => p.index >= bars.length - 32), tol = Math.max(atr * 0.8, w * 0.1);
   const ht = nearby.filter((p) => p.kind === "H" && Math.abs(p.price - hi) <= tol).length;
@@ -305,7 +306,7 @@ function reversals(bars, atr, swings) {
       if (depth < Math.max(atr * 1.6, level * 0.012)) continue;
       const last = bars[n - 1];
       if (kind === "H" ? last.close > level + tol : last.close < level - tol) continue;
-      const broke = crossedRecently(bars, neck, kind === "H" ? "below" : "above");
+      const broke = crossedRecently(bars, neck, kind === "H" ? "below" : "above", group.at(-1).index);
       const near = kind === "H" ? last.close >= neck - depth * 0.5 : last.close <= neck + depth * 0.5;
       if (!near && !broke) continue;
       const triple = count === 3;
@@ -325,13 +326,15 @@ function reversals(bars, atr, swings) {
     const q = pts.slice(i, i + 5), types = q.map((p) => p.kind).join("");
     const bear = types === "HLHLH", bull = types === "LHLHL";
     if (q.length !== 5 || (!bear && !bull) || q[4].index < n - 30 || q[0].index < n - 85) continue;
-    const s1 = q[0].price, head = q[2].price, s2 = q[4].price, headSize = Math.abs(head - (s1 + s2) / 2);
+    const s1 = q[0].price, head = q[2].price, s2 = q[4].price;
+    if (bear ? head <= Math.max(s1, s2) : head >= Math.min(s1, s2)) continue;
+    const headSize = bear ? head - (s1 + s2) / 2 : (s1 + s2) / 2 - head;
     if (headSize < atr * 1.25 || Math.abs(s1 - s2) > Math.max(atr * 1.6, head * 0.022)) continue;
     const n1 = q[1].price, n2 = q[3].price;
     if (Math.abs(n1 - n2) > Math.max(atr * 2, mean([n1, n2]) * 0.025)) continue;
     const neck = mean([n1, n2]), last = bars[n - 1];
     if (bear ? last.close > head + atr * 0.25 : last.close < head - atr * 0.25) continue;
-    const broke = crossedRecently(bars, neck, bear ? "below" : "above");
+    const broke = crossedRecently(bars, neck, bear ? "below" : "above", q[4].index);
     const near = bear ? last.close >= neck - headSize * 0.45 : last.close <= neck + headSize * 0.45;
     if (!near && !broke) continue;
     out.push(make(bear ? "head-and-shoulders" : "inverse-head-and-shoulders", bear ? "헤드앤숄더" : "역헤드앤숄더",
@@ -346,8 +349,10 @@ function reversals(bars, atr, swings) {
   return out;
 }
 
-function crossedRecently(bars, level, direction) {
-  const start = Math.max(1, bars.length - 4);
+function crossedRecently(bars, level, direction, formedAt = 0) {
+  const last = bars.at(-1).close;
+  if (direction === "below" ? last >= level : last <= level) return false;
+  const start = Math.max(1, bars.length - 4, formedAt + 1);
   for (let i = start; i < bars.length; i++) {
     if (direction === "below" && bars[i].close < level && bars[i - 1].close >= level) return true;
     if (direction === "above" && bars[i].close > level && bars[i - 1].close <= level) return true;
@@ -396,9 +401,10 @@ function harmonics(bars, atr, swings) {
     const [a, b, c, d] = q.map((p) => p.price), ab = Math.abs(b - a), bc = Math.abs(c - b), cd = Math.abs(d - c);
     if (Math.min(ab, bc, cd) < atr * 0.8) continue;
     const r1 = bc / ab, r2 = cd / bc, r3 = cd / ab;
-    const fs = [match(r1, [0.382, 0.886], 0.06), match(r2, [0.9, 1.1], 0.08), match(r3, 1, 0.12)];
+    // Equal AB/CD implies CD/BC is the reciprocal of the BC retracement.
+    const fs = [match(r1, [0.382, 0.886], 0.06), match(r2 * r1, 1, 0.12), match(r3, 1, 0.12)];
     if (fs.some((v) => v == null)) continue;
-    const bull = types === "LHLH", close = bars[n - 1].close;
+    const bull = types === "HLHL", close = bars[n - 1].close;
     const invalidation = bull ? d - atr * 0.5 : d + atr * 0.5;
     if (bull ? close < invalidation : close > invalidation) continue;
     const reacted = bull ? close > d + atr * 0.45 : close < d - atr * 0.45;

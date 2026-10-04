@@ -4,7 +4,7 @@ import { assessSymbolDirection } from "../js/core/pattern-direction.js";
 
 const bullish = { bias: "bullish", trigger: 100, invalidation: 95, projection: 110 };
 const bearish = { bias: "bearish", trigger: 100, invalidation: 105, projection: 90 };
-const bar = (high, low, close = (high + low) / 2) => ({ high, low, close, openTime: 1, closeTime: 2 });
+const bar = (high, low, close = (high + low) / 2) => ({ open: 100, high, low, close, openTime: 1, closeTime: 2 });
 
 export function run() {
   suite("pattern validation");

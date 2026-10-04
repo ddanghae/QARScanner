@@ -126,3 +126,24 @@ test("unknown persisted profile migrates to standard and aggressive profile surv
   assert.equal(aggressive.state.settings.scanProfile,"aggressive");
   assert.equal(aggressive.state.settings.patternScanLimit,200);
 });
+
+test("standard realtime scan labels provisional patterns and never replays unfinished candles", async () => {
+  api.clearCache();resetSettings();
+  state.settings={...state.settings,scanProfile:"standard",patternTimeframes:["5m"],includeRealtimeCandle:true};
+  const now=Date.now(),interval=300000;
+  globalThis.fetch=async input=>{
+    const url=new URL(input);
+    if(url.pathname.endsWith("exchangeInfo"))return response({symbols:[{symbol:"BTCUSDT",baseAsset:"BTC",status:"TRADING",contractType:"PERPETUAL",quoteAsset:"USDT",onboardDate:1}]});
+    if(url.pathname.endsWith("ticker/24hr"))return response([{symbol:"BTCUSDT",lastPrice:"103",quoteVolume:"30000000",count:"100000",priceChangePercent:"3",highPrice:"104",lowPrice:"98",weightedAvgPrice:"100"}]);
+    assert.ok(url.pathname.endsWith("klines"));
+    const bars=Array.from({length:240},(_,i)=>[now-(240-i)*interval,i===239?"101":"100","102","99","100","100",now-(239-i)*interval-1,"10000","100","60","6000","0"]);
+    bars.push([now,"99","104","98","103","300",now+interval-1,"10000","100","60","6000","0"]);
+    return response(bars);
+  };
+  const rows=await scanner.runScan();assert.equal(rows.length,1);
+  const found=rows[0].patterns.find(p=>p.id==="bullish-engulfing").timeframes["5m"];
+  assert.equal(found.provisional,true);assert.equal(found.completionPct,null);
+  assert.equal(rows[0].validationByTimeframe["5m"].sampleCount,0);
+  const {derivePatternEntryCandidate}=await import("../js/core/pattern-entry.js");
+  assert.equal(derivePatternEntryCandidate({...rows[0],timeframes:["5m"]}).entryLow,undefined);
+});

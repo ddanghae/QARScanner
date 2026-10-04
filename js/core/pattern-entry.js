@@ -21,7 +21,7 @@ function isDirectionSupported(assessment, direction) {
 
 function levelCandidate(pattern, timeframe, direction, atr14, price) {
   const detail = pattern.timeframes?.[timeframe];
-  if (!detail || detail.bias !== (direction === "long" ? "bullish" : "bearish")
+  if (!detail || detail.provisional || detail.bias !== (direction === "long" ? "bullish" : "bearish")
     || (Number(detail.fitScore) || 0) < MIN_FIT_SCORE
     || !finite(detail.trigger) || !finite(detail.invalidation) || !finite(detail.projection)
     || !(atr14 > 0)) return null;
